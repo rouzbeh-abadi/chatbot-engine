@@ -1,0 +1,46 @@
+[project]
+name = "chatbot-engine"
+version = "0.1.0"
+description = "A standalone RAG and MCP tool-calling service."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.13"
+
+# Core dependencies required to run the engine service.
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.7",
+    "pypdf>=6.16.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/chatbot_engine"]
+
+# Optional adapters are installed only when the corresponding capability
+# is required. This keeps storage and protocol integrations separate from
+# the engine's core dependencies.
+[project.optional-dependencies]
+
+# Embedded vector store used for local RAG development and persistence.
+chroma = [
+    "chromadb>=1.0",
+]
+
+# MCP client support for discovering and calling application-owned tools.
+mcp = [
+    "mcp>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

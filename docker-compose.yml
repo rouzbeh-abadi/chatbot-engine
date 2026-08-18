@@ -1,0 +1,53 @@
+# Two services, matching the deployment shape: the backend talks to the engine
+# over HTTP, and the engine talks back to the backend's tools over MCP.
+#
+#   frontend -> backend :8000 -> engine :8100 -> mcp-tools :8200
+
+name: rabadi-ae-afa-3-5
+
+services:
+  engine:
+    build:
+      context: ./engine
+    ports:
+      # Published for /docs and curl. In a real deployment the engine would not
+      # be reachable from outside -- only the backend needs to reach it.
+      - "8100:8100"
+    environment:
+      # Optional shared secret. Set it here and in the backend's
+      # BACKEND_ENGINE_API_KEY, or leave both unset on a private network.
+      ENGINE_API_KEY: ${ENGINE_API_KEY:-}
+      ENGINE_OPENROUTER_API_KEY: ${ENGINE_OPENROUTER_API_KEY:-}
+      ENGINE_LOG_LEVEL: INFO
+    # No volume yet: nothing writes to disk until the storage adapters exist and
+    # a setting names their location. Add one in the same commit as the adapter,
+    # or every restart will silently lose the knowledge base.
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8100/health')\""]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Service name, not localhost: containers do not share a network namespace.
+      BACKEND_ENGINE_URL: http://engine:8100
+      BACKEND_ENGINE_API_KEY: ${ENGINE_API_KEY:-}
+    depends_on:
+      engine:
+        condition: service_healthy
+
+  # The domain tools. The engine dials this, so enabling it also means changing
+  # the url in backend/src/support_agent/projects/support.yaml from
+  # `localhost:8200` to `mcp-tools:8200`.
+  #
+  # mcp-tools:
+  #   build:
+  #     context: ./backend
+  #   command: ["python", "-m", "support_agent.mcp_tools"]
+  #   ports:
+  #     - "8200:8200"

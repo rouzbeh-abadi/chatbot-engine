@@ -1,3 +1,10 @@
+# Development workspace. The two services are independent deployables -- neither
+# depends on the other's Python package -- but sharing one virtualenv keeps local
+# work to a single `uv sync`.
+#
+# `tests/test_contract_parity.py` is the one place that imports both, on purpose:
+# it is what catches the wire contract drifting between them.
+
 [project]
 name = "rabadi-ae-afa-3-5"
 version = "0.1.0"
@@ -5,29 +12,23 @@ description = "A domain-specialised RAG chatbot with advanced retrieval and tool
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi[standard]>=0.141.1",
-    "langchain>=1.3.15",
-    "langchain-openai>=1.5.0",
-    "openai>=3.0.0",
-    "pydantic>=2.13.4",
-    "python-dotenv>=1.2.2",
+    "support-agent",
+    "chatbot-engine",
 ]
 
-[project.scripts]
-rabadi-ae-afa-3-5 = "rabadi_ae_afa_3_5.cli:main"
+[tool.uv]
+package = false
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.uv.workspace]
+members = ["engine", "backend"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/rabadi_ae_afa_3_5"]
+[tool.uv.sources]
+support-agent = { workspace = true }
+chatbot-engine = { workspace = true }
 
 [dependency-groups]
-dev = [
-    "pytest>=8.0",
-]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src"]
+testpaths = ["engine/tests", "backend/tests", "tests"]
+asyncio_mode = "auto"

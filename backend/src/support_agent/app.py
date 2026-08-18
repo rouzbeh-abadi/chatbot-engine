@@ -1,10 +1,58 @@
-from fastapi import FastAPI
+"""The application backend.
 
-from support_agent.api.router import router
+Owns the user-facing API: authentication, assistant configuration, document
+endpoints, the domain tools, and SSE formatting for the frontend. The AI itself
+lives in a separate service, reached over HTTP through `engine_client`.
+
+    make backend
+"""
+
+from __future__ import annotations
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+
+from support_agent.api.chat import router as chat_router
+from support_agent.api.documents import router as documents_router
+from support_agent.engine_client import (
+    EngineError,
+    EngineNotImplemented,
+    EngineUnavailable,
+)
 
 app = FastAPI(
     title="Support Agent API",
     version="0.1.0",
+    description=(
+        "Travel support assistant. Calls the chatbot-engine service over HTTP and "
+        "exposes this project's domain tools to it over MCP."
+    ),
 )
 
-app.include_router(router)
+
+@app.exception_handler(EngineNotImplemented)
+async def engine_not_implemented(_: Request, exc: EngineNotImplemented) -> JSONResponse:
+    """The engine is up but that capability is unwritten. Pass the 501 through."""
+    return JSONResponse(status_code=501, content={"detail": str(exc)})
+
+
+@app.exception_handler(EngineUnavailable)
+async def engine_unavailable(_: Request, exc: EngineUnavailable) -> JSONResponse:
+    """The engine is a separate process; it being down is an expected outcome."""
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.exception_handler(EngineError)
+async def engine_failed(_: Request, exc: EngineError) -> JSONResponse:
+    """Anything else from the engine is a bad gateway, not our client's fault."""
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+
+@app.get("/health", tags=["health"])
+async def health() -> dict[str, str]:
+    """Liveness for this backend only. It does not probe the engine."""
+    return {"status": "ok"}
+
+
+app.include_router(chat_router)
+app.include_router(documents_router)
