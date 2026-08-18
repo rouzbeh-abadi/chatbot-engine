@@ -1,62 +1,174 @@
-"""MCP client connectivity.
-
-The engine is an MCP *client*. The tools themselves live in the application
-backend and run in its process, because a tool reads the business database and
-must execute with the calling user's permissions -- something the engine cannot
-evaluate.
-
-    engine  --MCP over streamable HTTP-->  backend MCP server (:8200)
-
-What is prepared here: target resolution, the transport URL, the timeout, the
-allowlist gate, and the shape the agent will call. What is deliberately absent:
-the session handshake, discovery, and invocation. Those need the `mcp` SDK, which
-is declared as the `mcp` extra and intentionally not imported yet.
-"""
-
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from chatbot_engine.errors import NotConfiguredError
+from mcp import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+from mcp.types import TextContent
+
+from chatbot_engine.mcp.config import McpTarget, resolve_targets
 from chatbot_engine.models.chat import AssistantConfig
 
 
+class McpServerNotFoundError(ValueError):
+    """Raised when the requested MCP server is not configured."""
+
+
+class McpToolNotAllowedError(ValueError):
+    """Raised when the requested MCP tool is not allowlisted."""
+
+
 class McpToolProvider:
-    """Satisfies `ports.agent.ToolProvider`. Connectivity prepared, calls pending."""
+    """Discover and invoke application-owned tools through MCP."""
 
     def __init__(self, *, timeout_s: float) -> None:
+        """Initialize the MCP tool provider.
+
+        Args:
+            timeout_s: Maximum time allowed for MCP server operations.
+        """
         self._timeout_s = timeout_s
 
-    async def list_tools(self, config: AssistantConfig) -> Sequence[Mapping[str, Any]]:
-        """Discover tools, keep only allowlisted ones, return model-ready schemas.
+    async def list_tools(
+        self,
+        config: AssistantConfig,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Discover tools allowed by the assistant configuration.
 
-        Implementation sketch: `resolve_targets(config, timeout_s=self._timeout_s)`
-        gives the servers this request may reach; for each one open a
-        streamable-HTTP session, call `tools/list`, drop anything
-        `target.allows()` rejects, then map the remainder onto your model's
-        tool-schema format.
+        Args:
+            config: Assistant configuration containing MCP server definitions.
+
+        Returns:
+            Allowlisted tool schemas discovered from configured MCP servers.
         """
-        raise NotConfiguredError(
-            "MCP tool discovery is not implemented -- see "
-            "chatbot_engine/mcp/client.py and the `mcp` extra"
+        tools: list[Mapping[str, Any]] = []
+
+        targets = resolve_targets(
+            config,
+            timeout_s=self._timeout_s,
         )
+
+        for target in targets:
+            async with streamable_http_client(target.url) as (
+                read_stream,
+                write_stream,
+            ):
+                async with ClientSession(
+                    read_stream,
+                    write_stream,
+                ) as session:
+                    await session.initialize()
+
+                    result = await session.list_tools()
+
+                    for tool in result.tools:
+                        if not target.allows(tool.name):
+                            continue
+
+                        tools.append(
+                            {
+                                "server": target.name,
+                                "name": tool.name,
+                                "description": tool.description or "",
+                                "input_schema": tool.input_schema,
+                            }
+                        )
+
+        return tools
 
     async def call_tool(
         self,
         *,
+        config: AssistantConfig,
         server: str,
         name: str,
         arguments: Mapping[str, Any],
         user_id: str | None = None,
     ) -> str:
-        """Invoke one tool on one server and return its result as text.
+        """Invoke one allowlisted tool on a configured MCP server.
 
-        Two rules for the implementation: check `target.allows(name)` again here,
-        since the name arrives from model output; and treat whatever comes back as
-        untrusted data, never as instructions.
+        Args:
+            config: Assistant configuration containing permitted MCP servers.
+            server: Name of the MCP server exposing the tool.
+            name: Name of the tool to invoke.
+            arguments: Arguments passed to the tool.
+            user_id: Opaque user identifier reserved for future authorization.
+
+        Returns:
+            Tool result serialized as text.
+
+        Raises:
+            McpServerNotFoundError: If the requested server is not configured.
+            McpToolNotAllowedError: If the tool is not allowlisted.
         """
-        raise NotConfiguredError(
-            "MCP tool invocation is not implemented -- see "
-            "chatbot_engine/mcp/client.py and the `mcp` extra"
+        target = self._find_target(
+            config=config,
+            server=server,
+        )
+
+        if not target.allows(name):
+            raise McpToolNotAllowedError(
+                f"Tool {name!r} is not allowed on MCP server {server!r}."
+            )
+
+        async with streamable_http_client(target.url) as (
+            read_stream,
+            write_stream,
+        ):
+            async with ClientSession(
+                read_stream,
+                write_stream,
+            ) as session:
+                await session.initialize()
+
+                result = await session.call_tool(
+                    name,
+                    dict(arguments),
+                )
+
+        if result.structured_content is not None:
+            return json.dumps(
+                result.structured_content,
+                ensure_ascii=False,
+            )
+
+        text_parts = [
+            block.text
+            for block in result.content
+            if isinstance(block, TextContent)
+        ]
+
+        return "\n".join(text_parts)
+
+    def _find_target(
+        self,
+        *,
+        config: AssistantConfig,
+        server: str,
+    ) -> McpTarget:
+        """Find one configured MCP server by name.
+
+        Args:
+            config: Assistant configuration containing MCP server definitions.
+            server: Name of the MCP server to resolve.
+
+        Returns:
+            Matching MCP connection target.
+
+        Raises:
+            McpServerNotFoundError: If no configured server matches the name.
+        """
+        targets = resolve_targets(
+            config,
+            timeout_s=self._timeout_s,
+        )
+
+        for target in targets:
+            if target.name == server:
+                return target
+
+        raise McpServerNotFoundError(
+            f"MCP server {server!r} is not configured."
         )

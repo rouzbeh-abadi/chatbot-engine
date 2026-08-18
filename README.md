@@ -4,6 +4,10 @@ A domain-specialised travel-support assistant, built as two independent services
 an **application backend** that owns the product, and an **AI engine** that owns
 the AI.
 
+See [docs/architecture.md](docs/architecture.md) for the full picture,
+[docs/125.md](docs/125.md) for the project brief, and [roadmap.md](roadmap.md)
+for sequencing.
+
 ## Architecture
 
 ```text

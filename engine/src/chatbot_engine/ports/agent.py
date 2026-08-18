@@ -1,8 +1,10 @@
-"""The chat side of the engine: the interfaces future AI logic must satisfy.
+"""Interfaces for the chat side of the AI engine.
 
-Nothing here has behaviour. These exist so `services/chat.py` can be written
-against a stable shape, and so the HTTP layer never needs to change when the
-real implementation arrives.
+These protocols define the capabilities required by the engine without tying the
+implementation to a specific model provider, agent framework, or tool protocol.
+
+`Agent` handles one chat turn as a stream of events.
+`ToolProvider` exposes external tools to the agent and invokes them when needed.
 """
 
 from __future__ import annotations
@@ -15,40 +17,64 @@ from chatbot_engine.models.events import Event
 
 
 class Agent(Protocol):
-    """One chat turn, as a stream of events.
+    """Define the contract for processing one chat turn.
 
-    An implementation is expected to: retrieve for the question, emit a
-    `RetrievalEvent` with its sources, build the prompt from
-    `request.project.system_prompt` plus history plus retrieved chunks, call the
-    model, emit `TokenEvent`s as it streams, run any tool calls (bounded by
-    `request.project.max_tool_iterations`), then emit `UsageEvent` and
-    `DoneEvent`.
-
-    A stream rather than a return value, because a UI needs sources and progress
-    before the answer is finished.
+    Implementations are responsible for retrieval, prompt construction, model
+    execution, optional tool calls, and streaming response events.
     """
 
-    def run(self, request: ChatRequest) -> AsyncIterator[Event]: ...
+    def run(
+        self,
+        request: ChatRequest,
+    ) -> AsyncIterator[Event]:
+        """Process one chat request and stream engine events.
+
+        Args:
+            request: Complete chat request including assistant configuration,
+                user message, history, and caller context.
+        """
+        ...
 
 
 class ToolProvider(Protocol):
-    """Tool discovery and invocation, over MCP.
+    """Define discovery and invocation of external application-owned tools."""
 
-    Implemented by `chatbot_engine.mcp.client.McpToolProvider`. Kept as a port so
-    the agent depends on the capability rather than on MCP specifically.
-    """
+    async def list_tools(
+        self,
+        config: AssistantConfig,
+    ) -> Sequence[Mapping[str, Any]]:
+        """Return tools allowed by the assistant configuration.
 
-    async def list_tools(self, config: AssistantConfig) -> Sequence[Mapping[str, Any]]:
-        """Allowlisted tool schemas, ready to hand to a model."""
+        Args:
+            config: Assistant configuration containing MCP server definitions
+                and tool allowlists.
+
+        Returns:
+            Tool schemas that may be exposed to the model.
+        """
         ...
 
     async def call_tool(
         self,
         *,
+        config: AssistantConfig,
         server: str,
         name: str,
         arguments: Mapping[str, Any],
         user_id: str | None = None,
     ) -> str:
-        """Invoke one tool and return its result as text."""
+        """Invoke one allowlisted tool on a configured tool server.
+
+        Args:
+            config: Assistant configuration used to resolve the MCP server
+                connection and tool allowlist.
+            server: Name of the configured MCP server exposing the tool.
+            name: Name of the tool to invoke.
+            arguments: Arguments passed to the tool.
+            user_id: Opaque user identifier forwarded for authorization when
+                supported by the tool transport.
+
+        Returns:
+            Tool result serialized as text.
+        """
         ...

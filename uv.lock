@@ -437,6 +437,7 @@ version = "0.1.0"
 source = { editable = "engine" }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
+    { name = "mcp" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pypdf" },
@@ -445,9 +446,6 @@ dependencies = [
 [package.optional-dependencies]
 chroma = [
     { name = "chromadb" },
-]
-mcp = [
-    { name = "mcp" },
 ]
 
 [package.dev-dependencies]
@@ -460,12 +458,12 @@ dev = [
 requires-dist = [
     { name = "chromadb", marker = "extra == 'chroma'", specifier = ">=1.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
-    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=2.0" },
+    { name = "mcp", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "pypdf", specifier = ">=6.16.1" },
 ]
-provides-extras = ["chroma", "mcp"]
+provides-extras = ["chroma"]
 
 [package.metadata.requires-dev]
 dev = [
