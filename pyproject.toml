@@ -1,0 +1,33 @@
+[project]
+name = "rabadi-ae-afa-3-5"
+version = "0.1.0"
+description = "A domain-specialised RAG chatbot with advanced retrieval and tool calling."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "langchain>=1.3.15",
+    "langchain-openai>=1.5.0",
+    "openai>=3.0.0",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+]
+
+[project.scripts]
+rabadi-ae-afa-3-5 = "rabadi_ae_afa_3_5.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rabadi_ae_afa_3_5"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
