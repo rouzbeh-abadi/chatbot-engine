@@ -48,6 +48,8 @@ def test_chat_streams_engine_events_as_sse(client: TestClient) -> None:
     events = _events(response.text)
     assert [e["type"] for e in events] == [
         "retrieval",
+        "tool_call_started",
+        "tool_call_finished",
         "token",
         "token",
         "usage",
@@ -83,6 +85,17 @@ def test_chat_sync_folds_the_stream(client: TestClient) -> None:
     assert body["finish_reason"] == "stop"
     assert body["usage"]["total_tokens"] == 42
     assert body["sources"][0]["doc_id"] == "d1"
+
+
+def test_tool_call_events_survive_the_whole_path(client: TestClient) -> None:
+    """The engine emits these as soon as the agent calls a tool. Before they were
+    in the contract, the client raised on the first one and killed the stream."""
+    body = client.post("/chat/sync", json={"message": "hi"}).json()
+
+    (call,) = body["tool_calls"]
+    assert call["tool"] == "get_booking_status"
+    assert call["ok"] is True
+    assert body["answer"] == "One cabin bag.", "tool events must not disturb the answer"
 
 
 def test_chat_rejects_unknown_fields(client: TestClient) -> None:

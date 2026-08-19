@@ -1,27 +1,44 @@
-# Two services, matching the deployment shape: the backend talks to the engine
-# over HTTP, and the engine talks back to the backend's tools over MCP.
+# The whole stack.
 #
-#   frontend -> backend :8000 -> engine :8100 -> mcp-tools :8200
+#   frontend -> backend :8000 --HTTP--> engine :8100
+#                  |                       |
+#                  |                       +--MCP--> mcp-tools :8200
+#                  |                                       |
+#                  +---------------------------------------+--> postgres :5432
+#
+# The backend and the tool server run the same image with different entrypoints:
+# they share the models and the database, but one speaks HTTP and the other MCP.
 
 name: rabadi-ae-afa-3-5
 
 services:
+  postgres:
+    image: postgres:17
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: support_agent
+      POSTGRES_USER: support_agent
+      POSTGRES_PASSWORD: support_agent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U support_agent -d support_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   engine:
     build:
       context: ./engine
     ports:
-      # Published for /docs and curl. In a real deployment the engine would not
-      # be reachable from outside -- only the backend needs to reach it.
+      # Published for /docs and curl. In a real deployment only the backend needs
+      # to reach the engine.
       - "8100:8100"
     environment:
-      # Optional shared secret. Set it here and in the backend's
-      # BACKEND_ENGINE_API_KEY, or leave both unset on a private network.
       ENGINE_API_KEY: ${ENGINE_API_KEY:-}
       ENGINE_OPENROUTER_API_KEY: ${ENGINE_OPENROUTER_API_KEY:-}
       ENGINE_LOG_LEVEL: INFO
-    # No volume yet: nothing writes to disk until the storage adapters exist and
-    # a setting names their location. Add one in the same commit as the adapter,
-    # or every restart will silently lose the knowledge base.
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8100/health')\""]
       interval: 10s
@@ -34,20 +51,30 @@ services:
     ports:
       - "8000:8000"
     environment:
-      # Service name, not localhost: containers do not share a network namespace.
       BACKEND_ENGINE_URL: http://engine:8100
       BACKEND_ENGINE_API_KEY: ${ENGINE_API_KEY:-}
+      BACKEND_DATABASE_URL: postgresql+psycopg://support_agent:support_agent@postgres:5432/support_agent
+      # The engine dials the tool server, so this has to be the service name
+      # rather than localhost. Which tools are allowed stays in support.yaml.
+      BACKEND_MCP_TOOLS_URL: http://mcp-tools:8200/mcp
     depends_on:
       engine:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
 
-  # The domain tools. The engine dials this, so enabling it also means changing
-  # the url in backend/src/support_agent/projects/support.yaml from
-  # `localhost:8200` to `mcp-tools:8200`.
-  #
-  # mcp-tools:
-  #   build:
-  #     context: ./backend
-  #   command: ["python", "-m", "support_agent.mcp_tools"]
-  #   ports:
-  #     - "8200:8200"
+  # This project's domain tools, exposed to the engine over MCP.
+  mcp-tools:
+    build:
+      context: ./backend
+    command: ["python", "-m", "support_agent.mcp_tools"]
+    ports:
+      - "8200:8200"
+    environment:
+      BACKEND_DATABASE_URL: postgresql+psycopg://support_agent:support_agent@postgres:5432/support_agent
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

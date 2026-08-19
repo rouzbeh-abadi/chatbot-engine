@@ -1,34 +1,57 @@
 """Application-owned domain tools exposed to the AI engine through MCP.
 
-These tools run in the application backend because they operate on business
-data and, eventually, must enforce the calling user's permissions. The AI engine
-discovers and invokes them through MCP but does not own their implementation.
+These run in the application backend, not in the engine, because they read this
+application's business data and must eventually enforce the calling user's
+permissions -- something the engine cannot evaluate. The engine discovers them
+over MCP and invokes them; it never owns their implementation.
 
-Run locally with:
+    make tools     # streamable HTTP on http://localhost:8200/mcp
 
-    make tools
+Two conventions the tools follow, both aimed at the model that reads them:
 
-The MCP server is exposed over streamable HTTP on port 8200.
+* every value comes back as a string, in the words a customer would recognise
+  ("cabin baggage only" rather than `null`), because the model relays these to a
+  person and a bare null invites it to invent an explanation;
+* a missing booking or flight is a normal answer, returned as data. Only an
+  unusable *request* raises. A tool that raises for "not found" teaches the model
+  that the tool is broken, and it stops trying.
 """
 
 from __future__ import annotations
 
+from datetime import date
+
 from mcp.server.mcpserver import MCPServer
+from sqlalchemy import select
+
+from support_agent.database.connection import get_session_factory
+from support_agent.database.models import Booking, Flight, SupportTicket
 
 HOST = "0.0.0.0"
 PORT = 8200
 
+TICKET_CATEGORIES = ("refund", "baggage", "schedule_change", "complaint", "other")
+
 mcp = MCPServer(
     name="support-tools",
-    instructions="Domain tools for the customer support assistant.",
+    instructions=(
+        "Domain tools for a travel support assistant. Use them to look up real "
+        "booking and flight data instead of guessing, and to escalate to a human "
+        "when the knowledge base cannot resolve the customer's problem."
+    ),
 )
 
 
 @mcp.tool()
-def get_booking_status(
+async def get_booking_status(
     booking_reference: str,
 ) -> dict[str, str]:
     """Look up one booking by its reference.
+
+    Returns the passenger, route, travel date, fare type, checked baggage
+    allowance, flight number, and current status. Use this whenever a customer
+    mentions a booking reference, and use the flight number it returns to check
+    that flight's status.
 
     Args:
         booking_reference: Six-character booking reference, e.g. "AB12CD".
@@ -36,27 +59,12 @@ def get_booking_status(
     Returns:
         Booking details and its current status, or a not-found result.
     """
-    bookings = {
-        "AB12CD": {
-            "booking_reference": "AB12CD",
-            "passenger_name": "Daniel Miller",
-            "route": "Berlin → Amsterdam",
-            "travel_date": "2026-08-24",
-            "fare_type": "Flex",
-            "status": "confirmed",
-        },
-        "XY34ZT": {
-            "booking_reference": "XY34ZT",
-            "passenger_name": "Sarah Wilson",
-            "route": "Paris → London",
-            "travel_date": "2026-08-29",
-            "fare_type": "Basic",
-            "status": "cancelled",
-        },
-    }
-
     reference = booking_reference.strip().upper()
-    booking = bookings.get(reference)
+
+    async with get_session_factory()() as session:
+        booking = await session.scalar(
+            select(Booking).where(Booking.booking_reference == reference)
+        )
 
     if booking is None:
         return {
@@ -65,15 +73,35 @@ def get_booking_status(
             "message": "No booking was found with this reference.",
         }
 
-    return booking
+    result = {
+        "booking_reference": booking.booking_reference,
+        "passenger_name": booking.passenger_name,
+        "route": f"{booking.origin} → {booking.destination}",
+        "travel_date": booking.travel_date.isoformat(),
+        "fare_type": booking.fare_type,
+        "status": booking.status,
+        "flight_number": booking.flight_number,
+        "checked_baggage": booking.checked_baggage or "none (cabin baggage only)",
+    }
+
+    if booking.connecting_flight_number:
+        result["connecting_flight_number"] = booking.connecting_flight_number
+        result["itinerary"] = "two flights; refund rules may differ per segment"
+
+    return result
 
 
 @mcp.tool()
-def get_flight_status(
+async def get_flight_status(
     flight_number: str,
     departure_date: str,
 ) -> dict[str, str]:
     """Check whether a flight is on time, delayed, or cancelled.
+
+    Returns the scheduled departure, the expected departure when a flight is
+    delayed, the gate once assigned, and a status. Use this for a specific flight
+    on a specific date; it is not a schedule search. The flight number for a
+    customer's booking comes from get_booking_status.
 
     Args:
         flight_number: Airline code and flight number, e.g. "SD204".
@@ -82,30 +110,129 @@ def get_flight_status(
     Returns:
         Current flight status and available timing information.
     """
-    raise NotImplementedError(
-        "get_flight_status is not implemented yet."
-    )
+    number = flight_number.strip().upper()
+
+    try:
+        parsed_date = date.fromisoformat(departure_date.strip())
+    except ValueError:
+        # An unusable argument, not a missing record: say what was wrong so the
+        # model can retry with a corrected date rather than giving up.
+        return {
+            "flight_number": number,
+            "status": "invalid_request",
+            "message": (
+                f"{departure_date!r} is not an ISO date. Use YYYY-MM-DD, "
+                "e.g. 2026-08-24."
+            ),
+        }
+
+    async with get_session_factory()() as session:
+        flight = await session.scalar(
+            select(Flight).where(
+                Flight.flight_number == number,
+                Flight.departure_date == parsed_date,
+            )
+        )
+
+    if flight is None:
+        return {
+            "flight_number": number,
+            "departure_date": parsed_date.isoformat(),
+            "status": "not_found",
+            "message": "No flight was found with this number on this date.",
+        }
+
+    result = {
+        "flight_number": flight.flight_number,
+        "departure_date": flight.departure_date.isoformat(),
+        "route": f"{flight.origin} → {flight.destination}",
+        "status": flight.status,
+        "scheduled_departure": flight.scheduled_departure.isoformat(),
+        "gate": flight.gate or "not assigned yet",
+    }
+
+    if flight.expected_departure is not None:
+        result["expected_departure"] = flight.expected_departure.isoformat()
+
+    return result
 
 
 @mcp.tool()
-def create_support_ticket(
+async def create_support_ticket(
     booking_reference: str,
     summary: str,
     category: str,
 ) -> dict[str, str]:
-    """Create a support ticket for escalation to a human agent.
+    """Escalate to a human agent and return the new ticket reference.
+
+    Use this only when the customer's problem cannot be resolved from the
+    knowledge base or the other tools -- a refund dispute, a medical request, or a
+    complaint. Summarise the issue in your own words; do not paste the whole
+    conversation.
 
     Args:
-        booking_reference: Booking reference associated with the issue.
-        summary: Short description of the customer's problem.
-        category: Support category such as refund, baggage, or complaint.
+        booking_reference: The booking the ticket relates to.
+        summary: One or two sentences describing what the customer needs.
+        category: One of "refund", "baggage", "schedule_change", "complaint",
+            "other".
 
     Returns:
-        Information about the newly created support ticket.
+        The created ticket, or a rejection explaining what to fix.
     """
-    raise NotImplementedError(
-        "create_support_ticket is not implemented yet."
-    )
+    reference = booking_reference.strip().upper()
+    chosen = category.strip().lower()
+
+    if chosen not in TICKET_CATEGORIES:
+        return {
+            "status": "invalid_request",
+            "message": (
+                f"{category!r} is not a valid category. Choose one of: "
+                + ", ".join(TICKET_CATEGORIES)
+            ),
+        }
+
+    if not summary.strip():
+        return {
+            "status": "invalid_request",
+            "message": "A summary is required so the agent knows what to act on.",
+        }
+
+    async with get_session_factory()() as session:
+        # Tickets hang off a real booking. Creating one for a reference that does
+        # not exist would hand a human agent an unactionable ticket.
+        booking = await session.scalar(
+            select(Booking.booking_reference).where(
+                Booking.booking_reference == reference
+            )
+        )
+        if booking is None:
+            return {
+                "booking_reference": reference,
+                "status": "not_found",
+                "message": (
+                    "No booking was found with this reference, so no ticket was "
+                    "created. Confirm the reference with the customer."
+                ),
+            }
+
+        ticket = SupportTicket(
+            booking_reference=reference,
+            summary=summary.strip(),
+            category=chosen,
+            status="open",
+        )
+        session.add(ticket)
+        await session.commit()
+        await session.refresh(ticket)
+
+        return {
+            "ticket_id": str(ticket.id),
+            "booking_reference": ticket.booking_reference,
+            "category": ticket.category,
+            "status": ticket.status,
+            "created_at": ticket.created_at.isoformat(),
+            "message": "A support agent will follow up on this ticket.",
+        }
 
 
 def main() -> None:

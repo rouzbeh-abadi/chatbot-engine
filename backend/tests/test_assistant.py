@@ -47,3 +47,22 @@ def test_declared_tools_are_allowlisted_not_open() -> None:
     assert config.mcp_servers, "the demo assistant declares its tool server"
     for server in config.mcp_servers:
         assert server.allowed_tools, f"{server.name} must pin its tool names"
+
+
+def test_the_tool_server_url_can_be_overridden_for_a_deployment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Under Compose the engine dials `mcp-tools`, not localhost. Only the address
+    is environment-specific -- the allowlist stays in the YAML, reviewable."""
+    from support_agent import assistant, settings
+
+    monkeypatch.setenv("BACKEND_MCP_TOOLS_URL", "http://mcp-tools:8200/mcp")
+    settings.get_settings.cache_clear()
+    assistant.load_project.cache_clear()
+    try:
+        server = assistant.load_project("support").mcp_servers[0]
+        assert server.url == "http://mcp-tools:8200/mcp"
+        assert "get_booking_status" in server.allowed_tools
+    finally:
+        settings.get_settings.cache_clear()
+        assistant.load_project.cache_clear()

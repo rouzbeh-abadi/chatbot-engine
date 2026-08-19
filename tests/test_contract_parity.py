@@ -28,6 +28,8 @@ SHARED_MODELS = [
     "SourceRef",
     "RetrievalEvent",
     "TokenEvent",
+    "ToolCallStartedEvent",
+    "ToolCallFinishedEvent",
     "UsageEvent",
     "ErrorEvent",
     "DoneEvent",
@@ -88,7 +90,15 @@ def test_both_sides_know_the_same_event_types() -> None:
     }
 
     assert engine_types == backend_types
-    assert engine_types == {"retrieval", "token", "usage", "error", "done"}
+    assert engine_types == {
+        "retrieval",
+        "token",
+        "tool_call_started",
+        "tool_call_finished",
+        "usage",
+        "error",
+        "done",
+    }
 
 
 def test_ingest_status_values_match() -> None:

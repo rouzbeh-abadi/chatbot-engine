@@ -7,6 +7,12 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN uv pip install --system --no-cache .
 
+# Migrations and the demo seed have to be runnable in the deployed container, not
+# just on a laptop.
+COPY alembic.ini ./
+COPY alembic ./alembic
+COPY scripts ./scripts
+
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 

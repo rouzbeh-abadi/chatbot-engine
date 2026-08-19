@@ -48,13 +48,54 @@ fails here with our error message rather than as a 422 from the engine.
 
 ## The tools
 
-`mcp_tools.py` exposes three tools over MCP. Their signatures and docstrings are
-complete and discoverable — the schema is what the model reads when deciding
-whether to call one — and their bodies raise `NotImplementedError`.
+`mcp_tools.py` exposes three working tools over MCP, all reading the application
+database:
+
+| Tool | Returns |
+| --- | --- |
+| `get_booking_status` | passenger, route, fare, baggage, **flight number**, status |
+| `get_flight_status` | on time / delayed / cancelled, times, gate |
+| `create_support_ticket` | a ticket row, after checking the booking exists |
+
+`get_booking_status` returns the flight number on purpose: it is what lets the
+model chain a second call — "my booking is AB12CD, is my flight delayed?" — which
+is the conversation worth demonstrating.
 
 They run *here*, not in the engine: they read this application's data and must
 execute with the calling user's permissions, which the engine cannot evaluate.
 Only allowlisted names in `support.yaml` are ever exposed.
+
+Two conventions, both aimed at the model: every value is a string in words a
+customer would recognise ("cabin baggage only" rather than `null`), and a missing
+record is returned as data rather than raised — a tool that raises for "not found"
+teaches the model the tool is broken.
+
+## The database
+
+The backend owns bookings, flights and support tickets. The engine never touches
+them; it reaches them only by calling the tools above.
+
+```bash
+make up          # postgres, engine, backend, mcp-tools
+make migrate     # apply Alembic migrations
+make seed-db     # load the demo data
+```
+
+The seed is idempotent and its dates are **relative to today**, so the check-in
+window case stays inside the window whenever you run it. Six bookings, each
+covering a case the knowledge base discusses:
+
+| Booking | Case | Documents it exercises |
+| --- | --- | --- |
+| `AB12CD` | Flexible fare, refundable, inside the check-in window | refunds, check_in |
+| `XY34ZT` | Basic fare, non-refundable, already cancelled | refunds, cancellations |
+| `RF77KL` | Airline cancelled the flight — involuntary refund | cancellations, refunds |
+| `MS55TR` | Two-leg itinerary, partial refund scope | refunds, booking_changes |
+| `BG88QP` | Cabin baggage only, no checked allowance | baggage |
+| `PS22WD` | Travel already completed — refund window closed | refunds |
+
+Fare names match the knowledge base (`Flexible` / `Standard` / `Basic`) so a
+retrieved policy and a tool result never contradict each other.
 
 ## Why the contract is duplicated
 

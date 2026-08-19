@@ -1,97 +1,132 @@
 # chatbot-engine
 
-A domain-specialised travel-support assistant, built as two independent services:
-an **application backend** that owns the product, and an **AI engine** that owns
-the AI.
+A standalone RAG and MCP tool-calling service.
 
-See [docs/architecture.md](docs/architecture.md) for the full picture,
-[docs/125.md](docs/125.md) for the project brief, and [roadmap.md](roadmap.md)
-for sequencing.
+The engine answers questions from a knowledge base, calls tools when it needs live
+data, and streams the answer back token by token as it is produced. It handles the
+retrieval, the prompt, the model call, and the loop that runs tools and feeds their
+results back to the model.
 
-## Architecture
+What it deliberately does not handle: who your users are, how they log in, what
+your product is called, or what any of your data means. It has no database of
+yours and no configuration of yours.
+
+Instead, everything specific to an application arrives **with each request** — the
+system prompt, the model, how many chunks to retrieve, and which tools may be
+used. That has three consequences worth knowing up front:
+
+- the engine holds no state you would ever have to migrate;
+- you change a prompt in your own config and the next request uses it, with no
+  engine restart and no deployment;
+- one engine can serve several applications at once, each sending its own
+  configuration.
+
+It runs as its own HTTP service on port `8100`. A chat turn comes back as a stream
+of typed events — retrieved sources first, then tokens as they are generated, tool
+progress as tools run, and finally token usage and cost.
+
+```bash
+uv run uvicorn chatbot_engine.app:app --port 8100 --reload
+```
+
+Interactive API docs: http://localhost:8100/docs
+
+## Using it from a backend
+
+The engine is reached over plain HTTP with JSON, so **it works with a backend
+written in any language**. Python, TypeScript, Go, Ruby, Java, PHP — if it can make
+an HTTP request and read a response line by line, it can drive the engine. There is
+no SDK to install and no library to depend on.
+
+Your backend keeps the parts that are genuinely yours:
+
+| Your backend owns | Why it cannot live in the engine |
+| --- | --- |
+| Authentication and user identity | The engine has no idea who your users are |
+| The assistant's configuration | It is your product's voice, not the engine's |
+| Your domain tools | They read your data, with your user's permissions |
+| The browser-facing transport | Only you know a browser is on the other end |
+
+The tools are the one place the engine calls back to you. It connects to a tool
+server that you run, over MCP, and can only use the tool names you explicitly
+allow. A tool that looks up a booking has to execute where the booking data and
+its permissions are — which is your backend, not the engine.
+
+```text
+Your backend      →  HTTP   →  chatbot engine
+chatbot engine    →  MCP    →  your tool server
+```
+
+Everything a backend needs in order to do this — the endpoints, the exact request
+shape, how to read the streamed answer, how to upload documents, how failures are
+reported, and how to expose your own tools over MCP — is written up in full here:
+
+**→ [Connecting a backend to the chatbot engine](docs/backend-integration.md)**
+
+It is written for someone who has never seen the engine before, and it includes a
+complete worked example in `curl` and in Python.
+
+### The example backend in this repository
+
+`backend/` is a working reference: a travel-support assistant for a fictional
+airline, with a Postgres database, three domain tools served over MCP, and a
+knowledge base of support documents. It exists so the engine has something
+realistic to be tested against.
+
+It happens to be written in Python with FastAPI, but nothing about that is
+required — it is one example of the integration, not the only shape it can take.
 
 ```text
 Frontend
    ↓  HTTP + SSE
-Application Backend        :8000    users, auth, config, documents, tools
-   ↓  HTTP (NDJSON)
-AI Engine Service          :8100    retrieval, prompts, model, tool loop
+Example backend        :8000    users, config, documents, domain tools
+   ↓  HTTP + NDJSON
+Chatbot engine         :8100    retrieval, prompts, model, tool loop
    ↓  MCP
-Backend MCP Tool Server    :8200    get_booking_status, get_flight_status, …
+Backend tool server    :8200    bookings, flights, support tickets
+   ↓
+Postgres               :5432
 ```
 
-The engine is a **separate service**, not a library: the backend calls it over
-HTTP and never imports its Python package. The loop back to the backend is
-deliberate — the tools read this application's data, and the permissions that
-guard that data live in the backend.
-
-> **Status: the boundary is built, the AI is not.** Every AI-backed route answers
-> `501` naming the function to implement. Routing, validation, streaming,
-> configuration and the MCP tool schemas all work today, with 78 tests.
-
-## Run it
+## Running the whole thing
 
 ```bash
-make setup      # once: uv sync + create .env
-make dev        # both services in one terminal
+make setup      # once: install dependencies and create .env
+make dev        # engine and example backend together
 make smoke      # in another terminal
 ```
 
-`make` on its own lists every command.
-
-| Command | What it does |
-| --- | --- |
-| `make engine` | AI engine only → http://localhost:8100/docs |
-| `make backend` | App backend only → http://localhost:8000/docs |
-| `make tools` | MCP tool server on `:8200` |
-| `make test` | 78 tests, no services needed |
-| `make seed` | Load `backend/knowledge/` through the backend |
-| `make up` / `make down` | Both services in Docker |
-
-## Endpoints
-
-The frontend talks only to the backend:
-
-| Method | Path | Purpose |
-| --- | --- | --- |
-| `GET` | `/health` | Liveness |
-| `POST` | `/chat` | Chat. Returns an SSE stream. |
-| `POST` | `/chat/sync` | Non-streaming variant |
-| `PUT` | `/documents` | Upsert a document by `external_id` |
-| `GET` | `/documents` | What the assistant knows |
-| `DELETE` | `/documents/{doc_id}` | Remove a document |
-
-The engine's own API is documented in [engine/README.md](engine/README.md).
+`make` on its own lists every command. `make up` brings up the full stack in
+Docker, including Postgres and the tool server.
 
 ## Layout
 
 ```text
-engine/     the AI engine service     -- see engine/README.md
-backend/    the application backend   -- see backend/README.md
-frontend/   not started
-docs/       architecture.md, the brief
-tests/      the one test that imports both services (contract parity)
+engine/     the chatbot engine service     -- see engine/README.md
+backend/    the example backend            -- see backend/README.md
+frontend/   not started                    -- see frontend/README.md
+docs/       the integration guide, and the project brief
+tests/      the contract-parity test, the one place both services meet
 ```
 
-## What is yours to write
+## Where things stand
 
-Nothing in the repo pre-empts an AI decision. In dependency order — full table in
-[the architecture doc](docs/architecture.md#10-where-to-implement-each-piece):
+The engine's HTTP surface, event contract, document extraction, chunking, storage
+and MCP client are written. The example backend is complete: it serves its API,
+owns its database, and exposes three working tools.
 
-1. Blob store and document registry → `engine/src/chatbot_engine/rag/`
-2. Extraction, chunking, embeddings, vector store → same folder
-3. The ingest pipeline, registered at `deps.get_ingest_pipeline()`
-4. Retriever, chat-model client, prompt construction
-5. The agent / run loop, registered at `deps.get_agent()`
-6. MCP discovery and invocation → `engine/src/chatbot_engine/mcp/client.py`
-7. The three tool bodies → `backend/src/support_agent/mcp_tools.py`
-8. Real authentication (`X-User-Id` is a placeholder) and the frontend
+Still to build in the engine: the ingestion pipeline, embeddings and the vector
+store, retrieval, prompt construction, the chat-model client, and the agent run
+loop. Until each is registered in `engine/src/chatbot_engine/api/deps.py`, the
+routes that depend on it answer `501` naming the exact function to fill in.
 
-`curl localhost:8100/health/ready` tells you whether chat and document ingestion
-have implementations registered — the two things that turn a 501 into a real
-answer.
+To see what is live:
 
-## Test
+```bash
+curl localhost:8100/health/ready
+```
+
+## Tests
 
 ```bash
 make test

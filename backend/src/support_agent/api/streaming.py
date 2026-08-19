@@ -19,6 +19,7 @@ from support_agent.engine_client.models import (
     RetrievalEvent,
     SourceRef,
     TokenEvent,
+    ToolCallFinishedEvent,
     UsageEvent,
 )
 
@@ -53,6 +54,9 @@ class ChatResult(BaseModel):
 
     answer: str = ""
     sources: list[SourceRef] = Field(default_factory=list)
+    #: Which tools ran, so a non-streaming client can show them too. The
+    #: finished events carry everything worth reporting.
+    tool_calls: list[ToolCallFinishedEvent] = Field(default_factory=list)
     usage: UsageEvent | None = None
     finish_reason: str = "stop"
     error: ErrorEvent | None = None
@@ -69,6 +73,8 @@ async def collect(events: AsyncIterable[ChatEvent]) -> ChatResult:
                 parts.append(event.text)
             case RetrievalEvent():
                 result.sources = event.sources
+            case ToolCallFinishedEvent():
+                result.tool_calls.append(event)
             case UsageEvent():
                 result.usage = event
             case DoneEvent():

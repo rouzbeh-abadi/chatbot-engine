@@ -1,15 +1,20 @@
-"""MCP connectivity configuration -- the part that is implemented.
+"""MCP connectivity: target resolution and the allowlist gate.
 
-Discovery and invocation are not written yet; the allowlist gate is, because it is
-a security rule rather than AI logic and is easy to get wrong later.
+The allowlist is the security-relevant part. Tool names and descriptions come from
+a server and end up inside the prompt, so a name that was never allowlisted must
+be refused -- both when filtering discovery results and again at call time, since
+by then the name has passed through model output.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from chatbot_engine.errors import NotConfiguredError
 from chatbot_engine.mcp import McpToolProvider, resolve_targets
+from chatbot_engine.mcp.client import (
+    McpServerNotFoundError,
+    McpToolNotAllowedError,
+)
 from chatbot_engine.models.chat import AssistantConfig, McpServerConfig
 
 
@@ -50,11 +55,30 @@ def test_only_allowlisted_tools_are_permitted() -> None:
     assert not target.allows("delete_all_bookings")
 
 
-async def test_discovery_and_invocation_are_not_implemented_yet() -> None:
+async def test_calling_a_tool_outside_the_allowlist_is_refused() -> None:
+    """The tool name arrives from model output, so it is checked again at call
+    time -- not just filtered during discovery. Refused before any network call,
+    which is why this test needs no server."""
     provider = McpToolProvider(timeout_s=30.0)
 
-    with pytest.raises(NotConfiguredError):
-        await provider.list_tools(_config())
+    with pytest.raises(McpToolNotAllowedError, match="delete_all_bookings"):
+        await provider.call_tool(
+            config=_config(),
+            server="support-tools",
+            name="delete_all_bookings",
+            arguments={},
+        )
 
-    with pytest.raises(NotConfiguredError):
-        await provider.call_tool(server="support-tools", name="x", arguments={})
+
+async def test_calling_an_unconfigured_server_is_refused() -> None:
+    """A server the request never declared cannot be reached, whatever the model
+    asks for."""
+    provider = McpToolProvider(timeout_s=30.0)
+
+    with pytest.raises(McpServerNotFoundError, match="somewhere-else"):
+        await provider.call_tool(
+            config=_config(),
+            server="somewhere-else",
+            name="get_booking_status",
+            arguments={},
+        )

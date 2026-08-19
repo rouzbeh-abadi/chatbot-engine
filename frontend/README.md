@@ -25,6 +25,8 @@ JSON `data:` payload:
 | Event | Render as |
 | --- | --- |
 | `retrieval` | The sources panel and citations (`sources[]`) |
+| `tool_call_started` | A progress indicator naming the tool |
+| `tool_call_finished` | Tool result or error; pair with `started` via `call_id` |
 | `token` | Append `text` to the answer |
 | `usage` | Token count and cost |
 | `error` | An error state — may arrive mid-stream, after a 200 |
@@ -33,6 +35,7 @@ JSON `data:` payload:
 `EventSource` cannot issue a POST, so use `fetch` with a `ReadableStream` reader,
 or the `@microsoft/fetch-event-source` package.
 
-`retrieval` and `usage` already cover two of the brief's UI requirements (sources,
-and the token/cost optional task). `tool_call_started` / `tool_call_finished`
-arrive with the tool-calling loop and cover two more.
+These four cover the brief's UI requirements outright: `retrieval` gives you
+sources, `tool_call_*` gives you tool results and progress indicators, and `usage`
+gives you the token/cost display. `/chat/sync` returns the same information folded
+into one object, including a `tool_calls` list.

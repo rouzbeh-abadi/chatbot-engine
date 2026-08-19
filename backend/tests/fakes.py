@@ -18,6 +18,8 @@ from support_agent.engine_client.models import (
     RetrievalEvent,
     SourceRef,
     TokenEvent,
+    ToolCallFinishedEvent,
+    ToolCallStartedEvent,
     UsageEvent,
 )
 
@@ -47,6 +49,15 @@ class FakeEngine:
                         heading="Baggage Policy > Cabin Baggage",
                     )
                 ],
+            )
+            yield ToolCallStartedEvent(
+                call_id="c1",
+                tool="get_booking_status",
+                server="support-tools",
+                arguments={"booking_reference": "AB12CD"},
+            )
+            yield ToolCallFinishedEvent(
+                call_id="c1", tool="get_booking_status", ok=True, duration_ms=31
             )
             yield TokenEvent(text="One ")
             yield TokenEvent(text="cabin bag.")

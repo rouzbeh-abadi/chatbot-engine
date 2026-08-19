@@ -119,6 +119,40 @@ class UsageEvent(BaseModel):
     model: str | None = None
 
 
+class ToolCallStartedEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    """Emitted before a tool runs, so a UI can show what is happening.
+
+    `call_id` pairs this with the matching finished event; a turn may run several
+    tools, and they are not guaranteed to finish in the order they started.
+    """
+
+    type: Literal["tool_call_started"] = "tool_call_started"
+    call_id: str
+    tool: str
+    server: str | None = None
+    arguments: dict[str, object] = Field(default_factory=dict)
+
+
+class ToolCallFinishedEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    """Emitted when a tool returns or fails.
+
+    `result_preview` is for display only -- a short excerpt. Tool output is
+    untrusted data and belongs in the model's context, not spliced into a UI.
+    """
+
+    type: Literal["tool_call_finished"] = "tool_call_finished"
+    call_id: str
+    tool: str
+    ok: bool
+    duration_ms: int | None = None
+    result_preview: str | None = None
+    error: str | None = None
+
+
 class ErrorEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -135,7 +169,13 @@ class DoneEvent(BaseModel):
 
 
 ChatEvent = Annotated[
-    RetrievalEvent | TokenEvent | UsageEvent | ErrorEvent | DoneEvent,
+    RetrievalEvent
+    | TokenEvent
+    | ToolCallStartedEvent
+    | ToolCallFinishedEvent
+    | UsageEvent
+    | ErrorEvent
+    | DoneEvent,
     Field(discriminator="type"),
 ]
 

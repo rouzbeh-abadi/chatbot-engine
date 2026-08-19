@@ -24,6 +24,8 @@ from chatbot_engine.models.events import (
     RetrievalEvent,
     SourceRef,
     TokenEvent,
+    ToolCallFinishedEvent,
+    ToolCallStartedEvent,
     UsageEvent,
 )
 
@@ -42,5 +44,7 @@ __all__ = [
     "RetrievalEvent",
     "SourceRef",
     "TokenEvent",
+    "ToolCallFinishedEvent",
+    "ToolCallStartedEvent",
     "UsageEvent",
 ]

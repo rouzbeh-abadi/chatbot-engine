@@ -7,13 +7,17 @@ requires-python = ">=3.13"
 # No dependency on the engine package. The two services share an HTTP contract
 # only -- `engine_client/models.py` mirrors it deliberately.
 dependencies = [
+    "alembic>=1.18",
     "fastapi[standard]>=0.141.1",
     "httpx>=0.28",
-    # 2.x renamed FastMCP to MCPServer; mcp_tools.py uses the 2.x API.
     "mcp>=2.0",
+    "psycopg[binary]>=3.2",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.7",
     "pyyaml>=6.0",
+    # The `asyncio` extra pulls in greenlet, which SQLAlchemy's async engine
+    # needs at runtime and does not require by default.
+    "sqlalchemy[asyncio]>=2.0",
 ]
 
 [build-system]

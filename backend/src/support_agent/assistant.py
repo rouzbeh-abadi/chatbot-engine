@@ -12,6 +12,7 @@ from pathlib import Path
 import yaml
 
 from support_agent.engine_client.models import AssistantConfig
+from support_agent.settings import get_settings
 
 PROJECTS_DIR = Path(__file__).parent / "projects"
 KNOWLEDGE_DIR = Path(__file__).parents[2] / "knowledge"
@@ -38,7 +39,31 @@ def load_project(name: str | None = None) -> AssistantConfig:
     if not candidate.is_file():
         raise ProjectNotFoundError(f"no project config at {candidate}")
 
-    return AssistantConfig.model_validate(yaml.safe_load(candidate.read_text()) or {})
+    config = AssistantConfig.model_validate(
+        yaml.safe_load(candidate.read_text()) or {}
+    )
+    return _apply_deployment_overrides(config)
+
+
+def _apply_deployment_overrides(config: AssistantConfig) -> AssistantConfig:
+    """Re-point the tool server for the environment we are actually running in.
+
+    Only the address is environment-specific: under Docker Compose the engine
+    dials `mcp-tools`, not localhost. Which tools are allowed is a security
+    decision and stays in the YAML, where it is reviewable.
+    """
+    override = get_settings().mcp_tools_url
+    if override is None or not config.mcp_servers:
+        return config
+
+    return config.model_copy(
+        update={
+            "mcp_servers": [
+                server.model_copy(update={"url": override})
+                for server in config.mcp_servers
+            ]
+        }
+    )
 
 
 def available_projects() -> list[str]:

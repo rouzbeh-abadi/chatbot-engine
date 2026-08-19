@@ -18,6 +18,8 @@ from chatbot_engine.models.events import (
     RetrievalEvent,
     SourceRef,
     TokenEvent,
+    ToolCallFinishedEvent,
+    ToolCallStartedEvent,
     UsageEvent,
 )
 from chatbot_engine.services.chat import ChatService
@@ -30,6 +32,15 @@ class _EchoAgent:
         yield RetrievalEvent(
             query=request.message,
             sources=[SourceRef(doc_id="d1", source="baggage.md", score=0.9)],
+        )
+        yield ToolCallStartedEvent(
+            call_id="c1",
+            tool="get_booking_status",
+            server="support-tools",
+            arguments={"booking_reference": "AB12CD"},
+        )
+        yield ToolCallFinishedEvent(
+            call_id="c1", tool="get_booking_status", ok=True, duration_ms=31
         )
         yield TokenEvent(text="One ")
         yield TokenEvent(text="bag.")
@@ -68,6 +79,8 @@ def test_a_turn_streams_ndjson_one_event_per_line(
     events = _lines(response.text)
     assert [e["type"] for e in events] == [
         "retrieval",
+        "tool_call_started",
+        "tool_call_finished",
         "token",
         "token",
         "usage",

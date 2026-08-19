@@ -4,7 +4,7 @@
 # the engine over HTTP, so the engine has to be up first.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev engine backend tools test seed smoke up down logs clean
+.PHONY: help setup dev engine backend tools migrate seed-db test seed smoke up down logs clean
 
 help:
 	@echo ""
@@ -16,6 +16,10 @@ help:
 	@echo "    make engine    AI engine only     -> http://localhost:8100/docs"
 	@echo "    make backend   app backend only   -> http://localhost:8000/docs"
 	@echo "    make tools     MCP tool server    -> http://localhost:8200/mcp"
+	@echo ""
+	@echo "  Database"
+	@echo "    make migrate   apply Alembic migrations"
+	@echo "    make seed-db   load the demo bookings and flights"
 	@echo ""
 	@echo "  Check"
 	@echo "    make test      run all tests"
@@ -47,6 +51,12 @@ backend:
 
 tools:
 	uv run python -m support_agent.mcp_tools
+
+migrate:
+	uv run alembic -c backend/alembic.ini upgrade head
+
+seed-db:
+	uv run python backend/scripts/seed_database.py
 
 test:
 	uv run pytest -q
