@@ -4,7 +4,7 @@
 # the engine over HTTP, so the engine has to be up first.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev engine backend tools migrate seed-db test seed smoke up down logs clean
+.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke up down logs clean
 
 help:
 	@echo ""
@@ -16,17 +16,20 @@ help:
 	@echo "    make engine    AI engine only     -> http://localhost:8100/docs"
 	@echo "    make backend   app backend only   -> http://localhost:8000/docs"
 	@echo "    make tools     MCP tool server    -> http://localhost:8200/mcp"
+	@echo "    make frontend  React UI           -> http://localhost:5173"
 	@echo ""
 	@echo "  Database"
+	@echo "    make db        start Postgres in Docker (nothing else)"
+	@echo "    make db-stop   stop it"
 	@echo "    make migrate   apply Alembic migrations"
 	@echo "    make seed-db   load the demo bookings and flights"
 	@echo ""
 	@echo "  Check"
-	@echo "    make test      run all tests"
+	@echo "    make test      run all tests (python + frontend)"
 	@echo "    make smoke     probe both services (needs them running)"
 	@echo "    make seed      load backend/knowledge/ through the backend"
 	@echo ""
-	@echo "  Docker (runs both services)"
+	@echo "  Docker (the whole stack -- for a demo, not for developing)"
 	@echo "    make up / make down / make logs"
 	@echo ""
 
@@ -52,14 +55,35 @@ backend:
 tools:
 	uv run python -m support_agent.mcp_tools
 
+frontend:
+	cd frontend && npm install && npm run dev
+
+# Postgres only. Everything else runs better as a plain process: `make dev`
+# reloads on save, a container has to be rebuilt.
+db:
+	docker compose up -d postgres
+	@echo "postgres on :5432 -- next: 'make migrate' then 'make seed-db'"
+
+db-stop:
+	docker compose stop postgres
+
 migrate:
 	uv run alembic -c backend/alembic.ini upgrade head
 
 seed-db:
 	uv run python backend/scripts/seed_database.py
 
+# Both suites. The frontend's are fast and need no services, so there is no
+# reason to make you remember two commands.
 test:
 	uv run pytest -q
+	@cd frontend && npm run --silent test
+
+test-py:
+	uv run pytest -q
+
+test-ui:
+	cd frontend && npm run test
 
 seed:
 	uv run python backend/scripts/seed_knowledge.py
@@ -88,5 +112,5 @@ logs:
 	docker compose logs -f
 
 clean:
-	rm -rf .pytest_cache
+	rm -rf .pytest_cache frontend/dist
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

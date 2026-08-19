@@ -77,7 +77,7 @@ It happens to be written in Python with FastAPI, but nothing about that is
 required — it is one example of the integration, not the only shape it can take.
 
 ```text
-Frontend
+Frontend (React + TS)      :5173
    ↓  HTTP + SSE
 Example backend        :8000    users, config, documents, domain tools
    ↓  HTTP + NDJSON
@@ -93,6 +93,7 @@ Postgres               :5432
 ```bash
 make setup      # once: install dependencies and create .env
 make dev        # engine and example backend together
+make frontend   # the React UI on http://localhost:5173
 make smoke      # in another terminal
 ```
 
@@ -104,7 +105,7 @@ Docker, including Postgres and the tool server.
 ```text
 engine/     the chatbot engine service     -- see engine/README.md
 backend/    the example backend            -- see backend/README.md
-frontend/   not started                    -- see frontend/README.md
+frontend/   React + TypeScript chat UI      -- see frontend/README.md
 docs/       the integration guide, and the project brief
 tests/      the contract-parity test, the one place both services meet
 ```
@@ -115,10 +116,15 @@ The engine's HTTP surface, event contract, document extraction, chunking, storag
 and MCP client are written. The example backend is complete: it serves its API,
 owns its database, and exposes three working tools.
 
+The frontend is built too: a React and TypeScript chat interface that streams
+tokens, renders Markdown answers, shows retrieved sources, shows tool calls as
+they run, and reports token cost.
+
 Still to build in the engine: the ingestion pipeline, embeddings and the vector
 store, retrieval, prompt construction, the chat-model client, and the agent run
 loop. Until each is registered in `engine/src/chatbot_engine/api/deps.py`, the
-routes that depend on it answer `501` naming the exact function to fill in.
+routes that depend on it answer `501` naming the exact function to fill in — and
+the UI shows that state rather than looking broken.
 
 To see what is live:
 

@@ -1,6 +1,6 @@
 # The whole stack.
 #
-#   frontend -> backend :8000 --HTTP--> engine :8100
+#   frontend :5173 -> backend :8000 --HTTP--> engine :8100
 #                  |                       |
 #                  |                       +--MCP--> mcp-tools :8200
 #                  |                                       |
@@ -12,6 +12,16 @@
 name: rabadi-ae-afa-3-5
 
 services:
+  # The built UI, served by nginx, which also proxies /api to the backend so the
+  # browser only ever talks to one origin.
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
   postgres:
     image: postgres:17
     ports:
