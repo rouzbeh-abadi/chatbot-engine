@@ -17,6 +17,7 @@ from support_agent.api.documents import router as documents_router
 from support_agent.engine_client import (
     EngineError,
     EngineNotImplemented,
+    EngineRejected,
     EngineUnavailable,
 )
 
@@ -40,6 +41,20 @@ async def engine_not_implemented(_: Request, exc: EngineNotImplemented) -> JSONR
 async def engine_unavailable(_: Request, exc: EngineUnavailable) -> JSONResponse:
     """The engine is a separate process; it being down is an expected outcome."""
     return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+#: Engine 4xx codes about the caller's own payload, handed back unchanged. Any
+#: other 4xx -- a bad shared secret, a route we called wrongly -- is our fault,
+#: and must not look like a problem with their request.
+PASS_THROUGH = frozenset({400, 413, 415, 422, 429})
+
+
+@app.exception_handler(EngineRejected)
+async def engine_rejected(_: Request, exc: EngineRejected) -> JSONResponse:
+    """A 4xx from the engine. Whose fault it was decides what we send."""
+    if exc.status_code in PASS_THROUGH:
+        return JSONResponse(status_code=exc.status_code, content={"detail": str(exc)})
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
 @app.exception_handler(EngineError)

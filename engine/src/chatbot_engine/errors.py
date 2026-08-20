@@ -19,3 +19,10 @@ class NotConfiguredError(EngineError):
     Surfaced as 501 with the name of the thing to implement and where to
     register it.
     """
+
+
+class DocumentRejectedError(EngineError):
+    """A readable document with nothing worth indexing -- usually a scanned PDF.
+
+    Mapped to 422, not 500: the engine worked, the answer is "not this file".
+    """

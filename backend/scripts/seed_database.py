@@ -33,7 +33,6 @@ from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-
 from support_agent.database.connection import dispose_engine, get_session_factory
 from support_agent.database.models import Booking, Flight
 

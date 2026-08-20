@@ -15,6 +15,7 @@ from support_agent.engine import get_engine_client
 from support_agent.engine_client import (
     EngineFailed,
     EngineNotImplemented,
+    EngineRejected,
     EngineUnavailable,
 )
 
@@ -184,6 +185,14 @@ def test_document_routes_validate_the_project_first(
         (EngineNotImplemented("no Agent registered -- get_agent()"), 501),
         (EngineUnavailable("engine unreachable at http://localhost:8100"), 503),
         (EngineFailed("engine failed (500)"), 502),
+        # A document the engine cannot read is the caller's problem, so the
+        # status has to survive the hop rather than flatten into a 502.
+        (EngineRejected("unsupported type", status_code=415), 415),
+        (EngineRejected("nothing to index", status_code=422), 422),
+        # A bad shared secret is *our* misconfiguration. Passing 401 through would
+        # tell the caller they are unauthenticated, which they are not.
+        (EngineRejected("missing X-API-Key", status_code=401), 502),
+        (EngineRejected("no such route", status_code=404), 502),
     ],
 )
 def test_engine_failures_map_to_distinct_statuses(

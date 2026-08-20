@@ -116,15 +116,25 @@ The engine's HTTP surface, event contract, document extraction, chunking, storag
 and MCP client are written. The example backend is complete: it serves its API,
 owns its database, and exposes three working tools.
 
+Document ingestion is complete. `PUT /documents` extracts a file's text, splits it
+into overlapping chunks, embeds them into a local Chroma store and records the
+result as `indexed`; `GET /documents` lists what the engine holds and `DELETE`
+removes the chunks, the original file and the record together. Re-uploading
+identical bytes answers `unchanged` and does no work at all, and the original
+bytes are kept, so changing the chunk size or embedding model is an internal
+re-index rather than a re-upload for every caller. All of it survives a restart
+under `var/`.
+
 The frontend is built too: a React and TypeScript chat interface that streams
 tokens, renders Markdown answers, shows retrieved sources, shows tool calls as
 they run, and reports token cost.
 
-Still to build in the engine: the ingestion pipeline, embeddings and the vector
-store, retrieval, prompt construction, the chat-model client, and the agent run
-loop. Until each is registered in `engine/src/chatbot_engine/api/deps.py`, the
-routes that depend on it answer `501` naming the exact function to fill in — and
-the UI shows that state rather than looking broken.
+Still to build in the engine: retrieval, prompt construction, and the agent run
+loop — everything behind `POST /chat`. The pieces it needs are in place: the vector
+store is populated, `deps.get_model_client()` reaches the provider, and the MCP
+tool client works. Until an agent is registered in
+`engine/src/chatbot_engine/api/deps.py`, `POST /chat` answers `501` naming the
+exact function to fill in — and the UI shows that state rather than looking broken.
 
 To see what is live:
 

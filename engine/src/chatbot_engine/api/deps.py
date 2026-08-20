@@ -1,8 +1,12 @@
 """Where implementations get plugged in.
 
-This is the engine's single wiring point. Each factory below returns `None`
-today, which makes the service layer raise `NotConfiguredError` (an
-`NotImplementedError`) and the API answer 501 with a pointer.
+This is the engine's single wiring point. A factory that returns `None` makes the
+service layer raise `NotConfiguredError` (a `NotImplementedError`) and the API
+answer 501 naming the function to fill in.
+
+Wired today: everything on the document side -- the registry, the blob store, the
+ingest pipeline, the Chroma vector store -- plus the model provider client. Still
+`None`: the chat agent.
 
 To bring a capability online, write it under `chatbot_engine/agent/` or
 `chatbot_engine/rag/` and return an instance from the matching factory. Nothing
@@ -15,13 +19,20 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
+from openai import AsyncOpenAI
 
+from chatbot_engine.documents.blobs import DocumentBlobs
+from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
+from chatbot_engine.llm.client import build_model_client
 from chatbot_engine.mcp.client import McpToolProvider
 from chatbot_engine.ports.agent import Agent, ToolProvider
-from chatbot_engine.ports.documents import (
-    BlobStore,
-    DocumentRegistry,
-    IngestPipeline,
+from chatbot_engine.ports.documents import DocumentRegistry, IngestPipeline
+from chatbot_engine.rag.embeddings import get_embeddings
+from chatbot_engine.rag.pipeline import DocumentIngestPipeline
+from chatbot_engine.rag.splitter import DocumentChunker
+from chatbot_engine.rag.vector_store import (
+    ChromaChunkStore,
+    open_vector_store,
 )
 from chatbot_engine.services.chat import ChatService
 from chatbot_engine.services.documents import DocumentService
@@ -45,24 +56,59 @@ def get_agent() -> Agent | None:
 
 @lru_cache
 def get_ingest_pipeline() -> IngestPipeline | None:
-    """Document ingestion: extract, chunk, embed, store."""
-    return None
+    """Document ingestion: extract, chunk, embed, store. Fully wired."""
+    return DocumentIngestPipeline(
+        registry=get_registry(),
+        chunker=DocumentChunker(),
+        vectors=get_chunk_store(),
+        blobs=get_blob_store(),
+    )
 
 
 @lru_cache
-def get_registry() -> DocumentRegistry | None:
-    """Document bookkeeping: what is indexed, is it current, delete it."""
-    return None
+def get_registry() -> DocumentRegistry:
+    """Document bookkeeping: what is indexed, is it current, delete it.
 
-
-@lru_cache
-def get_blob_store() -> BlobStore | None:
-    """The original uploaded files.
-
-    Nothing here consumes it directly -- hand it to your `IngestPipeline` below,
-    which is what needs to keep and re-read the originals.
+    On disk, because the vectors are: an in-memory registry plus a persistent
+    Chroma leaves chunks after a restart that nothing lists and nothing can
+    delete. `InMemoryDocumentRegistry` is still there for tests.
     """
-    return None
+    return SqliteDocumentRegistry(get_settings().registry_db)
+
+
+@lru_cache
+def get_blob_store() -> DocumentBlobs:
+    """The original uploaded files, addressed by `doc_id`.
+
+    `DocumentBlobs` computes the URI from the root and the id, so nothing has to
+    be stored on `DocumentRecord` and no filesystem path goes on the wire.
+    """
+    return DocumentBlobs(get_settings().blob_dir)
+
+
+@lru_cache
+def get_chunk_store() -> ChromaChunkStore | None:
+    """The vectors, when there is a key to embed with.
+
+    Without a provider key there is nothing to embed with, so documents are
+    chunked and recorded but not searchable: `received` rather than `indexed`,
+    which is what `GET /documents` and the UI then show. Better than taking the
+    whole document surface down over a key that only search needs.
+    """
+    if get_settings().openrouter_api_key is None:
+        return None
+
+    return ChromaChunkStore()
+
+
+@lru_cache
+def get_model_client() -> AsyncOpenAI:
+    """The model provider, shared by the agent and the embedder.
+
+    Cached, so one connection pool serves the process. A missing key is a 501
+    here, not a crash at startup.
+    """
+    return build_model_client(get_settings())
 
 
 @lru_cache
@@ -81,7 +127,12 @@ def get_chat_service() -> ChatService:
 
 @lru_cache
 def get_document_service() -> DocumentService:
-    return DocumentService(pipeline=get_ingest_pipeline(), registry=get_registry())
+    return DocumentService(
+        pipeline=get_ingest_pipeline(),
+        registry=get_registry(),
+        vectors=get_chunk_store(),
+        blobs=get_blob_store(),
+    )
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
@@ -112,13 +163,22 @@ async def require_api_key(
 
 
 def reset_dependency_cache() -> None:
-    """Drop cached services. For tests, and after re-wiring an implementation."""
+    """Drop cached services. For tests, and after re-wiring an implementation.
+
+    The two caches in `rag/` belong here too: a Chroma client holds an open
+    directory, so a test that changes `ENGINE_CHROMA_DIR` would otherwise keep
+    writing to the previous one.
+    """
     for cached in (
         get_settings,
+        get_embeddings,
+        open_vector_store,
         get_agent,
         get_ingest_pipeline,
         get_registry,
         get_blob_store,
+        get_chunk_store,
+        get_model_client,
         get_tool_provider,
         get_chat_service,
         get_document_service,

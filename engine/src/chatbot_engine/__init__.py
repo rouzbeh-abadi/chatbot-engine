@@ -9,8 +9,8 @@ calls the backend's domain tools back over MCP.
     ports/     the interfaces future AI logic must satisfy
     mcp/       MCP client connectivity: configuration and transport
     agent/     YOURS -- the chat run loop
-    rag/       YOURS -- chunking, embedding, the vector store, the retriever
-    llm/       YOURS -- the chat-model client and the embedder
+    rag/       chunking, embedding, the vector store; YOURS -- the retriever
+    llm/       the provider client (written); YOURS -- the embedder
 
 Kept deliberately import-light so `from chatbot_engine import __version__` costs
 nothing: the package root pulls in no framework.

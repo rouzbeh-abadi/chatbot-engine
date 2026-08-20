@@ -42,7 +42,16 @@ class EngineNotImplemented(EngineError):
 
 
 class EngineRejected(EngineError):
-    """The engine answered 4xx -- usually a contract mismatch on our side."""
+    """The engine answered 4xx.
+
+    Carries the status because two very different things land here: a 415 means
+    the caller's document was unusable, a 401 means this backend is
+    misconfigured. Only the first kind should reach the caller unchanged.
+    """
+
+    def __init__(self, message: str, *, status_code: int) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class EngineFailed(EngineError):
@@ -177,7 +186,10 @@ class EngineClient:
         if response.status_code == 501:
             return EngineNotImplemented(detail)
         if response.status_code < 500:
-            return EngineRejected(f"engine rejected the request ({response.status_code}): {detail}")
+            return EngineRejected(
+                f"engine rejected the request ({response.status_code}): {detail}",
+                status_code=response.status_code,
+            )
         return EngineFailed(f"engine failed ({response.status_code}): {detail}")
 
 

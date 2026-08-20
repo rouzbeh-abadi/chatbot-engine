@@ -49,6 +49,15 @@ services:
       ENGINE_API_KEY: ${ENGINE_API_KEY:-}
       ENGINE_OPENROUTER_API_KEY: ${ENGINE_OPENROUTER_API_KEY:-}
       ENGINE_LOG_LEVEL: INFO
+      # Inside the container, so it lands on the volume below rather than in a
+      # layer that `docker compose down` throws away.
+      ENGINE_CHROMA_DIR: /var/lib/chatbot-engine/chroma
+      ENGINE_REGISTRY_DB: /var/lib/chatbot-engine/documents.sqlite3
+      ENGINE_BLOB_DIR: /var/lib/chatbot-engine/blobs
+    volumes:
+      # Vectors cost money to produce. Without this they are re-embedded from
+      # scratch on every `docker compose up`.
+      - engine_data:/var/lib/chatbot-engine
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8100/health')\""]
       interval: 10s
@@ -88,3 +97,4 @@ services:
 
 volumes:
   postgres_data:
+  engine_data:

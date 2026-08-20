@@ -4,7 +4,7 @@
 # the engine over HTTP, so the engine has to be up first.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke up down logs clean
+.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke smoke-docs search up down logs clean
 
 help:
 	@echo ""
@@ -27,7 +27,9 @@ help:
 	@echo "  Check"
 	@echo "    make test      run all tests (python + frontend)"
 	@echo "    make smoke     probe both services (needs them running)"
+	@echo "    make smoke-docs  exercise the whole document path for real"
 	@echo "    make seed      load backend/knowledge/ through the backend"
+	@echo '    make search Q="..."  what the vector store would retrieve' 
 	@echo ""
 	@echo "  Docker (the whole stack -- for a demo, not for developing)"
 	@echo "    make up / make down / make logs"
@@ -100,6 +102,15 @@ smoke:
 		-X POST localhost:8000/chat/sync \
 		-H 'Content-Type: application/json' \
 		-d '{"message":"what is the baggage allowance?"}'
+
+# The document path end to end, against the running services: real embeddings,
+# real vectors on disk. `make test` covers the same ground with a fake embedder.
+smoke-docs:
+	uv run python backend/scripts/smoke_documents.py
+
+# What retrieval would find, without an agent to use it yet.
+search:
+	@uv run python engine/scripts/search.py $(Q)
 
 up:
 	docker compose up --build -d

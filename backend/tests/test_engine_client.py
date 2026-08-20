@@ -103,6 +103,16 @@ async def test_a_4xx_is_reported_as_rejected() -> None:
         await engine.start_chat(_request())
 
 
+async def test_a_rejection_carries_the_engine_status_code() -> None:
+    """The app needs it to tell "your file is unusable" from "we are misconfigured"."""
+    engine = _client(lambda r: httpx.Response(415, json={"detail": "nope"}))
+
+    with pytest.raises(EngineRejected) as raised:
+        await engine.start_chat(_request())
+
+    assert raised.value.status_code == 415
+
+
 async def test_a_5xx_is_reported_as_failed() -> None:
     engine = _client(lambda r: httpx.Response(500, json={"detail": "boom"}))
 

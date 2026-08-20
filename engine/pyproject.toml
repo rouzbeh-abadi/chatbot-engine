@@ -8,7 +8,13 @@ requires-python = ">=3.13"
 
 dependencies = [
     "fastapi[standard]>=0.141.1",
+    "langchain-chroma",
+    "langchain-chroma",
+    "langchain-core",
+    "langchain-openai",
+    "langchain-text-splitters",
     "mcp>=2.0",
+    "openai>=1.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.7",
     "pypdf>=6.16.1",

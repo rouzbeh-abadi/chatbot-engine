@@ -31,8 +31,9 @@ def test_health_is_reachable_even_when_a_key_is_required(
     reset_dependency_cache()
 
 
-def test_readiness_reports_nothing_is_implemented_yet(client: TestClient) -> None:
-    assert client.get("/health/ready").json() == {"chat": False, "documents": False}
+def test_readiness_reports_which_capabilities_are_wired(client: TestClient) -> None:
+    """Documents are wired as far as chunking; the chat agent is not written."""
+    assert client.get("/health/ready").json() == {"chat": False, "documents": True}
 
 
 def test_a_blank_api_key_env_var_leaves_the_engine_open(

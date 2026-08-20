@@ -31,7 +31,10 @@ AI_LIBRARIES = {
 #: Only the client layer may speak HTTP to the engine. A stray `httpx` call in a
 #: route would route around the client's error handling and contract models.
 HTTP_CLIENT = "httpx"
-ALLOWED_HTTP_FILES = {"client.py", "seed_knowledge.py"}
+#: `client.py` is the one route to the engine from the app itself. The two
+#: scripts are operator tools that drive the running API from outside, which
+#: is the whole point of them.
+ALLOWED_HTTP_FILES = {"client.py", "seed_knowledge.py", "smoke_documents.py"}
 
 
 def _modules(path: Path) -> set[str]:

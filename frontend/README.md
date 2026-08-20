@@ -71,7 +71,9 @@ than a generic failure, the UI distinguishes:
 | Backend unreachable | "Could not reach the backend… start it with `make backend`." |
 | You pressed Stop | "Stopped" |
 
-The knowledge-base panel does the same for `GET /documents`.
+The knowledge-base panel no longer hits that state: `GET /documents` is wired, so
+it lists what the engine holds with each document's chunk count and status. A
+document that failed to ingest shows as `failed` there rather than disappearing.
 
 ## Files
 

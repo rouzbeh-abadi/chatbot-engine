@@ -16,7 +16,12 @@ from fastapi.responses import JSONResponse
 from chatbot_engine import __version__
 from chatbot_engine.api import chat, documents, health
 from chatbot_engine.api.deps import require_api_key
-from chatbot_engine.errors import EngineError, NotConfiguredError
+from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
+from chatbot_engine.errors import (
+    DocumentRejectedError,
+    EngineError,
+    NotConfiguredError,
+)
 from chatbot_engine.settings import get_settings
 
 
@@ -44,6 +49,20 @@ def create_app() -> FastAPI:
     async def not_implemented(_: Request, exc: NotImplementedError) -> JSONResponse:
         """A bare `raise NotImplementedError` from half-written code, too."""
         return JSONResponse(status_code=501, content={"detail": str(exc)})
+
+    @app.exception_handler(DocumentRejectedError)
+    async def document_rejected(
+        _: Request, exc: DocumentRejectedError
+    ) -> JSONResponse:
+        """Readable, and still nothing to index."""
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+    @app.exception_handler(UnsupportedDocumentTypeError)
+    async def unsupported_document_type(
+        _: Request, exc: UnsupportedDocumentTypeError
+    ) -> JSONResponse:
+        """No extractor handles this MIME type."""
+        return JSONResponse(status_code=415, content={"detail": str(exc)})
 
     @app.exception_handler(EngineError)
     async def engine_error(_: Request, exc: EngineError) -> JSONResponse:

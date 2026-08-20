@@ -20,7 +20,6 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import create_engine, pool
-
 from support_agent.database.base import Base
 from support_agent.database.models import Booking, Flight, SupportTicket  # noqa: F401
 from support_agent.settings import get_settings
