@@ -14,7 +14,6 @@ dependencies = [
     "langchain-openai",
     "langchain-text-splitters",
     "mcp>=2.0",
-    "openai>=1.0",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.7",
     "pypdf>=6.16.1",

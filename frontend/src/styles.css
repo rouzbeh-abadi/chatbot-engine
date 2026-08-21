@@ -294,50 +294,18 @@ code {
 
 /* --- sources ------------------------------------------------------------ */
 
-.sources__toggle {
-  border: 0;
-  background: none;
-  padding: 0;
-  color: var(--accent);
-  font: inherit;
-  font-size: 13px;
-  cursor: pointer;
-}
-.sources__toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-.sources__list {
-  margin: 10px 0 0;
-  padding-left: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.source__head {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-}
-.source__file {
-  font-family: var(--mono);
-  font-size: 12.5px;
-}
-.source__score {
+.cite {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--surface-2);
   color: var(--ink-3);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-.source__heading {
-  color: var(--ink-2);
-  font-size: 13px;
-}
-.source__excerpt {
-  margin: 5px 0 0;
-  padding-left: 10px;
-  border-left: 2px solid var(--line);
-  color: var(--ink-2);
-  font-size: 13px;
+  font-size: 11.5px;
+  font-family: var(--mono);
+  vertical-align: 1px;
+  white-space: nowrap;
+  cursor: help;
 }
 
 .usage {

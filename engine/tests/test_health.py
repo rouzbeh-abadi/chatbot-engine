@@ -32,8 +32,7 @@ def test_health_is_reachable_even_when_a_key_is_required(
 
 
 def test_readiness_reports_which_capabilities_are_wired(client: TestClient) -> None:
-    """Documents are wired as far as chunking; the chat agent is not written."""
-    assert client.get("/health/ready").json() == {"chat": False, "documents": True}
+    assert client.get("/health/ready").json() == {"chat": True, "documents": True}
 
 
 def test_a_blank_api_key_env_var_leaves_the_engine_open(
@@ -47,9 +46,10 @@ def test_a_blank_api_key_env_var_leaves_the_engine_open(
     from chatbot_engine.app import create_app
 
     with TestClient(create_app()) as client:
-        # 501 means it got past authentication and reached the service layer.
-        response = client.post("/chat", json={"project": project, "message": "hi"})
-        assert response.status_code == 501
+        # A route that needs no model, so this tests authentication and nothing
+        # else: 200 means the request got past it.
+        response = client.get("/documents", params={"project_id": "support"})
+        assert response.status_code == 200
 
     reset_dependency_cache()
 
@@ -63,13 +63,13 @@ def test_a_configured_api_key_is_enforced(
     from chatbot_engine.app import create_app
 
     with TestClient(create_app()) as client:
-        body = {"project": project, "message": "hi"}
-        assert client.post("/chat", json=body).status_code == 401
-        assert client.post(
-            "/chat", json=body, headers={"X-API-Key": "wrong"}
+        url, params = "/documents", {"project_id": "support"}
+        assert client.get(url, params=params).status_code == 401
+        assert client.get(
+            url, params=params, headers={"X-API-Key": "wrong"}
         ).status_code == 401
-        assert client.post(
-            "/chat", json=body, headers={"X-API-Key": "s3cret"}
-        ).status_code == 501
+        assert client.get(
+            url, params=params, headers={"X-API-Key": "s3cret"}
+        ).status_code == 200
 
     reset_dependency_cache()

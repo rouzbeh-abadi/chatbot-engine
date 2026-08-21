@@ -4,9 +4,12 @@ This is the engine's single wiring point. A factory that returns `None` makes th
 service layer raise `NotConfiguredError` (a `NotImplementedError`) and the API
 answer 501 naming the function to fill in.
 
-Wired today: everything on the document side -- the registry, the blob store, the
-ingest pipeline, the Chroma vector store -- plus the model provider client. Still
-`None`: the chat agent.
+Wired today: the document side in full, and `ChatAgent` for chat. Nothing here
+returns `None` any more.
+
+The chat model has no factory here: `model` and `temperature` arrive per request
+in `AssistantConfig`, so the agent builds one per turn with
+`agent.client.build_chat_model()`.
 
 To bring a capability online, write it under `chatbot_engine/agent/` or
 `chatbot_engine/rag/` and return an instance from the matching factory. Nothing
@@ -19,11 +22,10 @@ from functools import lru_cache
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
-from openai import AsyncOpenAI
 
+from chatbot_engine.agent.chat_agent import ChatAgent
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
-from chatbot_engine.llm.client import build_model_client
 from chatbot_engine.mcp.client import McpToolProvider
 from chatbot_engine.ports.agent import Agent, ToolProvider
 from chatbot_engine.ports.documents import DocumentRegistry, IngestPipeline
@@ -48,10 +50,10 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 def get_agent() -> Agent | None:
     """The chat run loop: retrieval, prompt, model call, tool loop, events.
 
-    Hand it `get_tool_provider()` when you build it -- the agent is what runs the
-    tool loop, so it is the thing that needs tool access.
+    `ChatAgent` runs the prompt, the model and the tool loop. Still to add:
+    retrieval, and streaming a `TokenEvent` per chunk instead of one at the end.
     """
-    return None
+    return ChatAgent(tools=get_tool_provider())
 
 
 @lru_cache
@@ -99,16 +101,6 @@ def get_chunk_store() -> ChromaChunkStore | None:
         return None
 
     return ChromaChunkStore()
-
-
-@lru_cache
-def get_model_client() -> AsyncOpenAI:
-    """The model provider, shared by the agent and the embedder.
-
-    Cached, so one connection pool serves the process. A missing key is a 501
-    here, not a crash at startup.
-    """
-    return build_model_client(get_settings())
 
 
 @lru_cache
@@ -178,7 +170,6 @@ def reset_dependency_cache() -> None:
         get_registry,
         get_blob_store,
         get_chunk_store,
-        get_model_client,
         get_tool_provider,
         get_chat_service,
         get_document_service,

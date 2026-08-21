@@ -12,6 +12,7 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
+from chatbot_engine.errors import NotConfiguredError
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -88,6 +89,20 @@ class Settings(BaseSettings):
         request -- a confusing failure for anyone who copied .env.example.
         """
         return value or None
+
+    def require_openrouter_key(self) -> str:
+        """The provider credential, or a 501 naming the variable to set.
+
+        A method rather than a check at startup: an engine that only ingests
+        documents needs no model key, and must still start without one.
+        """
+        if self.openrouter_api_key is None:
+            raise NotConfiguredError(
+                "no ENGINE_OPENROUTER_API_KEY is set -- put your OpenRouter key "
+                "in .env, or set it in the engine's environment"
+            )
+
+        return self.openrouter_api_key
 
 
 @lru_cache

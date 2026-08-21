@@ -1,17 +1,29 @@
 """The chat contract: what the backend may send, and what it gets back.
 
-The turn itself is unimplemented, so these assert the boundary -- request
-validation, and a 501 that names what to write.
+Request validation, and the 501 an unregistered capability answers with. A real
+agent is registered now, so the 501 tests take it away first -- that path still
+matters, since it is what any unwired capability does.
 """
 
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from chatbot_engine.api import deps
+from chatbot_engine.services.chat import ChatService
+
+
+def _without_agent(client: TestClient) -> None:
+    # A lambda, not the class: FastAPI introspects an override's signature and
+    # would try to turn `ChatService.__init__`'s parameters into query fields.
+    client.app.dependency_overrides[deps.get_chat_service] = lambda: ChatService()
+
 
 def test_chat_reports_no_agent_is_registered(
     client: TestClient, project: dict[str, object]
 ) -> None:
+    _without_agent(client)
+
     response = client.post("/chat", json={"project": project, "message": "hi"})
 
     assert response.status_code == 501
@@ -24,6 +36,8 @@ def test_a_missing_implementation_is_501_not_an_empty_200(
     client: TestClient, project: dict[str, object]
 ) -> None:
     """The readiness check must happen before the streaming response starts."""
+    _without_agent(client)
+
     response = client.post("/chat", json={"project": project, "message": "hi"})
 
     assert response.status_code == 501

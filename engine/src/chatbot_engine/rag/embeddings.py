@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from chatbot_engine.llm.client import require_provider_key
 from chatbot_engine.settings import get_settings
 from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
@@ -21,7 +20,7 @@ def get_embeddings() -> OpenAIEmbeddings:
 
     return OpenAIEmbeddings(
         model=settings.embedding_model,
-        api_key=require_provider_key(settings),
+        api_key=settings.require_openrouter_key(),
         base_url=settings.openrouter_base_url,
     )
 

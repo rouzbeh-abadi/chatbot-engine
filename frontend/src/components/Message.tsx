@@ -1,6 +1,5 @@
 import type { SourceRef, ToolCall, UsageEvent } from "../api/types";
 import { Answer } from "./Answer";
-import { Sources } from "./Sources";
 import { ToolCalls } from "./ToolCalls";
 
 export interface ChatMessage {
@@ -35,7 +34,7 @@ export function Message({ message }: { message: ChatMessage }) {
           <p className="msg__text">{message.text}</p>
         ) : (
           <div className="msg__answer">
-            <Answer text={message.text} />
+            <Answer text={message.text} sources={message.sources} />
             {message.streaming && <span className="caret" aria-hidden="true" />}
           </div>
         )}
@@ -47,8 +46,6 @@ export function Message({ message }: { message: ChatMessage }) {
             Thinking<span className="thinking__dots" />
           </p>
         )}
-
-        {!isUser && <Sources sources={message.sources} />}
 
         {message.usage && (
           <div className="usage">

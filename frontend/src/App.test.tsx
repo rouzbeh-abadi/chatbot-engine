@@ -96,7 +96,7 @@ describe("a successful turn", () => {
       duration_ms: 142,
     },
     { type: "token", text: "Your flight " },
-    { type: "token", text: "is on time." },
+    { type: "token", text: "is on time. [1]" },
     {
       type: "usage",
       input_tokens: 1284,
@@ -135,21 +135,17 @@ describe("a successful turn", () => {
     expect(screen.getByText(/openai\/gpt-5-mini/)).toBeInTheDocument();
   });
 
-  it("keeps sources collapsed until asked, then shows the citation", async () => {
+  it("cites the document inline, where the claim is", async () => {
     routes(async () => sseResponse(events));
     await renderApp();
 
     await ask();
 
-    const toggle = await screen.findByRole("button", { name: /1 source/ });
-    expect(screen.queryByText("baggage.md")).not.toBeInTheDocument();
-
-    const { fireEvent } = await import("@testing-library/react");
-    fireEvent.click(toggle);
-
-    expect(screen.getByText("baggage.md")).toBeInTheDocument();
-    expect(screen.getByText("Baggage Policy > Cabin Baggage")).toBeInTheDocument();
-    expect(screen.getByText("One cabin bag up to 8 kg.")).toBeInTheDocument();
+    const chip = await screen.findByText("baggage.md");
+    expect(chip).toHaveClass("cite");
+    // The marker itself is consumed, not left in the prose.
+    expect(screen.getByText(/is on time\./)).not.toHaveTextContent("[1]");
+    expect(chip).toHaveAttribute("title", "One cabin bag up to 8 kg.");
   });
 
   it("marks a failed tool without losing the answer", async () => {

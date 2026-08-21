@@ -12,7 +12,7 @@ import json
 from fastapi.testclient import TestClient
 
 from chatbot_engine.api import deps
-from chatbot_engine.api.streaming import MEDIA_TYPE
+from chatbot_engine.api.streaming import MEDIA_TYPE, describe
 from chatbot_engine.models.events import (
     DoneEvent,
     RetrievalEvent,
@@ -119,3 +119,44 @@ def test_a_mid_stream_failure_ends_with_error_then_done(
     assert [e["type"] for e in events] == ["token", "error", "done"]
     assert "retriever died" in str(events[1]["message"])
     assert events[-1]["finish_reason"] == "error"
+
+
+class _TaskGroupAgent:
+    """Fails the way anything built on anyio task groups fails."""
+
+    async def run(self, request):  # noqa: ANN001, ANN202
+        yield TokenEvent(text="partial")
+        raise ExceptionGroup(
+            "unhandled errors in a TaskGroup",
+            [ConnectionError("All connection attempts failed")],
+        )
+
+
+def test_an_exception_group_reports_its_real_cause(
+    client: TestClient, project: dict[str, object]
+) -> None:
+    """`str(ExceptionGroup)` alone says only "unhandled errors in a TaskGroup"."""
+    _with_agent(client, _TaskGroupAgent())
+
+    response = client.post("/chat", json={"project": project, "message": "hi"})
+
+    error = next(e for e in _lines(response.text) if e["type"] == "error")
+    assert "All connection attempts failed" in error["message"]
+
+
+def test_a_cause_chain_is_included(
+    client: TestClient, project: dict[str, object]
+) -> None:
+    """`raise ... from exc` is how the engine adds context, so keep both parts."""
+    assert "outer" in describe(_chained())
+    assert "inner" in describe(_chained())
+
+
+def _chained() -> Exception:
+    try:
+        try:
+            raise ValueError("inner")
+        except ValueError as inner:
+            raise RuntimeError("outer") from inner
+    except RuntimeError as exc:
+        return exc
