@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import pytest
 
+from support_agent import assistant
 from support_agent.assistant import (
     ProjectNotFoundError,
     available_projects,
@@ -66,3 +67,62 @@ def test_the_tool_server_url_can_be_overridden_for_a_deployment(
     finally:
         settings.get_settings.cache_clear()
         assistant.load_project.cache_clear()
+
+
+# --- the prompt in its own file ----------------------------------------------
+
+
+def test_the_prompt_is_read_from_its_file() -> None:
+    """A long prompt with examples belongs in Markdown, not a YAML block."""
+    config = load_project("support")
+
+    assert "SkyDesk" in config.system_prompt
+    assert "## Examples" in config.system_prompt
+
+
+def test_an_inline_prompt_still_works(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "inline.yaml"
+    project.write_text(
+        "project_id: p\nname: N\nsystem_prompt: straight from the yaml\n"
+    )
+    monkeypatch.setattr(assistant, "PROJECTS_DIR", tmp_path)
+    load_project.cache_clear()
+
+    assert load_project("inline").system_prompt == "straight from the yaml"
+
+
+def test_setting_both_is_refused(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "both.yaml"
+    project.write_text(
+        "project_id: p\nname: N\nsystem_prompt: here\nsystem_prompt_file: support.md\n"
+    )
+    monkeypatch.setattr(assistant, "PROJECTS_DIR", tmp_path)
+    load_project.cache_clear()
+
+    with pytest.raises(ProjectNotFoundError, match="not both"):
+        load_project("both")
+
+
+def test_a_prompt_file_cannot_escape_the_prompts_directory(
+    tmp_path, monkeypatch
+) -> None:
+    """The filename is ours, but a traversal guard costs one line."""
+    project = tmp_path / "escape.yaml"
+    project.write_text(
+        "project_id: p\nname: N\nsystem_prompt_file: ../../../../etc/passwd\n"
+    )
+    monkeypatch.setattr(assistant, "PROJECTS_DIR", tmp_path)
+    load_project.cache_clear()
+
+    with pytest.raises(ProjectNotFoundError, match="outside"):
+        load_project("escape")
+
+
+def test_a_missing_prompt_file_says_so(tmp_path, monkeypatch) -> None:
+    project = tmp_path / "gone.yaml"
+    project.write_text("project_id: p\nname: N\nsystem_prompt_file: nope.md\n")
+    monkeypatch.setattr(assistant, "PROJECTS_DIR", tmp_path)
+    load_project.cache_clear()
+
+    with pytest.raises(ProjectNotFoundError, match="no prompt file"):
+        load_project("gone")

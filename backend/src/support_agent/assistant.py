@@ -15,6 +15,7 @@ from support_agent.engine_client.models import AssistantConfig
 from support_agent.settings import get_settings
 
 PROJECTS_DIR = Path(__file__).parent / "projects"
+PROMPTS_DIR = PROJECTS_DIR / "prompts"
 KNOWLEDGE_DIR = Path(__file__).parents[2] / "knowledge"
 DEFAULT_PROJECT = "support"
 
@@ -39,10 +40,36 @@ def load_project(name: str | None = None) -> AssistantConfig:
     if not candidate.is_file():
         raise ProjectNotFoundError(f"no project config at {candidate}")
 
-    config = AssistantConfig.model_validate(
-        yaml.safe_load(candidate.read_text()) or {}
-    )
+    raw = yaml.safe_load(candidate.read_text()) or {}
+    config = AssistantConfig.model_validate(_read_prompt_file(raw))
+
     return _apply_deployment_overrides(config)
+
+
+def _read_prompt_file(raw: dict[str, object]) -> dict[str, object]:
+    """Let a project keep its system prompt in its own file.
+
+    A long prompt with examples is easier to edit as Markdown than as a YAML
+    block, and diffs stay readable. `system_prompt` inline still works.
+    """
+    filename = raw.pop("system_prompt_file", None)
+    if filename is None:
+        return raw
+
+    if raw.get("system_prompt"):
+        raise ProjectNotFoundError(
+            "set system_prompt or system_prompt_file, not both"
+        )
+
+    path = (PROMPTS_DIR / str(filename)).resolve()
+    if not path.is_relative_to(PROMPTS_DIR.resolve()):
+        raise ProjectNotFoundError(f"prompt file outside {PROMPTS_DIR}: {filename!r}")
+    if not path.is_file():
+        raise ProjectNotFoundError(f"no prompt file at {path}")
+
+    raw["system_prompt"] = path.read_text().strip()
+
+    return raw
 
 
 def _apply_deployment_overrides(config: AssistantConfig) -> AssistantConfig:
