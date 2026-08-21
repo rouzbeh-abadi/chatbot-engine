@@ -4,8 +4,8 @@ This is the engine's single wiring point. A factory that returns `None` makes th
 service layer raise `NotConfiguredError` (a `NotImplementedError`) and the API
 answer 501 naming the function to fill in.
 
-Wired today: the document side in full, and `ChatAgent` for chat. Nothing here
-returns `None` any more.
+Wired today: the document side in full, `ChatAgent` for chat, and
+`evaluate_dataset` for `/judge`. Nothing here returns `None` any more.
 
 The chat model has no factory here: `model` and `temperature` arrive per request
 in `AssistantConfig`, so the agent builds one per turn with
@@ -23,11 +23,13 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
 
+from chatbot_engine.Eval.prompt_evaluation import evaluate_dataset
 from chatbot_engine.agent.chat_agent import ChatAgent
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
 from chatbot_engine.mcp.client import McpToolProvider
-from chatbot_engine.ports.agent import Agent, ToolProvider
+from chatbot_engine.models.evals import JudgeReport, JudgeRequest
+from chatbot_engine.ports.agent import Agent, Judge, ToolProvider
 from chatbot_engine.ports.documents import DocumentRegistry, IngestPipeline
 from chatbot_engine.rag.embeddings import get_embeddings
 from chatbot_engine.rag.pipeline import DocumentIngestPipeline
@@ -54,6 +56,23 @@ def get_agent() -> Agent | None:
     retrieval, and streaming a `TokenEvent` per chunk instead of one at the end.
     """
     return ChatAgent(tools=get_tool_provider())
+
+
+@lru_cache
+def get_judge() -> Judge | None:
+    """Scores an eval run against a rubric the caller supplies.
+
+    Needs the agent, since it answers every case before grading it. No agent
+    means nothing to evaluate, so this is `None` too.
+    """
+    agent = get_agent()
+    if agent is None:
+        return None
+
+    async def judge(request: JudgeRequest) -> JudgeReport:
+        return await evaluate_dataset(request, agent=agent)
+
+    return judge
 
 
 @lru_cache
@@ -128,6 +147,7 @@ def get_document_service() -> DocumentService:
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
+JudgeDep = Annotated[Judge | None, Depends(get_judge)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 
@@ -173,5 +193,6 @@ def reset_dependency_cache() -> None:
         get_tool_provider,
         get_chat_service,
         get_document_service,
+        get_judge,
     ):
         cached.cache_clear()

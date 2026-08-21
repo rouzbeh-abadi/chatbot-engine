@@ -5,6 +5,7 @@ implementation to a specific model provider, agent framework, or tool protocol.
 
 `Agent` handles one chat turn as a stream of events.
 `ToolProvider` exposes external tools to the agent and invokes them when needed.
+`Judge` scores a finished evaluation run.
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Protocol
 
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
+from chatbot_engine.models.evals import JudgeReport, JudgeRequest
 from chatbot_engine.models.events import Event
 
 
@@ -76,5 +78,20 @@ class ToolProvider(Protocol):
 
         Returns:
             Tool result serialized as text.
+        """
+        ...
+
+class Judge(Protocol):
+    """Answers a dataset and grades the answers.
+
+    A callable rather than a class: the implementation is a handful of plain
+    functions, and there is no state to hold between runs.
+    """
+
+    async def __call__(self, request: JudgeRequest) -> JudgeReport:
+        """Return one verdict per case.
+
+        Args:
+            request: The rubric, the cases, and the model configuration.
         """
         ...

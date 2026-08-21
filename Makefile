@@ -4,7 +4,7 @@
 # the engine over HTTP, so the engine has to be up first.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke smoke-docs search up down logs clean
+.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke smoke-docs search eval up down logs clean
 
 help:
 	@echo ""
@@ -29,7 +29,9 @@ help:
 	@echo "    make smoke     probe both services (needs them running)"
 	@echo "    make smoke-docs  exercise the whole document path for real"
 	@echo "    make seed      load backend/knowledge/ through the backend"
-	@echo '    make search Q="..."  what the vector store would retrieve' 
+	@echo '    make search Q="..."  what the vector store would retrieve'
+	@echo "    make eval      score the system prompt against backend/evals/"
+	@echo "    make eval ARGS=--show   re-read the last run, no model calls" 
 	@echo ""
 	@echo "  Docker (the whole stack -- for a demo, not for developing)"
 	@echo "    make up / make down / make logs"
@@ -107,6 +109,11 @@ smoke:
 # real vectors on disk. `make test` covers the same ground with a fake embedder.
 smoke-docs:
 	uv run python backend/scripts/smoke_documents.py
+
+# Ask every case in the dataset, then have the engine judge the answers.
+# ARGS passes flags through: make eval ARGS="--dry-run --only refuse_scope"
+eval:
+	uv run python backend/scripts/evaluate_prompt.py $(ARGS)
 
 # What retrieval would find, without an agent to use it yet.
 search:

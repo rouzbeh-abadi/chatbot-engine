@@ -19,11 +19,13 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 from support_agent.engine_client.models import (
+    AssistantConfig,
     ChatEvent,
     DeleteResult,
     DocumentRecord,
     EngineChatRequest,
 )
+from support_agent.evals.models import EvalCase, JudgeReport
 
 _EVENT = TypeAdapter(ChatEvent)
 _RECORDS = TypeAdapter(list[DocumentRecord])
@@ -85,11 +87,13 @@ class EngineClient:
         #: socket. Cheaper than patching a private method from outside.
         self._transport = transport
 
-    def _client(self) -> httpx.AsyncClient:
+    def _client(self, timeout_s: float | None = None) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             base_url=self._base_url,
             headers=self._headers,
-            timeout=self._timeout,
+            timeout=self._timeout if timeout_s is None else httpx.Timeout(
+                timeout_s, connect=10.0
+            ),
             transport=self._transport,
         )
 
@@ -165,6 +169,39 @@ class EngineClient:
             )
             return DeleteResult.model_validate(response.json())
 
+    # --- evaluation ---------------------------------------------------------
+
+    async def judge(
+        self,
+        *,
+        project: AssistantConfig,
+        judge_prompt: str,
+        cases: list[EvalCase],
+        timeout_s: float = 1800.0,
+    ) -> JudgeReport:
+        """Answer and grade a dataset.
+
+        Both halves run in the engine because only the engine holds model
+        credentials -- `test_boundaries.py` keeps every model library out of this
+        service. We send the questions and the rubric, and get scores back.
+
+        Its own timeout, far longer than a chat turn's: the engine answers every
+        case before it grades any of them, so one request covers dozens of model
+        calls.
+        """
+        async with self._client(timeout_s) as client:
+            response = await self._request(
+                client,
+                "POST",
+                "/judge",
+                json={
+                    "project": project.model_dump(mode="json", exclude_none=True),
+                    "judge_prompt": judge_prompt,
+                    "cases": [case.model_dump(mode="json") for case in cases],
+                },
+            )
+            return JudgeReport.model_validate(response.json())
+
     # --- plumbing -----------------------------------------------------------
 
     async def _request(
@@ -172,6 +209,12 @@ class EngineClient:
     ) -> httpx.Response:
         try:
             response = await client.request(method, url, **kwargs)  # type: ignore[arg-type]
+        except httpx.TimeoutException as exc:
+            # `str()` on an httpx timeout is empty, so say what happened.
+            raise EngineUnavailable(
+                f"engine did not answer within {client.timeout.read:.0f}s "
+                f"at {self._base_url}"
+            ) from exc
         except httpx.HTTPError as exc:
             raise EngineUnavailable(
                 f"engine unreachable at {self._base_url}: {exc}"

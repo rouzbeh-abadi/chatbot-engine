@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import SystemMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import Runnable
 
@@ -12,7 +13,7 @@ def build_prompt(system_prompt: str) -> ChatPromptTemplate:
     """Build the prompt template: the system prompt"""
     return ChatPromptTemplate.from_messages(
         [
-            ("system", system_prompt),
+            SystemMessage(content=system_prompt),
             MessagesPlaceholder("messages"),
         ]
     )

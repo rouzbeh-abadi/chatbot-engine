@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from langchain_core.documents import Document
-
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import SourceRef
 from chatbot_engine.rag.vector_store import open_vector_store
+from langchain_core.documents import Document
 
 Hit = tuple[Document, float]
 

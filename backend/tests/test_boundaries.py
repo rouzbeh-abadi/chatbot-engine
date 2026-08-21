@@ -34,7 +34,12 @@ HTTP_CLIENT = "httpx"
 #: `client.py` is the one route to the engine from the app itself. The two
 #: scripts are operator tools that drive the running API from outside, which
 #: is the whole point of them.
-ALLOWED_HTTP_FILES = {"client.py", "seed_knowledge.py", "smoke_documents.py"}
+ALLOWED_HTTP_FILES = {
+    "client.py",
+    "seed_knowledge.py",
+    "smoke_documents.py",
+    "evaluate_prompt.py",
+}
 
 
 def _modules(path: Path) -> set[str]:
