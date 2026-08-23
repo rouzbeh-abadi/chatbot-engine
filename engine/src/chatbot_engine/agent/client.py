@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 
 from chatbot_engine.agent.Chains.chat_chain import create_chain
 from chatbot_engine.errors import EngineError
@@ -9,6 +9,7 @@ from chatbot_engine.ports.agent import ToolProvider
 from chatbot_engine.settings import Settings, get_settings
 from langchain_core.messages import (
     AIMessage,
+    AIMessageChunk,
     BaseMessage,
     HumanMessage,
     SystemMessage,
@@ -87,15 +88,19 @@ async def run_tool_calls(
     return results
 
 
-async def get_completion(
+async def stream_completion(
     request: ChatRequest,
     tools_provider: ToolProvider,
     context: str = "",
-) -> str:
-    """Run the chain, executing any tools the model asks for along the way.
+) -> AsyncIterator[str]:
+    """Stream the answer, executing any tools the model asks for along the way.
 
     A chain runs once, so the loop lives here: call the model, run the tools it
     requested, hand the results back, ask again.
+
+    Yields text as the model writes it. A round that decides to call a tool
+    yields nothing -- the model is emitting tool arguments, not prose -- so the
+    text a caller sees is the final round's answer, in pieces.
     """
     try:
         tools = await tools_provider.list_tools(request.project)
@@ -115,11 +120,26 @@ async def get_completion(
     messages = to_messages(request, context)
 
     for _ in range(request.project.max_tool_iterations):
-        reply: AIMessage = await chain.ainvoke({"messages": messages})
+        reply: AIMessageChunk | None = None
+
+        async for chunk in chain.astream({"messages": messages}):
+            if chunk.text:
+                yield chunk.text
+
+            # Chunks add up into the whole message, and only the whole message
+            # has usable `tool_calls`: a fragment cannot know whether the model
+            # was part-way through asking for a tool.
+            reply = chunk if reply is None else reply + chunk
+
+        if reply is None:
+            # The model produced nothing at all. An empty answer, which is what
+            # a single non-streaming call would have returned too.
+            return
+
         messages.append(reply)
 
         if not reply.tool_calls:
-            return reply.text
+            return
 
         messages.extend(
             await run_tool_calls(reply.tool_calls, request, tools_provider, server_for)

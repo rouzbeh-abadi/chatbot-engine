@@ -52,8 +52,8 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 def get_agent() -> Agent | None:
     """The chat run loop: retrieval, prompt, model call, tool loop, events.
 
-    `ChatAgent` runs the prompt, the model and the tool loop. Still to add:
-    retrieval, and streaming a `TokenEvent` per chunk instead of one at the end.
+    `ChatAgent` runs retrieval, the prompt, the model and the tool loop, and
+    streams the answer. Still to add: tool progress and token cost events.
     """
     return ChatAgent(tools=get_tool_provider())
 

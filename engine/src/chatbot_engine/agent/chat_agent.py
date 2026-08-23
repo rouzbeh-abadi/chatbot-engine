@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from chatbot_engine.agent.client import get_completion
+from chatbot_engine.agent.client import stream_completion
 from chatbot_engine.agent.retriever import retrieve, to_context, to_source_refs
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import (
@@ -17,11 +17,11 @@ from chatbot_engine.ports.agent import ToolProvider
 
 
 class ChatAgent:
-    """Answers a turn in one piece.
+    """Answers a turn as the model writes it.
 
-    Every event the contract allows is legal but optional, so this emits the two
-    that matter: the answer, then `done`. Streaming means yielding a `TokenEvent`
-    per chunk instead of one at the end -- the shape here does not change.
+    Every event the contract allows is legal but optional. This emits what was
+    retrieved, the answer in pieces, and `done`. Tool progress and token cost are
+    still to come.
     """
 
     def __init__(self, tools: ToolProvider) -> None:
@@ -37,7 +37,7 @@ class ChatAgent:
             query=request.message, sources=to_source_refs(hits)
         )
 
-        answer = await get_completion(request, self._tools, to_context(hits))
+        async for text in stream_completion(request, self._tools, to_context(hits)):
+            yield TokenEvent(text=text)
 
-        yield TokenEvent(text=answer)
         yield DoneEvent(finish_reason="stop")
