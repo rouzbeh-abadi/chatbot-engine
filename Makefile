@@ -34,7 +34,9 @@ help:
 	@echo "    make eval ARGS=--show   re-read the last run, no model calls" 
 	@echo ""
 	@echo "  Docker (the whole stack -- for a demo, not for developing)"
-	@echo "    make up / make down / make logs"
+	@echo "    make up        everything, in the foreground -- Ctrl-C stops it"
+	@echo "    make down      remove the stopped containers (volumes survive)"
+	@echo "    make logs      follow a stack someone started detached"
 	@echo ""
 
 setup:
@@ -119,9 +121,22 @@ eval:
 search:
 	@uv run python engine/scripts/search.py $(Q)
 
+# Foreground, so Ctrl-C stops the stack the way it stops every other target
+# here. The URLs are printed before the build, because once compose has the
+# terminal nothing else gets to write to it until you stop it.
+#
+# Ctrl-C leaves the containers stopped, not removed, so the next `make up` is
+# quick. `make down` removes them; either way the volumes survive, which is what
+# keeps the vectors and the database between runs.
 up:
-	docker compose up --build -d
-	@echo "backend -> http://localhost:8000/docs   engine -> http://localhost:8100/docs"
+	@echo ""
+	@echo "  frontend -> http://localhost:5173"
+	@echo "  backend  -> http://localhost:8000/docs"
+	@echo "  engine   -> http://localhost:8100/docs"
+	@echo ""
+	@echo "  Ctrl-C stops the stack."
+	@echo ""
+	docker compose up --build
 
 down:
 	docker compose down

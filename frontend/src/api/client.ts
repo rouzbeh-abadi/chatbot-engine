@@ -126,3 +126,12 @@ export async function listDocuments(): Promise<DocumentRecord[]> {
   }
   return (await response.json()) as DocumentRecord[];
 }
+
+/** The models the backend allows the UI to pick, the default first. */
+export async function listModels(): Promise<string[]> {
+  const response = await fetch(`${BASE}/models`);
+  if (!response.ok) {
+    throw new ApiError(response.status, await detailOf(response));
+  }
+  return (await response.json()) as string[];
+}

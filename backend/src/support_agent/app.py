@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from support_agent.api.chat import router as chat_router
 from support_agent.api.documents import router as documents_router
+from support_agent.api.options import router as options_router
 from support_agent.engine_client import (
     EngineError,
     EngineNotImplemented,
@@ -71,3 +72,4 @@ async def health() -> dict[str, str]:
 
 app.include_router(chat_router)
 app.include_router(documents_router)
+app.include_router(options_router)

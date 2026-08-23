@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ModelPicker } from "./components/ModelPicker";
 import { ApiError, streamChat } from "./api/client";
 import { Composer } from "./components/Composer";
 import { Knowledge } from "./components/Knowledge";
@@ -39,6 +40,9 @@ function describe(error: unknown): { title: string; detail: string } {
 export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [busy, setBusy] = useState(false);
+  /** Null until someone picks -- the YAML's own model applies until then, and
+      whatever is chosen applies to every following turn. */
+  const [model, setModel] = useState<string | null>(null);
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -86,7 +90,10 @@ export default function App() {
       abort.current = controller;
 
       try {
-        const stream = streamChat({ message: text, history }, controller.signal);
+        const stream = streamChat(
+          { message: text, history, model: model ?? undefined },
+          controller.signal,
+        );
 
         for await (const event of stream) {
           switch (event.type) {
@@ -156,7 +163,7 @@ export default function App() {
         abort.current = null;
       }
     },
-    [messages, patch],
+    [messages, patch, model],
   );
 
   return (
@@ -192,6 +199,7 @@ export default function App() {
       </main>
 
       <footer className="footer">
+        <ModelPicker value={model} onChange={setModel} disabled={busy} />
         <Composer
           onSend={send}
           onStop={() => abort.current?.abort()}

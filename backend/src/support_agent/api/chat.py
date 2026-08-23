@@ -13,6 +13,7 @@ from fastapi import APIRouter, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from support_agent.api.options import CHAT_MODELS
 from support_agent.api.streaming import ChatResult, collect, to_sse
 from support_agent.assistant import ProjectNotFoundError, load_project
 from support_agent.engine import EngineDep
@@ -25,8 +26,12 @@ class ChatRequest(BaseModel):
     """What our own frontend sends.
 
     Deliberately smaller than the engine's request: the browser has no business
-    supplying a system prompt, a model name, or an MCP server list. Those come
-    from `projects/*.yaml`, server-side.
+    supplying a system prompt or an MCP server list. Those come from
+    `projects/*.yaml`, server-side.
+
+    The two things it may choose, it chooses *by name* from a list this backend
+    published — a project id, and a model id checked against `CHAT_MODELS`.
+    Neither is free text that reaches the engine unexamined.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -34,6 +39,9 @@ class ChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=8_000)
     session_id: str | None = None
     project: str | None = None
+    #: Overrides the assistant's configured model. Checked against an allowlist:
+    #: an unchecked model name from a browser is someone else's bill.
+    model: str | None = None
     history: list[Message] = Field(default_factory=list)
 
 
@@ -42,6 +50,12 @@ def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:
         project = load_project(body.project)
     except ProjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    if body.model is not None:
+        if body.model not in CHAT_MODELS:
+            raise HTTPException(status_code=422, detail=f"unknown model: {body.model!r}")
+        # A copy, not a mutation: `load_project` is cached and its result shared.
+        project = project.model_copy(update={"model": body.model})
 
     # TODO: replace the header with real authentication, and check that this user
     # is allowed to use this project. The engine only ever sees an opaque id.

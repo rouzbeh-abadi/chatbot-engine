@@ -79,6 +79,8 @@ export interface ChatRequest {
   message: string;
   session_id?: string;
   project?: string;
+  /** Overrides the assistant's configured model. The backend allowlists it. */
+  model?: string;
   history?: { role: "user" | "assistant" | "system"; content: string }[];
 }
 

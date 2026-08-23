@@ -525,3 +525,32 @@ code {
 .msg__answer > .caret {
   margin-top: 2px;
 }
+
+/* The model picker, above the composer. */
+.model {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-3);
+  margin-bottom: 10px;
+}
+.model__select {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.model__select:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.model__select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
