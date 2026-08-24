@@ -39,6 +39,21 @@ chroma_db/
 data/raw/
 data/processed/
 
+# Eval output
+backend/evals/last_run.json
+
+# Engine local storage (original uploads, local indexes)
+var/
+engine/var/
+
+# Note: backend/knowledge/ is intentionally NOT ignored -- the reviewer needs
+# the demo knowledge base to run the project.
+
+# Node / frontend
+node_modules/
+.next/
+out/
+
 # Streamlit
 .streamlit/secrets.toml
 
