@@ -1,12 +1,11 @@
-"""Which MCP servers to talk to, and which of their tools are permitted.
+"""Resolve which MCP servers to call and which of their tools are allowed.
 
-Configuration only -- no protocol, no orchestration. The rules here are the ones
-worth settling before any code calls a tool:
+Configuration only -- no network calls, no tool execution. Two rules matter here:
 
-* servers arrive per request, inside `AssistantConfig`, so the engine holds no
-  tool configuration of its own;
-* a server's tool *descriptions* end up inside the prompt, so only names the
-  caller explicitly allowlisted may ever be exposed to a model.
+* MCP servers arrive with each request (in `AssistantConfig`), so the engine
+  stores no tool configuration of its own;
+* a tool's description is placed into the model's prompt, so only tools the
+  caller explicitly allowlisted are ever exposed to the model.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from chatbot_engine.models.chat import AssistantConfig, McpServerConfig
 
 @dataclass(frozen=True, slots=True)
 class McpTarget:
-    """One resolved connection: where to reach a server and what it may offer."""
+    """One resolved server connection: where to reach it and which tools it allows."""
 
     name: str
     url: str
@@ -26,20 +25,21 @@ class McpTarget:
     timeout_s: float
 
     def allows(self, tool_name: str) -> bool:
-        """Whether this tool may be shown to a model.
+        """Whether this tool is allowlisted, so it may be shown to the model.
 
-        Called after discovery, before tool schemas reach the prompt. A server
-        that starts advertising a new tool does not silently gain access.
+        Checked after discovery, before a tool's schema reaches the prompt. So a
+        server that starts advertising a new tool does not gain access to it.
         """
         return tool_name in self.allowed_tools
 
 
 def resolve_targets(config: AssistantConfig, *, timeout_s: float) -> list[McpTarget]:
-    """Turn the request's server declarations into connection targets."""
+    """Turn the request's MCP server declarations into connection targets."""
     return [_target(server, timeout_s=timeout_s) for server in config.mcp_servers]
 
 
 def _target(server: McpServerConfig, *, timeout_s: float) -> McpTarget:
+    """Build one target from a server config, applying the shared timeout."""
     return McpTarget(
         name=server.name,
         url=server.url,

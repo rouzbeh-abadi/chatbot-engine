@@ -1,7 +1,7 @@
-"""The assistant: its configuration, loaded from YAML.
+"""Load and validate assistant configuration from `projects/*.yaml`.
 
-The backend owns this configuration; the engine stores none of it. Swapping YAML
-for a database table changes only this module.
+The backend owns this config; the engine stores none of it. Loading it is
+isolated here, so moving it from YAML to a database would change only this file.
 """
 
 from __future__ import annotations
@@ -21,19 +21,18 @@ DEFAULT_PROJECT = "support"
 
 
 class ProjectNotFoundError(LookupError):
-    pass
+    """Raised when a project name does not resolve to a valid config file."""
 
 
 @lru_cache
 def load_project(name: str | None = None) -> AssistantConfig:
-    """Read and validate one project's config.
+    """Load and validate one project's config; defaults to the `support` project.
 
-    Validating here means a malformed prompt or MCP declaration fails with our
-    error message, not somewhere deep in the engine.
-
-    Cached, so restart the app after editing the YAML.
+    Validating here means a bad config fails with our own error, not a 422 from
+    the engine. Cached, so restart the app after editing a YAML file.
     """
-    # Names arrive from HTTP, so keep them inside the config directory.
+    # `name` may come from an HTTP request, so confine the path to PROJECTS_DIR
+    # to prevent traversal (e.g. name="../../etc/passwd").
     candidate = (PROJECTS_DIR / f"{name or DEFAULT_PROJECT}.yaml").resolve()
     if not candidate.is_relative_to(PROJECTS_DIR.resolve()):
         raise ProjectNotFoundError(f"invalid project name: {name!r}")
@@ -47,10 +46,10 @@ def load_project(name: str | None = None) -> AssistantConfig:
 
 
 def _read_prompt_file(raw: dict[str, object]) -> dict[str, object]:
-    """Let a project keep its system prompt in its own file.
+    """Resolve `system_prompt_file` into an inline `system_prompt`.
 
-    A long prompt with examples is easier to edit as Markdown than as a YAML
-    block, and diffs stay readable. `system_prompt` inline still works.
+    Lets a project keep its (often long) prompt in a separate Markdown file.
+    Inline `system_prompt` still works; setting both is an error.
     """
     filename = raw.pop("system_prompt_file", None)
     if filename is None:
@@ -73,11 +72,11 @@ def _read_prompt_file(raw: dict[str, object]) -> dict[str, object]:
 
 
 def _apply_deployment_overrides(config: AssistantConfig) -> AssistantConfig:
-    """Re-point the tool server for the environment we are actually running in.
+    """Override the MCP server URL for the current deployment, if configured.
 
-    Only the address is environment-specific: under Docker Compose the engine
-    dials `mcp-tools`, not localhost. Which tools are allowed is a security
-    decision and stays in the YAML, where it is reviewable.
+    Only the address changes per environment (e.g. `mcp-tools` under Docker
+    Compose instead of localhost). The tool allowlist stays in the YAML, where
+    it is reviewable.
     """
     override = get_settings().mcp_tools_url
     if override is None or not config.mcp_servers:
@@ -94,4 +93,5 @@ def _apply_deployment_overrides(config: AssistantConfig) -> AssistantConfig:
 
 
 def available_projects() -> list[str]:
+    """List the names of all configured projects."""
     return sorted(path.stem for path in PROJECTS_DIR.glob("*.yaml"))

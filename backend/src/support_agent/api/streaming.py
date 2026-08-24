@@ -1,23 +1,20 @@
-"""Server-sent events, for the frontend.
+"""Adapt the engine's event stream for the browser.
 
-This is where the browser-facing transport is decided. The engine streams NDJSON
-because its client is a service; the frontend wants SSE, so the translation
-happens here — one hop from the browser, in the service that actually knows it is
-talking to one.
+The engine streams NDJSON (one JSON object per line); browsers consume SSE. This
+module translates one to the other for the streaming endpoint, and folds the
+whole stream into a single result for the non-streaming one.
 """
 
 from __future__ import annotations
 
 from collections.abc import AsyncIterable, AsyncIterator
 
-from pydantic import BaseModel, ConfigDict, Field
-
+from support_agent.api.schemas import ChatResult
 from support_agent.engine_client.models import (
     ChatEvent,
     DoneEvent,
     ErrorEvent,
     RetrievalEvent,
-    SourceRef,
     TokenEvent,
     ToolCallFinishedEvent,
     UsageEvent,
@@ -25,19 +22,19 @@ from support_agent.engine_client.models import (
 
 
 def sse_frame(event: ChatEvent) -> str:
-    """Render one event as an SSE frame.
+    """Format one event as an SSE frame.
 
-    The trailing blank line matters -- without it a browser buffers forever.
+    The trailing blank line terminates the frame; without it the browser buffers
+    the event instead of dispatching it.
     """
     return f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
 
 
 async def to_sse(events: AsyncIterable[ChatEvent]) -> AsyncIterator[str]:
-    """Frame a turn for the browser.
+    """Convert engine events into SSE messages for the browser.
+    If streaming fails after the response has started, send `error` and `done`
+    events so the browser knows the stream ended because of a failure.
 
-    A failure part-way through becomes a terminal `error` + `done` pair rather
-    than an exception: the 200 status has already gone out, so raising here would
-    reach the browser as a truncated response with no explanation.
     """
     try:
         async for event in events:
@@ -47,23 +44,8 @@ async def to_sse(events: AsyncIterable[ChatEvent]) -> AsyncIterator[str]:
         yield sse_frame(DoneEvent(finish_reason="error"))
 
 
-class ChatResult(BaseModel):
-    """A whole turn, collected -- what the non-streaming endpoint returns."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    answer: str = ""
-    sources: list[SourceRef] = Field(default_factory=list)
-    #: Which tools ran, so a non-streaming client can show them too. The
-    #: finished events carry everything worth reporting.
-    tool_calls: list[ToolCallFinishedEvent] = Field(default_factory=list)
-    usage: UsageEvent | None = None
-    finish_reason: str = "stop"
-    error: ErrorEvent | None = None
-
-
 async def collect(events: AsyncIterable[ChatEvent]) -> ChatResult:
-    """Fold a turn into one result, for clients that do not stream."""
+    """Consume the full event stream and fold it into one `ChatResult`."""
     result = ChatResult()
     parts: list[str] = []
 

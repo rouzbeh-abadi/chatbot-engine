@@ -1,11 +1,4 @@
-"""The application backend.
-
-Owns the user-facing API: authentication, assistant configuration, document
-endpoints, the domain tools, and SSE formatting for the frontend. The AI itself
-lives in a separate service, reached over HTTP through `engine_client`.
-
-    make backend
-"""
+"""FastAPI application: routes, and engine-error to HTTP-status mapping."""
 
 from __future__ import annotations
 
@@ -45,7 +38,7 @@ async def engine_unavailable(_: Request, exc: EngineUnavailable) -> JSONResponse
 
 
 #: Engine 4xx codes about the caller's own payload, handed back unchanged. Any
-#: other 4xx -- a bad shared secret, a route we called wrongly -- is our fault,
+#: other 4xx - a bad shared secret, a route we called wrongly - is our fault,
 #: and must not look like a problem with their request.
 PASS_THROUGH = frozenset({400, 413, 415, 422, 429})
 

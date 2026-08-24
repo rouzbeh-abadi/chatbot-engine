@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api.deps import get_ingest_pipeline, get_settings
+from chatbot_engine.api.dependencies import get_ingest_pipeline, get_settings
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.storage import LocalBlobStore
 from chatbot_engine.errors import NotConfiguredError

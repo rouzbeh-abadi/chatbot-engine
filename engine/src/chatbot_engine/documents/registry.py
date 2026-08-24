@@ -1,3 +1,10 @@
+"""In-memory document registry implementation.
+
+This registry tracks document metadata and ingest status for the lifetime of the
+engine process. It is useful for tests and deployments that do not need durable
+document state.
+"""
+
 from collections.abc import Sequence
 
 from chatbot_engine.models.documents import DocumentRecord, IngestStatus

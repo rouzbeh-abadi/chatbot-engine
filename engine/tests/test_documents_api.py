@@ -12,7 +12,7 @@ from collections.abc import Iterator
 import pytest
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api.deps import get_document_service
+from chatbot_engine.api.dependencies import get_document_service
 from chatbot_engine.services.documents import DocumentService
 
 MARKDOWN = b"# Baggage\n\nOne cabin bag up to 8 kg, plus one personal item.\n"

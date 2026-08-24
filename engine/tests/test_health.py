@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api.deps import reset_dependency_cache
+from chatbot_engine.api.dependencies import reset_dependency_cache
 
 
 def test_health_needs_no_api_key(client: TestClient) -> None:

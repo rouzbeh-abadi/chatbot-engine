@@ -1,19 +1,10 @@
-"""Where implementations get plugged in.
+"""Create and connect the dependencies used by the chatbot engine.
 
-This is the engine's single wiring point. A factory that returns `None` makes the
-service layer raise `NotConfiguredError` (a `NotImplementedError`) and the API
-answer 501 naming the function to fill in.
+This module builds the engine's main components, such as the chat agent,
+document pipeline, vector store, registry, and MCP tool provider. FastAPI uses
+these dependencies when handling API requests.
 
-Wired today: the document side in full, `ChatAgent` for chat, and
-`evaluate_dataset` for `/judge`. Nothing here returns `None` any more.
-
-The chat model has no factory here: `model` and `temperature` arrive per request
-in `AssistantConfig`, so the agent builds one per turn with
-`agent.client.build_chat_model()`.
-
-To bring a capability online, write it under `chatbot_engine/agent/` or
-`chatbot_engine/rag/` and return an instance from the matching factory. Nothing
-in `api/` or `services/` changes.
+Dependencies are cached and reused instead of being created for every request.
 """
 
 from __future__ import annotations
@@ -23,10 +14,10 @@ from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, status
 
-from chatbot_engine.Eval.prompt_evaluation import evaluate_dataset
 from chatbot_engine.agent.chat_agent import ChatAgent
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
+from chatbot_engine.Eval.prompt_evaluation import evaluate_dataset
 from chatbot_engine.mcp.client import McpToolProvider
 from chatbot_engine.models.evals import JudgeReport, JudgeRequest
 from chatbot_engine.ports.agent import Agent, Judge, ToolProvider
@@ -45,15 +36,13 @@ from chatbot_engine.settings import Settings, get_settings
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-# --- your implementations go here -------------------------------------------
-
-
 @lru_cache
 def get_agent() -> Agent | None:
-    """The chat run loop: retrieval, prompt, model call, tool loop, events.
+    """Create the agent responsible for processing chat turns.
 
-    `ChatAgent` runs retrieval, the prompt, the model and the tool loop, and
-    streams the answer. Still to add: tool progress and token cost events.
+    The agent retrieves relevant context, calls the model with access to MCP tools,
+
+    and streams the resulting chat events.
     """
     return ChatAgent(tools=get_tool_provider())
 
@@ -62,8 +51,7 @@ def get_agent() -> Agent | None:
 def get_judge() -> Judge | None:
     """Scores an eval run against a rubric the caller supplies.
 
-    Needs the agent, since it answers every case before grading it. No agent
-    means nothing to evaluate, so this is `None` too.
+    Needs the agent, since it answers every case before grading it.
     """
     agent = get_agent()
     if agent is None:
@@ -128,7 +116,7 @@ def get_tool_provider() -> ToolProvider:
     return McpToolProvider(timeout_s=get_settings().mcp_timeout_s)
 
 
-# --- services ---------------------------------------------------------------
+# services
 
 
 @lru_cache
@@ -151,7 +139,7 @@ JudgeDep = Annotated[Judge | None, Depends(get_judge)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 
-# --- caller authentication --------------------------------------------------
+# caller authentication
 
 
 async def require_api_key(
@@ -161,9 +149,7 @@ async def require_api_key(
     """Optional shared secret between the backend and the engine.
 
     Unset `ENGINE_API_KEY` leaves the engine open, which is fine on localhost.
-    Set it in any deployment: the engine holds provider credentials and has no
-    notion of end-user permissions, so it must not be reachable by anyone but
-    the application backend.
+    Set it in any deployment: the engine holds provider credentials and has no notion of end-user permissions, so it must not be reachable by anyone but the application backend.
     """
     if settings.api_key is None:
         return

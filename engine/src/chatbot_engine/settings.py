@@ -1,7 +1,7 @@
 """Every engine setting, read from `ENGINE_*` environment variables.
 
 One place. Anything an operator might want to change lives here, with its default
-written inline -- no separate constants module to keep in step.
+written inline - no separate constants module to keep in step.
 
 Never raises at import time: a missing credential is checked where the client is
 built, so an engine that was never asked to call a model still starts.
@@ -12,9 +12,10 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 
-from chatbot_engine.errors import NotConfiguredError
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from chatbot_engine.errors import NotConfiguredError
 
 
 class Settings(BaseSettings):

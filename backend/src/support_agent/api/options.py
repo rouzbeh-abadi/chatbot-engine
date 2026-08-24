@@ -1,13 +1,14 @@
+"""Options endpoint: the model choices the frontend may offer the user."""
+
 from __future__ import annotations
 
 from fastapi import APIRouter
 
 router = APIRouter(tags=["options"])
 
-#: Models the UI may pick, verified against OpenRouter's catalogue. The first is
-#: the default the picker shows before anyone chooses, so keep it in step with
-#: the `model:` in `projects/support.yaml`. Add or remove freely -- ids come from
-#: https://openrouter.ai/models.
+# Allowed model ids, from https://openrouter.ai/models. The first is the default
+# the picker selects before the user chooses, so keep it in sync with the
+# `model:` in projects/support.yaml.
 CHAT_MODELS = [
     "openai/gpt-5-mini",
     "openai/gpt-5",
@@ -20,5 +21,5 @@ CHAT_MODELS = [
 
 @router.get("/models")
 async def list_models() -> list[str]:
-    """Every model the UI may pick, the default first."""
+    """Return the allowed model ids, the default first."""
     return CHAT_MODELS

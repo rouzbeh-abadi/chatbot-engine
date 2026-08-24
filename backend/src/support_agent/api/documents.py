@@ -1,8 +1,7 @@
-"""The knowledge base.
+"""Knowledge base endpoints: upload, list, and delete documents.
 
-Validation and project resolution happen here; indexing happens in the engine.
-Files are forwarded as raw bytes -- parsing a PDF in this backend would take over
-a responsibility that belongs to the engine.
+This backend validates the request and resolves the project; the engine handles
+extraction, chunking, and indexing. Uploads are forwarded as raw bytes.
 """
 
 from __future__ import annotations
@@ -15,13 +14,11 @@ from support_agent.engine_client.models import DeleteResult, DocumentRecord
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-# TODO: these routes carry no identity yet. Uploading and deleting from a
-# knowledge base are privileged actions, so real authentication belongs here as
-# well as on /chat -- see api/chat.py for the placeholder header.
+# TODO: add authentication. Uploading and deleting documents are privileged
+# actions, but these routes currently carry no identity (see api/chat.py).
 
-#: Matches the engine's own limit. Checked here so an oversized file never
-#: crosses the network, and there too because the engine cannot assume its caller
-#: validated anything.
+# Matches the engine's own limit. Enforced here too, so an oversized file is
+# rejected before it crosses the network.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 
 
@@ -39,10 +36,10 @@ async def upsert_document(
     file: UploadFile = File(...),
     project: str | None = Form(default=None),
 ) -> DocumentRecord:
-    """Upsert one document by `external_id`.
+    """Create or replace one document, keyed by `external_id`.
 
-    Idempotent: the same `external_id` replaces the previous version, and the
-    engine skips the work when the content hash is unchanged.
+    Idempotent: re-uploading the same `external_id` replaces the previous
+    version, and the engine skips re-indexing when the file content is unchanged.
     """
     data = await file.read()
     if not data:
@@ -52,7 +49,8 @@ async def upsert_document(
             status_code=413, detail=f"file exceeds {MAX_UPLOAD_BYTES} bytes"
         )
 
-    # Resolve the project before calling out, so a bad name is our 404.
+    # Resolve the project first, so an unknown name is a 404 from us rather than
+    # an error from the engine.
     project_id = _project_id(project)
 
     return await engine.ingest_document(
@@ -68,7 +66,7 @@ async def upsert_document(
 async def list_documents(
     engine: EngineDep, project: str | None = None
 ) -> list[DocumentRecord]:
-    """What the assistant currently knows, so the UI can show its sources."""
+    """List the documents indexed for a project."""
     return await engine.list_documents(project_id=_project_id(project))
 
 

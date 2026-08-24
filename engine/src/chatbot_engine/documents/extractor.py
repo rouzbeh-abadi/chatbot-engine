@@ -1,3 +1,9 @@
+"""Extract searchable text from uploaded documents.
+
+The ingestion pipeline uses these extractors to normalize supported document
+types into plain text and reject MIME types that cannot be indexed.
+"""
+
 from io import BytesIO
 from typing import Protocol
 

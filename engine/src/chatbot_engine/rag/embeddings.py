@@ -1,7 +1,7 @@
 """Turn chunks into vectors.
 
-Async because embedding is a network call, and a slow batch would otherwise hold
-the event loop for every other request in the process.
+Embedding calls are asynchronous to keep network-bound batches from blocking the
+event loop and delaying unrelated requests in the same process.
 """
 
 from __future__ import annotations

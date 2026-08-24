@@ -1,11 +1,15 @@
-"""Interfaces for the chat side of the AI engine.
+"""Interfaces (ports) for the chat side of the engine.
 
-These protocols define the capabilities required by the engine without tying the
-implementation to a specific model provider, agent framework, or tool protocol.
+A `Protocol` is a structural interface: any class with matching methods satisfies
+it, without subclassing. These describe *what* the engine needs, so the rest of
+the code depends on the interface, not on a concrete class. The implementations
+live in `agent/` and `mcp/` and are wired in at `api/dependencies.py`, so a model
+provider, agent framework, or tool protocol can be swapped without touching the
+callers.
 
-`Agent` handles one chat turn as a stream of events.
-`ToolProvider` exposes external tools to the agent and invokes them when needed.
-`Judge` scores a finished evaluation run.
+- `Agent` runs one chat turn and streams back events.
+- `ToolProvider` discovers and invokes the application's external tools.
+- `Judge` scores a finished evaluation run.
 """
 
 from __future__ import annotations
@@ -19,21 +23,26 @@ from chatbot_engine.models.events import Event
 
 
 class Agent(Protocol):
-    """Define the contract for processing one chat turn.
+    """Processes one chat turn end to end.
 
-    Implementations are responsible for retrieval, prompt construction, model
-    execution, optional tool calls, and streaming response events.
+    An implementation does retrieval, builds the prompt, calls the model, runs
+    any tools the model requests, and streams the result back as events.
+    `ChatAgent` in `agent/chat_agent.py` is the one used today.
     """
 
     def run(
         self,
         request: ChatRequest,
     ) -> AsyncIterator[Event]:
-        """Process one chat request and stream engine events.
+        """Process one chat request and stream back engine events.
 
         Args:
-            request: Complete chat request including assistant configuration,
-                user message, history, and caller context.
+            request: The full chat request: assistant config, the user's
+                message, history, and caller context.
+
+        Returns:
+            An async stream of events (retrieval, tokens, tool activity, usage,
+            done) describing the turn as it happens.
         """
         ...
 

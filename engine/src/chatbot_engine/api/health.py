@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from chatbot_engine import __version__
-from chatbot_engine.api.deps import ChatServiceDep, DocumentServiceDep
+from chatbot_engine.api.dependencies import ChatServiceDep, DocumentServiceDep
 from chatbot_engine.models.common import HealthResponse
 
 router = APIRouter(tags=["health"])

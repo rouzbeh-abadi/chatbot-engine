@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api import deps
+from chatbot_engine.api import dependencies
 from chatbot_engine.models.evals import JudgeReport, JudgeRequest, Verdict
 
 CASE = {
@@ -42,11 +42,11 @@ class _StubJudge:
 
 
 def _with_judge(client: TestClient, judge: object) -> None:
-    client.app.dependency_overrides[deps.get_judge] = lambda: judge
+    client.app.dependency_overrides[dependencies.get_judge] = lambda: judge
 
 
 def _without_judge(client: TestClient) -> None:
-    client.app.dependency_overrides[deps.get_judge] = lambda: None
+    client.app.dependency_overrides[dependencies.get_judge] = lambda: None
 
 
 # --- unwired -----------------------------------------------------------------

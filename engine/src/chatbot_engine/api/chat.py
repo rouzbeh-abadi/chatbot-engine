@@ -1,11 +1,11 @@
-"""POST /chat -- one conversation turn, streamed as NDJSON."""
+"""POST /chat - one conversation turn, streamed as NDJSON."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from chatbot_engine.api.deps import ChatServiceDep
+from chatbot_engine.api.dependencies import ChatServiceDep
 from chatbot_engine.api.streaming import MEDIA_TYPE, to_ndjson
 from chatbot_engine.models.chat import ChatRequest
 
@@ -27,11 +27,10 @@ router = APIRouter(tags=["chat"])
     },
 )
 async def chat(request: ChatRequest, service: ChatServiceDep) -> StreamingResponse:
-    """Stream a turn.
-
-    `service.stream()` is called before the response is constructed on purpose:
-    a missing implementation has to surface as 501 while the status line can
-    still change, not as a 200 with an empty body.
+    """Receive a chat request from the backend and stream engine events as NDJSON.
+    The request is passed to the chat service, which runs the agent. Streaming
+    starts only after setup succeeds, so errors can still return the correct
+    HTTP status before any response body is sent.
     """
     events = service.stream(request)
 

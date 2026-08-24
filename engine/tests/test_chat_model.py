@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api.deps import get_ingest_pipeline, reset_dependency_cache
+from chatbot_engine.api.dependencies import get_ingest_pipeline, reset_dependency_cache
 from chatbot_engine.agent.client import build_chat_model
 from chatbot_engine.errors import NotConfiguredError
 from chatbot_engine.models.chat import AssistantConfig

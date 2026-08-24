@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
 
-from chatbot_engine.api.deps import DocumentServiceDep
+from chatbot_engine.api.dependencies import DocumentServiceDep
 from chatbot_engine.models.documents import DeleteResult, DocumentRecord
 
 router = APIRouter(prefix="/documents", tags=["documents"])

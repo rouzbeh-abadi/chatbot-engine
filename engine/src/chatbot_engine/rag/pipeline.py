@@ -1,11 +1,16 @@
-"""Extract, chunk, embed, record.
+"""Document ingestion pipeline.
 
-With a `ChromaChunkStore` the chunks are written and the document comes out
-`indexed`. Without one it is chunked and counted but not searchable, so it comes
-out `received` -- which is what `/health/ready` and the UI then report.
+Uploaded files are extracted, split into chunks, optionally embedded into the
+vector store, and recorded in the document registry.
 
-`DocumentBlobs` keeps the uploaded bytes, which is what lets `reindex` rebuild a
-document after a change to chunk size or embedding model, with no re-upload.
+When a `ChromaChunkStore` is configured, chunks are persisted for retrieval and
+the document is marked `indexed`. Without a vector store, the document is still
+validated, chunked, and counted, but remains non-searchable and is marked
+`received`; `/health/ready` and the UI surface that status.
+
+`DocumentBlobs` preserves the original upload bytes so `reindex` can rebuild the
+document after changes to chunking or embedding configuration without requiring
+another upload.
 """
 
 from __future__ import annotations

@@ -129,7 +129,7 @@ def test_documents_still_listed_after_the_engine_restarts(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The bug this file exists for: vectors on disk, metadata gone."""
-    from chatbot_engine.api.deps import reset_dependency_cache
+    from chatbot_engine.api.dependencies import reset_dependency_cache
 
     uploaded = client.put(
         "/documents",

@@ -9,14 +9,14 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api import deps
+from chatbot_engine.api import dependencies
 from chatbot_engine.services.chat import ChatService
 
 
 def _without_agent(client: TestClient) -> None:
     # A lambda, not the class: FastAPI introspects an override's signature and
     # would try to turn `ChatService.__init__`'s parameters into query fields.
-    client.app.dependency_overrides[deps.get_chat_service] = lambda: ChatService()
+    client.app.dependency_overrides[dependencies.get_chat_service] = lambda: ChatService()
 
 
 def test_chat_reports_no_agent_is_registered(
@@ -97,7 +97,7 @@ def test_a_deliberate_engine_error_is_500_not_501(client: TestClient) -> None:
     """`NotConfiguredError` inherits from both `EngineError` and
     `NotImplementedError`. Handler registration must keep "unwritten" (501)
     distinguishable from "broken" (500), whatever the MRO order happens to be."""
-    from chatbot_engine.api import deps
+    from chatbot_engine.api import dependencies
     from chatbot_engine.errors import EngineError
     from chatbot_engine.services.chat import ChatService
 
@@ -105,7 +105,7 @@ def test_a_deliberate_engine_error_is_500_not_501(client: TestClient) -> None:
         def run(self, request):  # noqa: ANN001, ANN202
             raise EngineError("retriever exploded")
 
-    client.app.dependency_overrides[deps.get_chat_service] = lambda: ChatService(
+    client.app.dependency_overrides[dependencies.get_chat_service] = lambda: ChatService(
         agent=Exploding()
     )
     try:

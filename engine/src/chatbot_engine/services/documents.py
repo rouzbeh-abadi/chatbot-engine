@@ -17,7 +17,7 @@ from chatbot_engine.rag.vector_store import ChromaChunkStore
 
 _MISSING = (
     "no {component} is registered -- implement one under chatbot_engine/rag/ "
-    "and return it from chatbot_engine.api.deps.{factory}()"
+    "and return it from chatbot_engine.api.dependencies.{factory}()"
 )
 
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from chatbot_engine.api.deps import JudgeDep
+from chatbot_engine.api.dependencies import JudgeDep
 from chatbot_engine.errors import NotConfiguredError
 from chatbot_engine.models.evals import JudgeReport, JudgeRequest
 
@@ -24,7 +24,7 @@ async def score_run(request: JudgeRequest, judge: JudgeDep) -> JudgeReport:
     if judge is None:
         raise NotConfiguredError(
             "no Judge is registered -- implement one under chatbot_engine/agent/ "
-            "and return it from chatbot_engine.api.deps.get_judge()"
+            "and return it from chatbot_engine.api.dependencies.get_judge()"
         )
 
     return await judge(request)

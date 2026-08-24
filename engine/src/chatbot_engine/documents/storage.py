@@ -1,3 +1,9 @@
+"""Local storage for original document uploads.
+
+The blob store persists raw uploaded bytes on the filesystem so ingestion can
+retain the source document for later reads, cleanup, or reindexing workflows.
+"""
+
 from pathlib import Path
 
 from chatbot_engine.ports.documents import BlobStore

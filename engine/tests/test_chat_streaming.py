@@ -11,7 +11,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api import deps
+from chatbot_engine.api import dependencies
 from chatbot_engine.api.streaming import MEDIA_TYPE, describe
 from chatbot_engine.models.events import (
     DoneEvent,
@@ -57,7 +57,7 @@ class _FailingAgent:
 
 
 def _with_agent(client: TestClient, agent: object) -> None:
-    client.app.dependency_overrides[deps.get_chat_service] = lambda: ChatService(
+    client.app.dependency_overrides[dependencies.get_chat_service] = lambda: ChatService(
         agent=agent
     )
 

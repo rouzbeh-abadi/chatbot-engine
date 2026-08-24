@@ -1,3 +1,9 @@
+"""Chunk extracted documents for RAG indexing.
+
+This module wraps LangChain's recursive text splitter with application defaults
+for chunk size, overlap, and start-index metadata.
+"""
+
 from chatbot_engine.settings import get_settings
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter

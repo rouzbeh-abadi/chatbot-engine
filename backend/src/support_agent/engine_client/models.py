@@ -1,15 +1,11 @@
-"""The engine's wire contract, as this backend sees it.
+"""Models for data exchanged between this backend and the chatbot engine.
 
-These models are a deliberate **copy** of `chatbot_engine.models`, not an import.
-The engine is a separate service; depending on its Python package would put the
-two back in one deployable and defeat the split.
+The backend sends requests such as `EngineChatRequest` and receives streamed
+events such as tokens, retrieval results, tool-call updates, usage, and errors.
 
-The duplication is the honest cost of a service boundary, and it is guarded:
-`tests/test_contract_parity.py` (at the repository root, where neither service
-owns it) compares the two schemas and fails when they drift.
-
-Only what this backend actually sends or reads lives here. If a field is not in
-this file, the backend does not use it.
+These models are copied here instead of imported from the engine so the backend
+and engine stay independent services. A contract test checks that both sides
+still use the same request and response shapes.
 """
 
 from __future__ import annotations
@@ -33,11 +29,11 @@ class Message(BaseModel):
 
 
 class McpServerConfig(BaseModel):
-    """An MCP server the engine should connect to, and the tools it may use.
+    """An MCP tool server the engine may call, and the tools it is allowed to use.
 
-    `allowed_tools` must be non-empty: names and descriptions come back from the
-    server and end up in the engine's prompt, so this backend pins the list
-    rather than letting a server offer whatever it likes.
+    `allowed_tools` must be non-empty. A tool's name and description are placed
+    into the engine's prompt, so the backend pins an explicit allowlist rather
+    than trusting whatever the server advertises.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -48,10 +44,10 @@ class McpServerConfig(BaseModel):
 
 
 class AssistantConfig(BaseModel):
-    """The assistant definition, loaded from `projects/*.yaml`.
+    """The full assistant definition, loaded from `projects/*.yaml`.
 
-    This backend is the source of truth: the engine stores none of it and
-    receives the whole thing with every request.
+    The backend is the source of truth: the engine stores none of this and
+    receives the whole config on every request.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -74,8 +70,8 @@ class EngineChatRequest(BaseModel):
     project: AssistantConfig
     message: str = Field(min_length=1)
     session_id: str | None = None
-    #: Opaque to the engine. It forwards this to MCP servers so *they* can
-    #: authorise; identity itself stays this backend's responsibility.
+    # Opaque to the engine: it forwards this to MCP tool servers for their own
+    # authorization. User identity remains the backend's responsibility.
     user_id: str | None = None
     history: list[Message] = Field(default_factory=list)
 
@@ -84,6 +80,8 @@ class EngineChatRequest(BaseModel):
 
 
 class SourceRef(BaseModel):
+    """One retrieved document chunk, cited as a source for the answer."""
+
     model_config = ConfigDict(extra="forbid")
 
     doc_id: str
@@ -94,6 +92,8 @@ class SourceRef(BaseModel):
 
 
 class RetrievalEvent(BaseModel):
+    """The sources retrieved for the turn, sent before the answer begins."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["retrieval"] = "retrieval"
@@ -102,6 +102,8 @@ class RetrievalEvent(BaseModel):
 
 
 class TokenEvent(BaseModel):
+    """One piece of the answer text, streamed as the model generates it."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["token"] = "token"
@@ -109,6 +111,8 @@ class TokenEvent(BaseModel):
 
 
 class UsageEvent(BaseModel):
+    """Token counts and cost for the turn, sent once near the end."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["usage"] = "usage"
@@ -120,13 +124,13 @@ class UsageEvent(BaseModel):
 
 
 class ToolCallStartedEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    """Emitted before a tool runs, so the UI can show it in progress.
 
-    """Emitted before a tool runs, so a UI can show what is happening.
-
-    `call_id` pairs this with the matching finished event; a turn may run several
-    tools, and they are not guaranteed to finish in the order they started.
+    `call_id` pairs this with its `ToolCallFinishedEvent`. A turn may run several
+    tools, and they need not finish in the order they started.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     type: Literal["tool_call_started"] = "tool_call_started"
     call_id: str
@@ -136,13 +140,13 @@ class ToolCallStartedEvent(BaseModel):
 
 
 class ToolCallFinishedEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
     """Emitted when a tool returns or fails.
 
-    `result_preview` is for display only -- a short excerpt. Tool output is
-    untrusted data and belongs in the model's context, not spliced into a UI.
+    `result_preview` is a short excerpt for display only. Full tool output is
+    untrusted data and goes into the model's context, not into the UI.
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     type: Literal["tool_call_finished"] = "tool_call_finished"
     call_id: str
@@ -154,6 +158,8 @@ class ToolCallFinishedEvent(BaseModel):
 
 
 class ErrorEvent(BaseModel):
+    """A failure reported mid-stream, after the 200 response has already begun."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["error"] = "error"
@@ -162,12 +168,16 @@ class ErrorEvent(BaseModel):
 
 
 class DoneEvent(BaseModel):
+    """The final event of a turn; `finish_reason` says how it ended."""
+
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["done"] = "done"
     finish_reason: Literal["stop", "length", "tool_limit", "error", "cancelled"] = "stop"
 
 
+# One chat turn arrives as a sequence of these events. Pydantic uses the `type`
+# field to decide which model to parse each one into (the discriminator).
 ChatEvent = Annotated[
     RetrievalEvent
     | TokenEvent
@@ -181,6 +191,8 @@ ChatEvent = Annotated[
 
 
 class IngestStatus(StrEnum):
+    """Where an uploaded document is in the indexing lifecycle."""
+
     RECEIVED = "received"
     INDEXED = "indexed"
     FAILED = "failed"
@@ -188,6 +200,8 @@ class IngestStatus(StrEnum):
 
 
 class DocumentRecord(BaseModel):
+    """One document in the knowledge base, as the engine reports it."""
+
     model_config = ConfigDict(extra="forbid")
 
     doc_id: str
@@ -205,6 +219,8 @@ class DocumentRecord(BaseModel):
 
 
 class DeleteResult(BaseModel):
+    """The outcome of deleting a document."""
+
     model_config = ConfigDict(extra="forbid")
 
     doc_id: str

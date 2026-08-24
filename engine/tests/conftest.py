@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
-from chatbot_engine.api.deps import reset_dependency_cache
+from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.rag import embeddings as embeddings_module
 from chatbot_engine.rag import vector_store as vector_store_module
 

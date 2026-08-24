@@ -17,22 +17,21 @@ from chatbot_engine.ports.agent import ToolProvider
 
 
 class ChatAgent:
-    """Answers a turn as the model writes it.
+    """Run one chat turn through retrieval, model generation, and streaming.
 
-    Every event the contract allows is legal but optional. This emits what was
-    retrieved, the answer in pieces, and `done`. Tool progress and token cost are
-    still to come.
+    The agent retrieves relevant context, emits the sources, streams the model's
+
+    answer as token events, and finishes with a done event.
     """
 
     def __init__(self, tools: ToolProvider) -> None:
         self._tools = tools
 
     async def run(self, request: ChatRequest) -> AsyncIterator[Event]:
-        """Answer one turn."""
+        """Process one chat request and yield events as the answer is produced."""
         hits = await retrieve(request)
 
-        # Before the answer, so the UI can show what it was based on while the
-        # model is still thinking.
+        # Before the answer, so the UI can show what it was based on while the model is still thinking.
         yield RetrievalEvent(
             query=request.message, sources=to_source_refs(hits)
         )

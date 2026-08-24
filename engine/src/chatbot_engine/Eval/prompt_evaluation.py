@@ -1,3 +1,10 @@
+"""Prompt evaluation workflow.
+
+Evaluation cases are answered through the same agent used by `/chat`, serialized
+into a judge transcript, graded by the configured judge chain, and returned as a
+report that preserves the assistant's original answers.
+"""
+
 from __future__ import annotations
 
 from chatbot_engine.agent.Chains.judge_chain import create_judge_chain

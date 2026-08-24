@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from langchain_core.documents import Document
 
-from chatbot_engine.api.deps import reset_dependency_cache
+from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.errors import NotConfiguredError
 from chatbot_engine.rag import embeddings as module
 from chatbot_engine.rag.embeddings import embed_documents, embed_query, get_embeddings

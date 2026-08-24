@@ -1,0 +1,10 @@
+# Type-checker (ty) configuration.
+#
+# The two services live under src layouts (backend/src, engine/src) and are the
+# first-party roots. Declaring them here makes module names canonical -- e.g.
+# `support_agent.api.schemas`, never `backend.src.support_agent.api.schemas`.
+# Without it an editor walking from the repo root sees each module under two
+# names and reports spurious type mismatches between them.
+
+[environment]
+root = ["backend/src", "engine/src"]

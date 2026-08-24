@@ -1,3 +1,13 @@
+"""MCP client: discover and invoke the application's tools over MCP.
+
+This is where the engine actually talks to a tool server. It opens a streamable
+HTTP connection to each configured server, lists the tools it offers (keeping
+only the allowlisted ones), and invokes a tool when the model asks for one.
+
+The configuration side - which servers, which tools are allowed - lives in
+`mcp/config.py`; this module is the network side that acts on it.
+"""
+
 from __future__ import annotations
 
 import json
@@ -51,30 +61,26 @@ class McpToolProvider:
         )
 
         for target in targets:
-            async with streamable_http_client(target.url) as (
-                read_stream,
-                write_stream,
+            async with (
+                streamable_http_client(target.url) as (read_stream, write_stream),
+                ClientSession(read_stream, write_stream) as session,
             ):
-                async with ClientSession(
-                    read_stream,
-                    write_stream,
-                ) as session:
-                    await session.initialize()
+                await session.initialize()
 
-                    result = await session.list_tools()
+                result = await session.list_tools()
 
-                    for tool in result.tools:
-                        if not target.allows(tool.name):
-                            continue
+                for tool in result.tools:
+                    if not target.allows(tool.name):
+                        continue
 
-                        tools.append(
-                            {
-                                "server": target.name,
-                                "name": tool.name,
-                                "description": tool.description or "",
-                                "input_schema": tool.input_schema,
-                            }
-                        )
+                    tools.append(
+                        {
+                            "server": target.name,
+                            "name": tool.name,
+                            "description": tool.description or "",
+                            "input_schema": tool.input_schema,
+                        }
+                    )
 
         return tools
 
@@ -113,20 +119,16 @@ class McpToolProvider:
                 f"Tool {name!r} is not allowed on MCP server {server!r}."
             )
 
-        async with streamable_http_client(target.url) as (
-            read_stream,
-            write_stream,
+        async with (
+            streamable_http_client(target.url) as (read_stream, write_stream),
+            ClientSession(read_stream, write_stream) as session,
         ):
-            async with ClientSession(
-                read_stream,
-                write_stream,
-            ) as session:
-                await session.initialize()
+            await session.initialize()
 
-                result = await session.call_tool(
-                    name,
-                    dict(arguments),
-                )
+            result = await session.call_tool(
+                name,
+                dict(arguments),
+            )
 
         if result.structured_content is not None:
             return json.dumps(
