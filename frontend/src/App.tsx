@@ -4,7 +4,30 @@ import { ApiError, streamChat } from "./api/client";
 import { Composer } from "./components/Composer";
 import { Knowledge } from "./components/Knowledge";
 import { Message, type ChatMessage } from "./components/Message";
+import type { SessionUsage } from "./components/Knowledge";
 import type { ToolCall } from "./api/types";
+
+/** Total tokens and cost across every answered turn this session. */
+function sessionUsage(messages: ChatMessage[]): SessionUsage {
+  let tokens = 0;
+  let cost = 0;
+  let hasCost = false;
+  let turns = 0;
+  let model: string | undefined;
+
+  for (const message of messages) {
+    if (!message.usage) continue;
+    turns += 1;
+    tokens += message.usage.total_tokens;
+    if (message.usage.cost_usd != null) {
+      cost += message.usage.cost_usd;
+      hasCost = true;
+    }
+    if (message.usage.model) model = message.usage.model;
+  }
+
+  return { turns, tokens, cost: hasCost ? cost : null, model };
+}
 
 /** Stable enough for React keys within one session. */
 const nextId = (() => {
@@ -195,7 +218,7 @@ export default function App() {
           <div ref={bottom} />
         </section>
 
-        <Knowledge />
+        <Knowledge usage={sessionUsage(messages)} />
       </main>
 
       <footer className="footer">

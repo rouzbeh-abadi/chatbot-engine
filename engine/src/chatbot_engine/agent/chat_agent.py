@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from chatbot_engine.agent.client import stream_completion
+from chatbot_engine.agent.client import Usage, stream_completion
 from chatbot_engine.agent.retriever import retrieve, to_context, to_source_refs
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import (
@@ -12,6 +12,7 @@ from chatbot_engine.models.events import (
     Event,
     RetrievalEvent,
     TokenEvent,
+    UsageEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
 
@@ -36,7 +37,18 @@ class ChatAgent:
             query=request.message, sources=to_source_refs(hits)
         )
 
-        async for text in stream_completion(request, self._tools, to_context(hits)):
-            yield TokenEvent(text=text)
+        # stream_completion yields answer text as it is generated, then one
+        # Usage value at the end; turn each into the matching event.
+        async for item in stream_completion(request, self._tools, to_context(hits)):
+            if isinstance(item, Usage):
+                yield UsageEvent(
+                    input_tokens=item.input_tokens,
+                    output_tokens=item.output_tokens,
+                    total_tokens=item.total_tokens,
+                    cost_usd=item.cost_usd,
+                    model=item.model,
+                )
+            else:
+                yield TokenEvent(text=item)
 
         yield DoneEvent(finish_reason="stop")

@@ -2,14 +2,22 @@ import { useEffect, useState } from "react";
 import { ApiError, listDocuments } from "../api/client";
 import type { DocumentRecord } from "../api/types";
 
+/** Running totals across every answered turn this session. */
+export interface SessionUsage {
+  turns: number;
+  tokens: number;
+  cost: number | null;
+  model?: string;
+}
+
 /**
- * What the assistant knows.
+ * What the assistant knows, plus this session's token usage.
  *
  * This calls the same ingestion path the engine owns, so it reports 501 the same
  * way the chat does -- showing the state honestly is more useful than an empty
  * list that looks like a working but empty knowledge base.
  */
-export function Knowledge() {
+export function Knowledge({ usage }: { usage: SessionUsage }) {
   const [docs, setDocs] = useState<DocumentRecord[] | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
 
@@ -61,6 +69,20 @@ export function Knowledge() {
       )}
 
       {!docs && !problem && <p className="panel__note">Loading…</p>}
+
+      {usage.turns > 0 && (
+        <div className="usage-total">
+          <h3 className="usage-total__title">Session usage</h3>
+          <p className="usage-total__line">
+            {usage.tokens.toLocaleString()} tokens · {usage.turns} turn
+            {usage.turns === 1 ? "" : "s"}
+            {usage.cost != null && ` · $${usage.cost.toFixed(5)}`}
+          </p>
+          {usage.model && (
+            <p className="usage-total__model">{usage.model}</p>
+          )}
+        </div>
+      )}
     </aside>
   );
 }

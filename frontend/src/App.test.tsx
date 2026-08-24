@@ -122,17 +122,33 @@ describe("a successful turn", () => {
     expect(screen.getByText("142 ms")).toBeInTheDocument();
   });
 
-  it("reports token usage and cost", async () => {
+  it("does not show usage under the message", async () => {
+    routes(async () => sseResponse(events));
+    await renderApp();
+
+    await ask();
+    // Wait for the answer, then confirm there is no per-message usage line --
+    // usage is only totalled below the knowledge base.
+    await waitFor(() =>
+      expect(document.querySelector(".usage-total")).not.toBeNull(),
+    );
+    expect(document.querySelector(".usage")).toBeNull();
+  });
+
+  it("totals token usage below the knowledge base", async () => {
     routes(async () => sseResponse(events));
     await renderApp();
 
     await ask();
 
-    await waitFor(() =>
-      expect(screen.getByText(/1,332 tokens/)).toBeInTheDocument(),
-    );
-    expect(screen.getByText(/\$0\.00061/)).toBeInTheDocument();
-    expect(screen.getByText(/openai\/gpt-5-mini/)).toBeInTheDocument();
+    const total = await waitFor(() => {
+      const el = document.querySelector(".usage-total");
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(total.textContent).toMatch(/Session usage/);
+    expect(total.textContent).toMatch(/1,332 tokens/);
+    expect(total.textContent).toMatch(/1 turn/);
   });
 
   it("cites the document inline, where the claim is", async () => {

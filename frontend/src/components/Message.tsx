@@ -46,15 +46,6 @@ export function Message({ message }: { message: ChatMessage }) {
             Thinking<span className="thinking__dots" />
           </p>
         )}
-
-        {message.usage && (
-          <div className="usage">
-            {message.usage.total_tokens.toLocaleString()} tokens
-            {message.usage.cost_usd != null &&
-              ` · $${message.usage.cost_usd.toFixed(5)}`}
-            {message.usage.model && ` · ${message.usage.model}`}
-          </div>
-        )}
       </div>
     </article>
   );

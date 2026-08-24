@@ -6,7 +6,7 @@ process, because several clients on one directory contend for the same SQLite fi
 
 from __future__ import annotations
 
-from functools import lru_cache
+import threading
 
 from chatbot_engine.rag.embeddings import get_embeddings
 from chatbot_engine.settings import get_settings
@@ -18,16 +18,39 @@ class EmptyVectorStoreError(RuntimeError):
     """The store holds no documents, so retrieval cannot return anything."""
 
 
-@lru_cache
-def open_vector_store() -> Chroma:
-    """Open the store for reading or writing, creating it if absent."""
-    settings = get_settings()
+# One Chroma client per process. Construction is guarded by a lock rather than
+# `@lru_cache`: FastAPI runs the sync document dependencies in a threadpool, and
+# `lru_cache` does not serialise concurrent first calls -- two threads would both
+# build a client and race on chromadb's process-global state (a KeyError deep in
+# `PersistentClient`). The lock makes exactly one thread construct it.
+_store: Chroma | None = None
+_store_lock = threading.Lock()
 
-    return Chroma(
-        collection_name=settings.chroma_collection,
-        embedding_function=get_embeddings(),
-        persist_directory=str(settings.chroma_dir),
-    )
+
+def open_vector_store() -> Chroma:
+    """Open the store for reading or writing, creating it once if absent."""
+    global _store
+
+    if _store is None:
+        with _store_lock:
+            # Re-check inside the lock: another thread may have built it while
+            # this one waited.
+            if _store is None:
+                settings = get_settings()
+                _store = Chroma(
+                    collection_name=settings.chroma_collection,
+                    embedding_function=get_embeddings(),
+                    persist_directory=str(settings.chroma_dir),
+                )
+
+    return _store
+
+
+def reset_vector_store() -> None:
+    """Drop the cached client. For tests, and after changing ENGINE_CHROMA_DIR."""
+    global _store
+    with _store_lock:
+        _store = None
 
 
 def load_vector_store() -> Chroma:

@@ -27,7 +27,7 @@ from chatbot_engine.rag.pipeline import DocumentIngestPipeline
 from chatbot_engine.rag.splitter import DocumentChunker
 from chatbot_engine.rag.vector_store import (
     ChromaChunkStore,
-    open_vector_store,
+    reset_vector_store,
 )
 from chatbot_engine.services.chat import ChatService
 from chatbot_engine.services.documents import DocumentService
@@ -170,7 +170,6 @@ def reset_dependency_cache() -> None:
     for cached in (
         get_settings,
         get_embeddings,
-        open_vector_store,
         get_agent,
         get_ingest_pipeline,
         get_registry,
@@ -182,3 +181,7 @@ def reset_dependency_cache() -> None:
         get_judge,
     ):
         cached.cache_clear()
+
+    # The Chroma client is a lock-guarded singleton, not an lru_cache, so it has
+    # its own reset rather than a `.cache_clear()`.
+    reset_vector_store()

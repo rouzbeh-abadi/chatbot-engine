@@ -9,6 +9,7 @@ This is where retrieval, the prompt, the model, and the tools finally meet.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping, Sequence
+from dataclasses import dataclass
 
 from chatbot_engine.agent.Chains.chat_chain import create_chain
 from chatbot_engine.errors import EngineError
@@ -25,6 +26,32 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_openai import ChatOpenAI
+
+#: Model -> (input $/1M tokens, output $/1M tokens), from OpenRouter's price list
+#: (https://openrouter.ai/models). These are OpenRouter's own per-token prices, so
+#: the computed cost matches what it bills. Keep in step with `CHAT_MODELS`; an
+#: unlisted model yields no cost rather than a wrong one.
+PRICING: dict[str, tuple[float, float]] = {
+    "openai/gpt-5-mini": (0.25, 2.00),
+    "anthropic/claude-haiku-4.5": (1.00, 5.00),
+    "google/gemini-2.5-flash": (0.30, 2.50),
+}
+
+
+@dataclass(frozen=True)
+class Usage:
+    """Token totals and cost for a turn, summed across every model call it made.
+
+    A plain value, not a `UsageEvent`: this module speaks in text, tokens and
+    cost, and the agent turns it into the event the UI sees.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    model: str | None = None
+    #: USD cost at OpenRouter's listed prices, or None for an unpriced model.
+    cost_usd: float | None = None
 
 
 def build_chat_model(
@@ -119,7 +146,7 @@ async def stream_completion(
     request: ChatRequest,
     tools_provider: ToolProvider,
     context: str = "",
-) -> AsyncIterator[str]:
+) -> AsyncIterator[str | Usage]:
     """Run the LLM and tool-calling loop, then stream the final answer.
 
     Steps:
@@ -140,14 +167,14 @@ async def stream_completion(
             citation. Empty when nothing was retrieved.
 
     Yields:
-        The final answer text in pieces, as the model generates it. Rounds that
-        only call tools yield nothing; the yielded text is the last round's prose.
+        The final answer text in pieces, as the model generates it, followed by a
+        single `Usage` (tokens and cost) once the turn is complete. Rounds that
+        only call tools yield no text; the yielded text is the last round's prose.
 
     Raises:
         EngineError: If tool discovery fails, or if the model is still calling
             tools after `max_tool_iterations` rounds.
     """
-
     try:
         tools = await tools_provider.list_tools(request.project)
     except Exception as exc:
@@ -158,12 +185,13 @@ async def stream_completion(
 
     server_for = {tool["name"]: tool["server"] for tool in tools}
 
-    chain = create_chain(
-        build_chat_model(request.project),
-        request.project.system_prompt,
-        tools,
-    )
+    model = build_chat_model(request.project)
+    chain = create_chain(model, request.project.system_prompt, tools)
     messages = to_messages(request, context)
+
+    # Tokens accumulate across rounds: a turn with tool calls is several model
+    # calls, and reporting only the last one would understate the total.
+    totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
     for _ in range(request.project.max_tool_iterations):
         reply: AIMessageChunk | None = None
@@ -180,11 +208,14 @@ async def stream_completion(
         if reply is None:
             # The model produced nothing at all. An empty answer, which is what
             # a single non-streaming call would have returned too.
+            yield _usage(totals, model.model_name)
             return
 
+        _add_usage(totals, reply)
         messages.append(reply)
 
         if not reply.tool_calls:
+            yield _usage(totals, model.model_name)
             return
 
         messages.extend(
@@ -195,3 +226,29 @@ async def stream_completion(
         f"the model was still calling tools after "
         f"{request.project.max_tool_iterations} rounds"
     )
+
+
+def _add_usage(totals: dict[str, int], reply: AIMessageChunk) -> None:
+    """Add one model call's token counts to the running totals.
+
+    `usage_metadata` is present because the model is built with
+    `stream_usage=True`, but it can be `None` for a provider that omits it, so a
+    missing count is treated as zero rather than an error.
+    """
+    metadata = reply.usage_metadata
+    if metadata is None:
+        return
+    for key in totals:
+        totals[key] += metadata.get(key, 0)
+
+
+def _usage(totals: dict[str, int], model_name: str | None) -> Usage:
+    """Package the running totals as a `Usage`, pricing the tokens if we can."""
+    prices = PRICING.get(model_name or "")
+    cost = (
+        (totals["input_tokens"] * prices[0] + totals["output_tokens"] * prices[1])
+        / 1_000_000
+        if prices is not None
+        else None
+    )
+    return Usage(model=model_name, cost_usd=cost, **totals)

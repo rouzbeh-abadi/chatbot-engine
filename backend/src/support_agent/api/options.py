@@ -11,11 +11,8 @@ router = APIRouter(tags=["options"])
 # `model:` in projects/support.yaml.
 CHAT_MODELS = [
     "openai/gpt-5-mini",
-    "openai/gpt-5",
-    "anthropic/claude-sonnet-5",
     "anthropic/claude-haiku-4.5",
     "google/gemini-2.5-flash",
-    "deepseek/deepseek-chat-v3.1",
 ]
 
 
