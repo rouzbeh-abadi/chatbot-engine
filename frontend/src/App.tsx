@@ -4,7 +4,9 @@ import { ApiError, streamChat } from "./api/client";
 import { Composer } from "./components/Composer";
 import { Knowledge } from "./components/Knowledge";
 import { Message, type ChatMessage } from "./components/Message";
+import { ExportMenu } from "./components/ExportMenu";
 import type { SessionUsage } from "./components/Knowledge";
+import { exportConversation } from "./export";
 import type { ToolCall } from "./api/types";
 
 /** Total tokens and cost across every answered turn this session. */
@@ -192,7 +194,13 @@ export default function App() {
   return (
     <div className="app">
       <header className="header">
-        <h1 className="header__title">SkyDesk Support</h1>
+        <div className="header__row">
+          <h1 className="header__title">SkyDesk Support</h1>
+          <ExportMenu
+            onExport={(format) => exportConversation(messages, format)}
+            disabled={messages.length === 0}
+          />
+        </div>
         <p className="header__sub">
           Ask about baggage, refunds, check-in, or a booking reference such as
           <code>AB12CD</code>.

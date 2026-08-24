@@ -577,3 +577,61 @@ code {
   font-size: 11px;
   color: var(--ink-3);
 }
+
+/* Header row: title on the left, export on the right. */
+.header__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.btn--ghost {
+  padding: 7px 14px;
+  font-size: 13px;
+  color: var(--accent);
+  background: transparent;
+  border: 1px solid var(--line);
+}
+.btn--ghost:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.btn--ghost:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Export dropdown in the header. */
+.export {
+  position: relative;
+}
+.export__menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 10;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  min-width: 110px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.12);
+}
+.export__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.export__item:hover {
+  background: var(--accent-bg);
+  color: var(--accent);
+}

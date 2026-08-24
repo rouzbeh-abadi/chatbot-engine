@@ -328,3 +328,119 @@ describe("markdown in the answer", () => {
     expect(answer!.closest(".msg__answer")).not.toBeNull();
   });
 });
+
+describe("exporting the conversation", () => {
+  /** Stub the download plumbing jsdom lacks; capture what each format saves. */
+  function stubDownload() {
+    const saved: { text: string; type: string; name: string } = {
+      text: "",
+      type: "",
+      name: "",
+    };
+    vi.stubGlobal(
+      "Blob",
+      class {
+        type: string;
+        constructor(parts: unknown[], options?: { type?: string }) {
+          // jsdom Blob for the PDF case is opaque; only text formats are read.
+          saved.text = parts.every((p) => typeof p === "string")
+            ? (parts as string[]).join("")
+            : "";
+          saved.type = options?.type ?? "";
+          this.type = saved.type;
+        }
+      },
+    );
+    vi.stubGlobal("URL", {
+      ...URL,
+      createObjectURL: vi.fn(() => "blob:mock"),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      saved.name = this.download;
+    });
+    return saved;
+  }
+
+  async function converse() {
+    routes(async () =>
+      sseResponse([
+        { type: "token", text: "One bag." },
+        { type: "done", finish_reason: "stop" },
+      ]),
+    );
+    await renderApp();
+    await ask("what bags?");
+    await screen.findByText("One bag.");
+  }
+
+  /** Open the dropdown and click one format. */
+  async function pick(format: "JSON" | "CSV" | "PDF") {
+    const { fireEvent } = await import("@testing-library/react");
+    fireEvent.click(screen.getByRole("button", { name: /Export/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: format }));
+  }
+
+  it("disables the export button until there is a message", async () => {
+    stubDownload();
+    routes(async () => sseResponse([{ type: "done", finish_reason: "stop" }]));
+    await renderApp();
+
+    expect(screen.getByRole("button", { name: /Export/ })).toBeDisabled();
+    // The menu is closed, so no format items exist yet.
+    expect(screen.queryByRole("menuitem")).toBeNull();
+  });
+
+  it("opens a dropdown of formats when clicked", async () => {
+    const { fireEvent } = await import("@testing-library/react");
+    stubDownload();
+    await converse();
+
+    expect(screen.queryByRole("menu")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /Export/ }));
+
+    expect(screen.getByRole("menu")).toBeTruthy();
+    expect(
+      screen.getAllByRole("menuitem").map((el) => el.textContent),
+    ).toEqual(["JSON", "CSV", "PDF"]);
+  });
+
+  it("exports the conversation only, as JSON", async () => {
+    const saved = stubDownload();
+    await converse();
+
+    await pick("JSON");
+
+    expect(saved.name).toBe("skydesk-conversation.json");
+    const parsed = JSON.parse(saved.text);
+    expect(parsed.messages).toEqual([
+      { role: "user", text: "what bags?" },
+      { role: "assistant", text: "One bag." },
+    ]);
+    // No token usage or sources in the export.
+    expect(saved.text).not.toMatch(/usage|sources|tokens/);
+  });
+
+  it("exports as CSV with a header row", async () => {
+    const saved = stubDownload();
+    await converse();
+
+    await pick("CSV");
+
+    expect(saved.name).toBe("skydesk-conversation.csv");
+    expect(saved.text).toBe(
+      'role,text\nuser,"what bags?"\nassistant,"One bag."',
+    );
+  });
+
+  it("exports as PDF", async () => {
+    const saved = stubDownload();
+    await converse();
+
+    await pick("PDF");
+
+    expect(saved.name).toBe("skydesk-conversation.pdf");
+  });
+});
