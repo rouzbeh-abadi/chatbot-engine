@@ -13,8 +13,11 @@ turn uses, then scores four things with RAGAS.
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
+from typing import Any
 
-from chatbot_engine.agent.retriever import retrieve
+from chatbot_engine.agent.client import stream_completion
+from chatbot_engine.agent.retriever import retrieve, to_context
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.evals import (
     RagCaseResult,
@@ -24,10 +27,33 @@ from chatbot_engine.models.evals import (
     RagMetricAverages,
     RagReport,
 )
-from chatbot_engine.models.events import TokenEvent
-from chatbot_engine.ports.agent import Agent
 from chatbot_engine.settings import get_settings
 from openai import AsyncOpenAI
+
+
+class _NoTools:
+    """A tool provider that offers nothing.
+
+    Retrieval cases never call a tool, so binding none keeps the answer grounded
+    in the retrieved context and skips the round-trip to the tool server.
+    """
+
+    async def list_tools(self, config: AssistantConfig) -> list[Mapping[str, Any]]:
+        return []
+
+    async def call_tool(
+        self,
+        *,
+        config: AssistantConfig,
+        server: str,
+        name: str,
+        arguments: Mapping[str, Any],
+        user_id: str | None = None,
+    ) -> str:
+        return ""
+
+
+_NO_TOOLS = _NoTools()
 
 #: A different family than the assistant's `openai/gpt-5-mini`, so the metrics
 #: are not self-graded. Must be a model the OpenRouter account can reach.
@@ -86,9 +112,13 @@ def _build_metrics() -> tuple:
     )
 
     settings = get_settings()
+    # RAGAS fires many calls per case, so a rate-limited account (429s) will
+    # otherwise exhaust the client's default two retries and leave metric cells
+    # blank. More retries let the SDK back off and wait it out.
     client = AsyncOpenAI(
         api_key=settings.require_openrouter_key(),
         base_url=settings.openrouter_base_url,
+        max_retries=6,
     )
     llm = llm_factory(RAG_JUDGE_MODEL, provider="openai", client=client)
     embeddings = embedding_factory(
@@ -100,19 +130,22 @@ def _build_metrics() -> tuple:
 
     return (
         Faithfulness(llm=llm),
-        AnswerRelevancy(llm=llm, embeddings=embeddings),
+        # strictness=1: OpenRouter's Claude returns a single generation anyway,
+        # so asking for the default three only adds cost.
+        AnswerRelevancy(llm=llm, embeddings=embeddings, strictness=1),
         ContextPrecisionWithReference(llm=llm),
         ContextRecall(llm=llm),
     )
 
 
 async def _answer_and_contexts(
-    agent: Agent, project: AssistantConfig, case: RagEvalCase
+    project: AssistantConfig, case: RagEvalCase
 ) -> tuple[str, list[str]]:
-    """Answer one case through the agent, and capture the chunks it retrieved.
+    """Retrieve once, then answer from exactly those chunks.
 
-    Retrieval runs a second time here to get the chunks at full length: the
-    agent only emits them truncated, for the UI to cite.
+    Using the same retrieval for the answer and for the scored contexts is both
+    cheaper (one search, no tool discovery) and more correct: faithfulness then
+    grades the answer against the context it was actually generated from.
     """
     request = ChatRequest(
         project=project, message=case.question, history=case.history
@@ -122,9 +155,9 @@ async def _answer_and_contexts(
 
     answer = "".join(
         [
-            event.text
-            async for event in agent.run(request)
-            if isinstance(event, TokenEvent)
+            item
+            async for item in stream_completion(request, _NO_TOOLS, to_context(hits))
+            if isinstance(item, str)
         ]
     )
     return answer, contexts
@@ -147,17 +180,13 @@ async def _score(metric, /, **kwargs) -> float | None:
     return None
 
 
-async def evaluate_rag_dataset(
-    request: RagEvalRequest, agent: Agent
-) -> RagReport:
+async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
     """Answer every case, then score its retrieval with RAGAS."""
     faithfulness, answer_relevancy, precision, recall = _build_metrics()
 
     results: list[RagCaseResult] = []
     for case in request.cases:
-        answer, contexts = await _answer_and_contexts(
-            agent, request.project, case
-        )
+        answer, contexts = await _answer_and_contexts(request.project, case)
         results.append(
             RagCaseResult(
                 id=case.id,

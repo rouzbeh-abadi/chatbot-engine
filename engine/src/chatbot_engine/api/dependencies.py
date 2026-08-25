@@ -70,9 +70,8 @@ def get_judge() -> Judge | None:
 
 @lru_cache
 def get_rag_evaluator() -> RagEvaluator | None:
-    """Scores retrieval with RAGAS. Needs the agent, to answer each case first."""
-    agent = get_agent()
-    if agent is None:
+    """Scores retrieval with RAGAS: retrieve, answer from those chunks, grade."""
+    if get_agent() is None:
         return None
 
     async def evaluate(request: RagEvalRequest) -> RagReport:
@@ -80,7 +79,7 @@ def get_rag_evaluator() -> RagEvaluator | None:
         # in unless a RAG evaluation is actually requested.
         from chatbot_engine.Eval.rag_evaluation import evaluate_rag_dataset
 
-        return await evaluate_rag_dataset(request, agent=agent)
+        return await evaluate_rag_dataset(request)
 
     return evaluate
 
