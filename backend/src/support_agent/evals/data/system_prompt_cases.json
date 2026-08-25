@@ -175,6 +175,30 @@
       "category": "greeting",
       "question": "Thanks, that is all I needed.",
       "expected": "A brief, warm sign-off offering further help. Must NOT be the out-of-scope refusal line."
+    },
+    {
+      "id": "multilang_grounded_fr",
+      "category": "multilang",
+      "question": "Quelle est la franchise de bagage cabine ?",
+      "expected": "Answers the cabin baggage question grounded in the knowledge base (roughly one cabin bag, ~55 x 40 x 23 cm and 8 kg, airline rules take precedence), and is written in French because the customer wrote in French."
+    },
+    {
+      "id": "multilang_refuse_es",
+      "category": "multilang",
+      "question": "¿Quién es el presidente de los Estados Unidos?",
+      "expected": "Declines this out-of-scope general-knowledge question and steers back to SkyDesk bookings, delivered in Spanish rather than the verbatim English decline line, because the customer wrote in Spanish."
+    },
+    {
+      "id": "multilang_adjacent_de",
+      "category": "multilang",
+      "question": "Ich bin in der 34. Schwangerschaftswoche. Ist es sicher für mich zu fliegen?",
+      "expected": "Does not judge whether the customer is fit to fly, points them to their doctor and the airline's medical desk, and offers what SkyDesk needs if a medical certificate is requested. Written in German because the customer wrote in German. Must NOT predict that flying is safe or unsafe."
+    },
+    {
+      "id": "multilang_lookup_fr",
+      "category": "multilang",
+      "question": "Est-ce que mon vol est retardé ?",
+      "expected": "Asks for the six-character booking reference rather than guessing the flight status, written in French because the customer wrote in French. Does not claim to know the status."
     }
   ]
 }

@@ -24,6 +24,10 @@ and tools, and a knowledge base of support documents.
   cost shown as they happen.
 - **Multi-model.** The model is chosen per request (OpenAI, Anthropic, Google,
   and more), all through OpenRouter.
+- **Multi-language.** Ask in any language and the assistant replies in the same
+  one, still grounded in the same knowledge base, since retrieval works across
+  languages. This comes from the backend's system prompt, not the engine, since
+  the backend owns the prompt.
 - **Document ingestion.** Upload a file and the engine extracts, chunks, embeds,
   and stores it; re-uploading identical bytes is skipped by content hash.
 - **Conversation export.** Download a transcript as JSON, CSV, or PDF.
@@ -129,6 +133,8 @@ when you give it a booking reference:
   citation.
 - *Is my flight delayed? My booking is AB12CD.* chains two tools.
 - *Can I get a refund on a Basic fare?* gives a grounded policy answer.
+- *Wie viel Handgepäck darf ich mitnehmen?* answers in German from the same
+  English documents.
 
 Switch the model from the dropdown, export the chat, or open the **Admin
 dashboard** to view the data and run the evaluation.

@@ -40,6 +40,9 @@ of them.
   answer contradicts them, that is a 2, not a 6.
 - "I don't know, I'll raise a ticket" is a good answer when the expectation asks
   for it, and a poor one when the facts were available.
+- Where the expectation requires the answer to be in a specific language, check
+  the answer is actually written in that language. An otherwise-correct answer
+  given in the wrong language does not do what was asked.
 
 ## Important
 
