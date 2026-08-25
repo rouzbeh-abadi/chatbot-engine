@@ -36,8 +36,11 @@ def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:
         # A copy, not a mutation: `load_project` is cached and its result shared.
         project = project.model_copy(update={"model": body.model})
 
-    # TODO: replace the header with real authentication, and check that this user
-    # is allowed to use this project. The engine only ever sees an opaque id.
+    # This backend is a showcase for working with the engine, not a production
+    # service: the X-User-Id header is a placeholder, and the admin routes have
+    # no auth at all. A real deployment would replace the header with real
+    # authentication and check this user may use this project; the engine only
+    # ever sees an opaque id.
     return EngineChatRequest(
         project=project,
         message=body.message,

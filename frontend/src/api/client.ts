@@ -7,7 +7,15 @@
  * split in half, and checking the status *before* consuming the body.
  */
 
-import type { ChatEvent, ChatRequest, DocumentRecord } from "./types";
+import type {
+  BookingRow,
+  ChatEvent,
+  ChatRequest,
+  DocumentRecord,
+  EvalCaseInfo,
+  EvalRunResult,
+  TicketRow,
+} from "./types";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
@@ -129,9 +137,48 @@ export async function listDocuments(): Promise<DocumentRecord[]> {
 
 /** The models the backend allows the UI to pick, the default first. */
 export async function listModels(): Promise<string[]> {
-  const response = await fetch(`${BASE}/models`);
+  return getJson<string[]>("/models");
+}
+
+/** GET a JSON endpoint, turning a non-2xx into an `ApiError`. */
+async function getJson<T>(path: string): Promise<T> {
+  const response = await fetch(`${BASE}${path}`);
   if (!response.ok) {
     throw new ApiError(response.status, await detailOf(response));
   }
-  return (await response.json()) as string[];
+  return (await response.json()) as T;
+}
+
+/** Every booking in the database (admin). */
+export async function listBookings(): Promise<BookingRow[]> {
+  return getJson<BookingRow[]>("/admin/bookings");
+}
+
+/** Every support ticket (admin). */
+export async function listTickets(): Promise<TicketRow[]> {
+  return getJson<TicketRow[]>("/admin/tickets");
+}
+
+/** The dataset's cases, for the run selector. */
+export async function listEvalCases(): Promise<EvalCaseInfo[]> {
+  return getJson<EvalCaseInfo[]>("/admin/eval/system-prompt/cases");
+}
+
+/**
+ * Run the system-prompt evaluation and return the graded run.
+ *
+ * This makes one model call per case, so it can take a while; the caller should
+ * show a progress state. `only` runs a single category or one case.
+ */
+export async function runSystemPromptEval(
+  only?: string,
+): Promise<EvalRunResult> {
+  const query = only ? `?only=${encodeURIComponent(only)}` : "";
+  const response = await fetch(`${BASE}/admin/eval/system-prompt${query}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await detailOf(response));
+  }
+  return (await response.json()) as EvalRunResult;
 }

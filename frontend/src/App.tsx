@@ -4,6 +4,7 @@ import { ApiError, streamChat } from "./api/client";
 import { Composer } from "./components/Composer";
 import { Knowledge } from "./components/Knowledge";
 import { Message, type ChatMessage } from "./components/Message";
+import { Admin } from "./components/Admin";
 import { ExportMenu } from "./components/ExportMenu";
 import type { SessionUsage } from "./components/Knowledge";
 import { exportConversation } from "./export";
@@ -68,6 +69,7 @@ export default function App() {
   /** Null until someone picks -- the YAML's own model applies until then, and
       whatever is chosen applies to every following turn. */
   const [model, setModel] = useState<string | null>(null);
+  const [adminOpen, setAdminOpen] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -196,10 +198,19 @@ export default function App() {
       <header className="header">
         <div className="header__row">
           <h1 className="header__title">SkyDesk Support</h1>
-          <ExportMenu
-            onExport={(format) => exportConversation(messages, format)}
-            disabled={messages.length === 0}
-          />
+          <div className="header__actions">
+            <button
+              type="button"
+              className="btn btn--ghost"
+              onClick={() => setAdminOpen(true)}
+            >
+              Admin dashboard
+            </button>
+            <ExportMenu
+              onExport={(format) => exportConversation(messages, format)}
+              disabled={messages.length === 0}
+            />
+          </div>
         </div>
         <p className="header__sub">
           Ask about baggage, refunds, check-in, or a booking reference such as
@@ -237,6 +248,8 @@ export default function App() {
           busy={busy}
         />
       </footer>
+
+      {adminOpen && <Admin onClose={() => setAdminOpen(false)} />}
     </div>
   );
 }

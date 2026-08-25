@@ -226,3 +226,26 @@ def test_oversized_upload_is_413_and_never_reaches_the_engine(
 
     assert response.status_code == 413
     assert engine.ingested == []
+
+
+# --- admin dashboard ---------------------------------------------------------
+
+
+def test_admin_eval_runs_the_system_prompt_dataset(client: TestClient) -> None:
+    response = client.post("/admin/eval/system-prompt?only=greeting")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "system_prompt"
+    assert body["model"] == "fake/judge"
+    # The greeting category has cases; all scored 10 by the fake judge.
+    assert body["total"] >= 1
+    assert body["passed"] == body["total"]
+    assert body["overall"] == 10.0
+    assert all(row["category"] == "greeting" for row in body["rows"])
+
+
+def test_admin_eval_unknown_filter_returns_empty(client: TestClient) -> None:
+    body = client.post("/admin/eval/system-prompt?only=does-not-exist").json()
+    assert body["total"] == 0
+    assert body["overall"] == 0.0

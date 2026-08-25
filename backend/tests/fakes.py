@@ -89,6 +89,18 @@ class FakeEngine:
             raise self.raises
         return []
 
+    async def judge(self, *, project, judge_prompt, cases, timeout_s=1800.0):
+        """Grade every case a perfect 10, echoing the questions back."""
+        from support_agent.evals.models import JudgeReport, Verdict
+
+        return JudgeReport(
+            model="fake/judge",
+            verdicts=[
+                Verdict(id=case.id, score=10, reason="ok", answer="answer")
+                for case in cases
+            ],
+        )
+
     async def delete_document(self, *, project_id: str, doc_id: str) -> DeleteResult:
         if self.raises is not None:
             raise self.raises

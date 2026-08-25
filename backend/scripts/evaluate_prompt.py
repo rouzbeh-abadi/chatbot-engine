@@ -21,6 +21,7 @@ import argparse
 import asyncio
 import json
 import sys
+from pathlib import Path
 
 import httpx
 
@@ -28,12 +29,13 @@ from support_agent.assistant import load_project
 from support_agent.engine import get_engine_client
 from support_agent.engine_client import EngineError
 from support_agent.evals import load_dataset, load_judge_prompt
-from support_agent.evals.dataset import EVALS_DIR
 from support_agent.evals.models import EvalCase, JudgeReport
 
 BASE_URL = "http://localhost:8000"
 PASS_MARK = 8
-LAST_RUN = EVALS_DIR / "last_run.json"
+# A runtime artifact, kept beside the repo's other eval files rather than inside
+# the installed package (which is read-only once shipped).
+LAST_RUN = Path(__file__).resolve().parents[1] / "evals" / "last_run.json"
 
 
 def to_rows(cases: list[EvalCase], judged: JudgeReport) -> list[dict[str, object]]:

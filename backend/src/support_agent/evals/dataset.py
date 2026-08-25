@@ -7,7 +7,11 @@ from pathlib import Path
 
 from support_agent.evals.models import EvalDataset
 
-EVALS_DIR = Path(__file__).parents[3] / "evals"
+# The dataset and rubric are packaged with the code (they travel with the
+# assistant they describe), so they resolve the same in a source checkout and in
+# an installed image -- unlike a path outside the package, which is missing once
+# the wheel is built.
+EVALS_DIR = Path(__file__).parent / "data"
 DEFAULT_DATASET = "system_prompt_cases.json"
 JUDGE_PROMPT = "judge_prompt.md"
 

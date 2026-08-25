@@ -105,3 +105,54 @@ export interface ToolCall {
   duration_ms?: number | null;
   error?: string | null;
 }
+
+/** A booking row for the admin dashboard. */
+export interface BookingRow {
+  booking_reference: string;
+  passenger_name: string;
+  origin: string;
+  destination: string;
+  travel_date: string;
+  flight_number: string;
+  fare_type: string;
+  status: string;
+  checked_baggage: string | null;
+}
+
+/** A support-ticket row for the admin dashboard. */
+export interface TicketRow {
+  id: number;
+  booking_reference: string;
+  category: string;
+  status: string;
+  summary: string;
+  created_at: string;
+}
+
+/** One eval case, for the run selector. */
+export interface EvalCaseInfo {
+  id: string;
+  category: string;
+  question: string;
+}
+
+/** One graded eval case. */
+export interface EvalRow {
+  id: string;
+  category: string;
+  question: string;
+  score: number | null;
+  reason: string;
+  answer: string;
+}
+
+/** The result of running an evaluation from the dashboard. */
+export interface EvalRunResult {
+  kind: string;
+  model: string | null;
+  overall: number;
+  passed: number;
+  total: number;
+  pass_mark: number;
+  rows: EvalRow[];
+}
