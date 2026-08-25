@@ -1,149 +1,170 @@
-# chatbot-engine
+# A RAG chatbot engine with tool calling
 
-A standalone RAG and MCP tool-calling service.
+A reusable engine for building domain-specific chatbots. It does the AI:
+retrieval from a knowledge base, prompting, streaming the answer, and the loop
+that calls tools and feeds their results back to the model. It knows nothing
+about any particular product.
 
-The engine answers questions from a knowledge base, calls tools when it needs live
-data, and streams the answer back token by token as it is produced. It handles the
-retrieval, the prompt, the model call, and the loop that runs tools and feeds their
-results back to the model.
+What makes a chatbot *yours* (the system prompt, the model, the tools, the
+documents) is supplied by a backend you own, and arrives with **every request**.
+So the engine holds no state to migrate, a prompt change takes effect on the next
+request, and one engine can power many different assistants at once.
 
-What it deliberately does not handle: who your users are, how they log in, what
-your product is called, or what any of your data means. It has no database of
-yours and no configuration of yours.
+The repository includes a **complete example**, a travel-support assistant, to
+show the engine working end to end: a React UI, a backend with its own database
+and tools, and a knowledge base of support documents.
 
-Instead, everything specific to an application arrives **with each request** — the
-system prompt, the model, how many chunks to retrieve, and which tools may be
-used. That has three consequences worth knowing up front:
+## What it does
 
-- the engine holds no state you would ever have to migrate;
-- you change a prompt in your own config and the next request uses it, with no
-  engine restart and no deployment;
-- one engine can serve several applications at once, each sending its own
-  configuration.
+- **Retrieval-augmented answers.** Documents are chunked and embedded, then
+  searched per question.
+- **Tool calling over MCP.** The model calls the backend's own tools when it
+  needs live data; the engine only ever sees the tools a request allowlists.
+- **Streaming.** The answer appears token by token, with tool activity and token
+  cost shown as they happen.
+- **Multi-model.** The model is chosen per request (OpenAI, Anthropic, Google,
+  and more), all through OpenRouter.
+- **Document ingestion.** Upload a file and the engine extracts, chunks, embeds,
+  and stores it; re-uploading identical bytes is skipped by content hash.
+- **Conversation export.** Download a transcript as JSON, CSV, or PDF.
+- **Admin dashboard.** Inspect the application data and run the evaluation from
+  the browser.
+- **Evaluation.** An LLM-as-judge harness grades the assistant's behaviour
+  against a rubric.
+- **Guardrails.** A tool allowlist, prompt-injection handling, and untrusted
+  document and tool text treated as data, never as instructions.
 
-It runs as its own HTTP service on port `8100`. A chat turn comes back as a stream
-of typed events — retrieved sources first, then tokens as they are generated, tool
-progress as tools run, and finally token usage and cost.
+## Architecture
 
-```bash
-uv run uvicorn chatbot_engine.app:app --port 8100 --reload
-```
+Three services, each owning one thing. The engine is the fixed AI service; the
+frontend and backend can be any stack, because everything crosses a plain
+HTTP + JSON boundary.
 
-Interactive API docs: http://localhost:8100/docs
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/architecture-dark.png" />
+  <img alt="Who owns what: a generic engine, a product-specific backend, and a frontend that can be any stack" src="docs/images/architecture.png" />
+</picture>
 
-## Using it from a backend
+- **Engine** (`:8100`) is the AI. It owns retrieval, prompt construction, the
+  model call, and the tool loop. It holds no product configuration, since that
+  arrives with every request. This is the reusable part.
+- **Backend** (`:8000`) is the product. It owns users, the assistant
+  configuration (prompt, model, tools), the documents API, and the domain tools.
+  It owns no AI logic, and can be any language. *(The example is a travel-support
+  app in FastAPI.)*
+- **Frontend** (`:5173`) is the chat interface. It streams the answer, shows
+  sources and cost, and talks only to the backend. Any UI framework.
 
-The engine is reached over plain HTTP with JSON, so **it works with a backend
-written in any language**. Python, TypeScript, Go, Ruby, Java, PHP — if it can make
-an HTTP request and read a response line by line, it can drive the engine. There is
-no SDK to install and no library to depend on.
+> Connecting a backend to the engine (the endpoints, the request shape, reading
+> the stream, exposing your tools over MCP) is written up separately in
+> **[docs/backend-integration.md](docs/backend-integration.md)**.
 
-Your backend keeps the parts that are genuinely yours:
+## How a chat turn flows
 
-| Your backend owns | Why it cannot live in the engine |
-| --- | --- |
-| Authentication and user identity | The engine has no idea who your users are |
-| The assistant's configuration | It is your product's voice, not the engine's |
-| Your domain tools | They read your data, with your user's permissions |
-| The browser-facing transport | Only you know a browser is on the other end |
+A request runs right to left (browser to backend to engine); a stream of events
+runs back to the screen. The engine reaches down to the vector store and the
+model, and sideways over MCP only when the model needs live data.
 
-The tools are the one place the engine calls back to you. It connects to a tool
-server that you run, over MCP, and can only use the tool names you explicitly
-allow. A tool that looks up a booking has to execute where the booking data and
-its permissions are — which is your backend, not the engine.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/chat-workflow-dark.png" />
+  <img alt="One chat turn: request over HTTP to the engine, which retrieves, calls the model, and calls a tool over MCP when needed, then streams events back" src="docs/images/chat-workflow.png" />
+</picture>
 
-```text
-Your backend      →  HTTP   →  chatbot engine
-chatbot engine    →  MCP    →  your tool server
-```
+1. **Frontend to Backend.** The browser sends the message.
+2. **Backend to Engine.** The backend loads its config and calls the engine.
+3. **Engine to vector store and model.** Retrieve the nearest chunks, then stream
+   the answer from the model.
+4. **Engine to MCP to database.** If the model needs live data, it calls the
+   backend's tool server, which queries the database.
+5. **Engine to Backend.** Events stream back (sources, tokens, usage, done).
+6. **Backend to Frontend.** Reframed as server-sent events; the UI paints tokens
+   as they arrive.
 
-Everything a backend needs in order to do this — the endpoints, the exact request
-shape, how to read the streamed answer, how to upload documents, how failures are
-reported, and how to expose your own tools over MCP — is written up in full here:
+## Running it
 
-**→ [Connecting a backend to the chatbot engine](docs/backend-integration.md)**
+You need an [OpenRouter API key](https://openrouter.ai/keys) and either Docker
+(easiest) or Python 3.13 plus Node plus a local Postgres.
 
-It is written for someone who has never seen the engine before, and it includes a
-complete worked example in `curl` and in Python.
-
-### The example backend in this repository
-
-`backend/` is a working reference: a travel-support assistant for a fictional
-airline, with a Postgres database, three domain tools served over MCP, and a
-knowledge base of support documents. It exists so the engine has something
-realistic to be tested against.
-
-It happens to be written in Python with FastAPI, but nothing about that is
-required — it is one example of the integration, not the only shape it can take.
-
-```text
-Frontend (React + TS)      :5173
-   ↓  HTTP + SSE
-Example backend        :8000    users, config, documents, domain tools
-   ↓  HTTP + NDJSON
-Chatbot engine         :8100    retrieval, prompts, model, tool loop
-   ↓  MCP
-Backend tool server    :8200    bookings, flights, support tickets
-   ↓
-Postgres               :5432
-```
-
-## Running the whole thing
+### One-time setup
 
 ```bash
-make setup      # once: install dependencies and create .env
-make dev        # engine and example backend together
-make frontend   # the React UI on http://localhost:5173
-make smoke      # in another terminal
+make setup          # install dependencies and create .env
 ```
 
-`make` on its own lists every command. `make up` brings up the full stack in
-Docker, including Postgres and the tool server.
+Then put your key in `.env`:
 
-## Layout
-
-```text
-engine/     the chatbot engine service     -- see engine/README.md
-backend/    the example backend            -- see backend/README.md
-frontend/   React + TypeScript chat UI      -- see frontend/README.md
-docs/       the integration guide, and the project brief
-tests/      the contract-parity test, the one place both services meet
+```
+ENGINE_OPENROUTER_API_KEY=sk-or-...
 ```
 
-## Where things stand
-
-The engine's HTTP surface, event contract, document extraction, chunking, storage
-and MCP client are written. The example backend is complete: it serves its API,
-owns its database, and exposes three working tools.
-
-Document ingestion is complete. `PUT /documents` extracts a file's text, splits it
-into overlapping chunks, embeds them into a local Chroma store and records the
-result as `indexed`; `GET /documents` lists what the engine holds and `DELETE`
-removes the chunks, the original file and the record together. Re-uploading
-identical bytes answers `unchanged` and does no work at all, and the original
-bytes are kept, so changing the chunk size or embedding model is an internal
-re-index rather than a re-upload for every caller. All of it survives a restart
-under `var/`.
-
-The frontend is built too: a React and TypeScript chat interface that streams
-tokens, renders Markdown answers, shows retrieved sources, shows tool calls as
-they run, and reports token cost.
-
-Still to build in the engine: retrieval, prompt construction, and the agent run
-loop — everything behind `POST /chat`. The pieces it needs are in place: the vector
-store is populated, `deps.get_model_client()` reaches the provider, and the MCP
-tool client works. Until an agent is registered in
-`engine/src/chatbot_engine/api/deps.py`, `POST /chat` answers `501` naming the
-exact function to fill in — and the UI shows that state rather than looking broken.
-
-To see what is live:
+### The whole stack, in Docker
 
 ```bash
-curl localhost:8100/health/ready
+make up             # frontend, backend, engine, tools, and Postgres
+make migrate        # create the tables
+make seed-db        # load the example data
+make seed           # load the knowledge base
 ```
+
+Open **http://localhost:5173**.
+
+### Or run it locally for development
+
+```bash
+make db && make migrate && make seed-db   # Postgres in Docker, seeded
+make dev            # engine (:8100) and backend (:8000), with reload
+make tools          # the MCP tool server (:8200)
+make frontend       # the UI (:5173)
+make seed           # load the knowledge base
+```
+
+Run `make` on its own to see every command.
+
+## Trying the example
+
+The included travel-support app answers from its knowledge base, or calls a tool
+when you give it a booking reference:
+
+- *What is the cabin baggage allowance?* answers from the documents, with a
+  citation.
+- *Is my flight delayed? My booking is AB12CD.* chains two tools.
+- *Can I get a refund on a Basic fare?* gives a grounded policy answer.
+
+Switch the model from the dropdown, export the chat, or open the **Admin
+dashboard** to view the data and run the evaluation.
+
+## Evaluation
+
+The assistant's behaviour is graded against a rubric by a judge model: does it
+refuse what it should, stay grounded, and never invent a policy?
+
+```bash
+make eval                       # score the system prompt (needs the stack running)
+make eval ARGS=--show           # re-read the last run, no model calls
+```
+
+Or run it from the Admin dashboard, choosing all cases, one category, or a single
+case.
+
+## Project layout
+
+```text
+engine/     the standalone AI engine, the reusable part    -- see engine/README.md
+backend/    the example product backend                    -- see backend/README.md
+frontend/   the chat UI                                     -- see frontend/README.md
+docs/       guides and diagrams
+tests/      the contract-parity test, where the two services meet
+```
+
+## Documentation
+
+- **[docs/backend-integration.md](docs/backend-integration.md)** shows how to
+  connect a backend to the engine.
+- **[engine/README.md](engine/README.md)**, **[backend/README.md](backend/README.md)**,
+  and **[frontend/README.md](frontend/README.md)** cover each service in detail.
 
 ## Tests
 
 ```bash
-make test
+make test           # Python (engine + backend) and the frontend suite
 ```
