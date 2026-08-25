@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import SourceRef
-from chatbot_engine.rag.vector_store import open_vector_store
+from chatbot_engine.rag.vector_store import load_vector_store
 from langchain_core.documents import Document
 
 Hit = tuple[Document, float]
@@ -15,8 +15,11 @@ async def retrieve(request: ChatRequest) -> list[Hit]:
 
     The `project_id` filter is not optional: without it one project's documents
     would answer another project's questions, with no error to notice.
+
+    Uses `load_vector_store`, so an unseeded engine raises instead of answering
+    from an empty store.
     """
-    return await open_vector_store().asimilarity_search_with_score(
+    return await load_vector_store().asimilarity_search_with_score(
         request.message,
         k=request.project.top_k,
         filter={"project_id": request.project.project_id},

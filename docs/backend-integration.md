@@ -132,7 +132,7 @@ configuration, so you send the whole assistant definition every time.**
 | `project` | yes | The whole assistant: prompt, model, retrieval settings, tools |
 | `message` | yes | What the user just said. Must not be empty |
 | `session_id` | no | Your conversation id. The engine passes it through |
-| `user_id` | no | Opaque. Forwarded to your MCP tools so *they* can authorise |
+| `user_id` | no | Opaque. Sent to your MCP server as an `X-User-Id` header so *it* can authorise |
 | `history` | no | Earlier turns, oldest first |
 
 ### Why the whole config, every time
