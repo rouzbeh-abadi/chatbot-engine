@@ -9,7 +9,6 @@ requires-python = ">=3.13"
 dependencies = [
     "fastapi[standard]>=0.141.1",
     "langchain-chroma",
-    "langchain-chroma",
     "langchain-core",
     "langchain-openai",
     "langchain-text-splitters",
@@ -29,6 +28,13 @@ packages = ["src/chatbot_engine"]
 [project.optional-dependencies]
 chroma = [
     "chromadb>=1.0",
+]
+# RAG evaluation with RAGAS. Heavy and eval-only, so kept out of the base
+# install and imported lazily; installed in the image so the dashboard can run
+# it. `langchain-community` is pinned in because ragas 0.4.3 imports from it.
+eval = [
+    "ragas>=0.4,<0.5",
+    "langchain-community>=0.4",
 ]
 
 [dependency-groups]

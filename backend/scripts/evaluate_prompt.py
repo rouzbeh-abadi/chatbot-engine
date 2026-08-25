@@ -28,8 +28,8 @@ import httpx
 from support_agent.assistant import load_project
 from support_agent.engine import get_engine_client
 from support_agent.engine_client import EngineError
-from support_agent.evals import load_dataset, load_judge_prompt
-from support_agent.evals.models import EvalCase, JudgeReport
+from support_agent.evals import load_judge_cases, load_judge_prompt
+from support_agent.evals.models import JudgeReport
 
 BASE_URL = "http://localhost:8000"
 PASS_MARK = 8
@@ -38,25 +38,9 @@ PASS_MARK = 8
 LAST_RUN = Path(__file__).resolve().parents[1] / "evals" / "last_run.json"
 
 
-def to_rows(cases: list[EvalCase], judged: JudgeReport) -> list[dict[str, object]]:
-    """One flat row per case, which is all the report and the file both need."""
-    by_id = {verdict.id: verdict for verdict in judged.verdicts}
-    rows: list[dict[str, object]] = []
-
-    for case in cases:
-        verdict = by_id.get(case.id)
-        rows.append(
-            {
-                "id": case.id,
-                "category": case.category,
-                "question": case.question,
-                "score": None if verdict is None else verdict.score,
-                "reason": "not judged" if verdict is None else verdict.reason,
-                "answer": "" if verdict is None else verdict.answer,
-            }
-        )
-
-    return rows
+def to_rows(judged: JudgeReport) -> list[dict[str, object]]:
+    """The verdicts as flat rows; the engine already made them self-contained."""
+    return [verdict.model_dump() for verdict in judged.verdicts]
 
 
 def save(rows: list[dict[str, object]], model: str | None) -> None:
@@ -141,22 +125,21 @@ async def main() -> int:
     if args.show:
         return show_last_run()
 
-    dataset = load_dataset(args.dataset)
     cases = [
         case
-        for case in dataset.cases
-        if args.only in (None, case.category, case.id)
+        for case in load_judge_cases(args.dataset)
+        if args.only in (None, case["category"], case["id"])
     ]
     if not cases:
         print(f"nothing matches {args.only!r}", file=sys.stderr)
         return 1
 
-    print(f"{dataset.name}: {len(cases)} cases")
+    print(f"{len(cases)} cases")
 
     if args.dry_run:
         for case in cases:
-            print(f"\n  {case.id} ({case.category})\n    Q: {case.question}"
-                  f"\n    expected: {case.expected}")
+            print(f"\n  {case['id']} ({case['category']})\n    Q: {case['question']}"
+                  f"\n    expected: {case['expected']}")
         return 0
 
     print("asking and grading -- this makes one model call per case\n")
@@ -175,7 +158,7 @@ async def main() -> int:
         )
         return 1
 
-    rows = to_rows(cases, judged)
+    rows = to_rows(judged)
     save(rows, judged.model)
     print(f"\nsaved to {LAST_RUN} -- re-read it with `make eval ARGS=--show`")
 

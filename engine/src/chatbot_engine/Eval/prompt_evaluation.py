@@ -84,17 +84,33 @@ def build_judge_report(
     graded: JudgeVerdicts,
     model: str,
 ) -> JudgeReport:
-    """Attach our own record of what was said to each verdict."""
+    """Join each case with its score and answer into a self-contained report.
+
+    One verdict per case, in dataset order, so a case the judge skipped shows as
+    `not judged` rather than vanishing. `overall` is the mean of the scores that
+    came back.
+    """
     said = dict(zip([case.id for case in cases], answers))
+    by_id = {verdict.id: verdict for verdict in graded.verdicts}
 
-    verdicts: list[Verdict] = [
-        # Whatever the judge put in `answer` is discarded: it was asked for a
-        # score, not for a copy of the answer.
-        verdict.model_copy(update={"answer": said.get(verdict.id, "")})
-        for verdict in graded.verdicts
-    ]
+    verdicts: list[Verdict] = []
+    for case in cases:
+        graded_verdict = by_id.get(case.id)
+        verdicts.append(
+            Verdict(
+                id=case.id,
+                category=case.category,
+                question=case.question,
+                score=graded_verdict.score if graded_verdict else None,
+                reason=graded_verdict.reason if graded_verdict else "not judged",
+                answer=said.get(case.id, ""),
+            )
+        )
 
-    return JudgeReport(verdicts=verdicts, model=model)
+    scored = [v.score for v in verdicts if v.score is not None]
+    overall = round(sum(scored) / len(scored), 2) if scored else None
+
+    return JudgeReport(verdicts=verdicts, overall=overall, model=model)
 
 
 async def evaluate_dataset(

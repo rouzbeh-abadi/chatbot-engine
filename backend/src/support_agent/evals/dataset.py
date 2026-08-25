@@ -1,24 +1,39 @@
-"""Load the dataset, and lay a finished run out for the judge."""
+"""Load the eval datasets and the judge rubric.
+
+The datasets are read as raw case dicts and forwarded to the engine unchanged:
+the engine owns the case shapes and validates on receipt, so the backend only
+reads its files and passes them on.
+"""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
-from support_agent.evals.models import EvalDataset
-
-# The dataset and rubric are packaged with the code (they travel with the
+# The datasets and rubric are packaged with the code (they travel with the
 # assistant they describe), so they resolve the same in a source checkout and in
 # an installed image -- unlike a path outside the package, which is missing once
 # the wheel is built.
 EVALS_DIR = Path(__file__).parent / "data"
 DEFAULT_DATASET = "system_prompt_cases.json"
+DEFAULT_RAG_DATASET = "retrieval_cases.json"
 JUDGE_PROMPT = "judge_prompt.md"
 
 
-def load_dataset(name: str = DEFAULT_DATASET) -> EvalDataset:
-    """Read and validate one dataset file."""
-    return EvalDataset.model_validate(json.loads(_read(name)))
+def _cases(name: str) -> list[dict[str, Any]]:
+    """A dataset's cases as raw dicts, to forward to the engine unchanged."""
+    return json.loads(_read(name))["cases"]
+
+
+def load_judge_cases(name: str = DEFAULT_DATASET) -> list[dict[str, Any]]:
+    """The system-prompt cases."""
+    return _cases(name)
+
+
+def load_rag_cases(name: str = DEFAULT_RAG_DATASET) -> list[dict[str, Any]]:
+    """The retrieval cases."""
+    return _cases(name)
 
 
 def _read(name: str) -> str:

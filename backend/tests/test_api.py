@@ -248,4 +248,5 @@ def test_admin_eval_runs_the_system_prompt_dataset(client: TestClient) -> None:
 def test_admin_eval_unknown_filter_returns_empty(client: TestClient) -> None:
     body = client.post("/admin/eval/system-prompt?only=does-not-exist").json()
     assert body["total"] == 0
-    assert body["overall"] == 0.0
+    # Nothing graded, so there is no average to report.
+    assert body["overall"] is None

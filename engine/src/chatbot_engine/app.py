@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from chatbot_engine import __version__
-from chatbot_engine.api import chat, documents, health, judge
+from chatbot_engine.api import chat, documents, eval_rag, health, judge
 from chatbot_engine.api.dependencies import require_api_key
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
 from chatbot_engine.errors import (
@@ -77,6 +77,7 @@ def create_app() -> FastAPI:
     protected.include_router(chat.router)
     protected.include_router(documents.router)
     protected.include_router(judge.router)
+    protected.include_router(eval_rag.router)
     app.include_router(protected)
 
     return app

@@ -14,6 +14,7 @@ import type {
   DocumentRecord,
   EvalCaseInfo,
   EvalRunResult,
+  RagReport,
   TicketRow,
 } from "./types";
 
@@ -181,4 +182,27 @@ export async function runSystemPromptEval(
     throw new ApiError(response.status, await detailOf(response));
   }
   return (await response.json()) as EvalRunResult;
+}
+
+/** The retrieval cases, for the RAG run selector. */
+export async function listRagCases(): Promise<EvalCaseInfo[]> {
+  return getJson<EvalCaseInfo[]>("/admin/eval/rag/cases");
+}
+
+/**
+ * Run the RAG evaluation and return the scored run.
+ *
+ * Each case is answered and then graded by several RAGAS metric calls, so this
+ * is slower than the system-prompt eval; the caller should show a progress
+ * state. `only` runs a single category or one case.
+ */
+export async function runRagEval(only?: string): Promise<RagReport> {
+  const query = only ? `?only=${encodeURIComponent(only)}` : "";
+  const response = await fetch(`${BASE}/admin/eval/rag${query}`, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, await detailOf(response));
+  }
+  return (await response.json()) as RagReport;
 }

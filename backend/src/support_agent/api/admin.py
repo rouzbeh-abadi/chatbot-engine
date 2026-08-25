@@ -21,7 +21,13 @@ from support_agent.database.connection import get_session_factory
 from support_agent.database.models import Booking, SupportTicket
 from support_agent.engine import EngineDep
 from support_agent.engine_client.models import AssistantConfig
-from support_agent.evals import load_dataset, load_judge_prompt
+from support_agent.evals import (
+    RagReport,
+    Verdict,
+    load_judge_cases,
+    load_judge_prompt,
+    load_rag_cases,
+)
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -112,34 +118,29 @@ class EvalCaseInfo(BaseModel):
 async def list_eval_cases() -> list[EvalCaseInfo]:
     """The dataset's cases, so the UI can offer 'all', a category, or one case."""
     return [
-        EvalCaseInfo(id=case.id, category=case.category, question=case.question)
-        for case in load_dataset().cases
+        EvalCaseInfo(
+            id=case["id"], category=case["category"], question=case["question"]
+        )
+        for case in load_judge_cases()
     ]
 
 
-class EvalRow(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    category: str
-    question: str
-    score: int | None
-    reason: str
-    answer: str
-
-
 class EvalRunResult(BaseModel):
-    """The graded run plus a summary, for the dashboard to render."""
+    """The engine's graded run plus this app's pass mark, for the dashboard.
+
+    The engine answers, grades, and averages; the only thing added here is the
+    pass mark -- the product's own bar for what counts as a good enough answer.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     kind: str = "system_prompt"
     model: str | None = None
-    overall: float
+    overall: float | None = None
     passed: int
     total: int
     pass_mark: int = PASS_MARK
-    rows: list[EvalRow]
+    rows: list[Verdict]
 
 
 @router.post("/eval/system-prompt")
@@ -150,15 +151,17 @@ async def run_system_prompt_eval(
         description="Run just one category or one case id. Omit to run them all.",
     ),
 ) -> EvalRunResult:
-    """Answer and grade the system-prompt dataset, then summarise the scores.
+    """Answer and grade the system-prompt dataset, then apply the pass mark.
 
-    This makes one model call per case, so a full run takes a while. `only` runs
-    a single category (e.g. `refuse_advice`) for a quick check.
+    The backend only picks the cases and forwards them; the engine answers,
+    grades, and averages. One model call per case, so a full run takes a while.
+    `only` runs a single category (e.g. `refuse_advice`) for a quick check.
     """
     project = _read_only(load_project())
-    dataset = load_dataset()
     cases = [
-        case for case in dataset.cases if only in (None, case.category, case.id)
+        case
+        for case in load_judge_cases()
+        if only in (None, case["category"], case["id"])
     ]
 
     report = await engine.judge(
@@ -167,30 +170,53 @@ async def run_system_prompt_eval(
         cases=cases,
     )
 
-    by_id = {verdict.id: verdict for verdict in report.verdicts}
-    rows: list[EvalRow] = []
-    scored: list[int] = []
-
-    for case in cases:
-        verdict = by_id.get(case.id)
-        score = verdict.score if verdict is not None else None
-        if score is not None:
-            scored.append(score)
-        rows.append(
-            EvalRow(
-                id=case.id,
-                category=case.category,
-                question=case.question,
-                score=score,
-                reason="not judged" if verdict is None else verdict.reason,
-                answer="" if verdict is None else verdict.answer,
-            )
-        )
-
     return EvalRunResult(
         model=report.model,
-        overall=round(sum(scored) / len(scored), 2) if scored else 0.0,
-        passed=sum(1 for s in scored if s >= PASS_MARK),
-        total=len(rows),
-        rows=rows,
+        overall=report.overall,
+        passed=sum(
+            1
+            for verdict in report.verdicts
+            if verdict.score is not None and verdict.score >= PASS_MARK
+        ),
+        total=len(report.verdicts),
+        rows=report.verdicts,
     )
+
+
+# --- RAG evaluation (RAGAS) --------------------------------------------------
+
+
+@router.get("/eval/rag/cases")
+async def list_rag_cases() -> list[EvalCaseInfo]:
+    """The retrieval cases, so the UI can offer 'all', a category, or one case."""
+    return [
+        EvalCaseInfo(
+            id=case["id"], category=case["category"], question=case["question"]
+        )
+        for case in load_rag_cases()
+    ]
+
+
+@router.post("/eval/rag")
+async def run_rag_eval(
+    engine: EngineDep,
+    only: str | None = Query(
+        default=None,
+        description="Run just one category or one case id. Omit to run them all.",
+    ),
+) -> RagReport:
+    """Answer and score the retrieval dataset with RAGAS.
+
+    The backend only picks the cases and forwards them as-is; the engine owns
+    the case shape and validates it, then answers, scores, and summarises. Each
+    case is answered then graded by several metric model calls, so a full run
+    takes a while. `only` runs a single category or case for a quick check.
+    """
+    project = _read_only(load_project())
+    cases = [
+        case
+        for case in load_rag_cases()
+        if only in (None, case["category"], case["id"])
+    ]
+
+    return await engine.evaluate_rag(project=project, cases=cases)

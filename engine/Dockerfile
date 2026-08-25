@@ -5,7 +5,9 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN uv pip install --system --no-cache .
+# The `eval` extra (RAGAS) is included so the admin dashboard can run the RAG
+# evaluation live. It is imported lazily, so normal serving never loads it.
+RUN uv pip install --system --no-cache ".[eval]"
 
 ENV PYTHONUNBUFFERED=1
 EXPOSE 8100

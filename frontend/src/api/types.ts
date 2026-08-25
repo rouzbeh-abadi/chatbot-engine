@@ -150,9 +150,41 @@ export interface EvalRow {
 export interface EvalRunResult {
   kind: string;
   model: string | null;
-  overall: number;
+  overall: number | null;
   passed: number;
   total: number;
   pass_mark: number;
   rows: EvalRow[];
+}
+
+/** The four RAGAS metrics, each 0 to 1, or null when it could not be scored. */
+export interface RagMetricAverages {
+  faithfulness: number | null;
+  answer_relevancy: number | null;
+  context_precision: number | null;
+  context_recall: number | null;
+}
+
+/** One scored retrieval case: its answer, retrieved chunks, and metrics. */
+export interface RagCaseResult extends RagMetricAverages {
+  id: string;
+  category: string;
+  question: string;
+  answer: string;
+  contexts: string[];
+}
+
+/** Averages for one category of retrieval cases. */
+export interface RagCategorySummary {
+  category: string;
+  count: number;
+  averages: RagMetricAverages;
+}
+
+/** The finished RAG evaluation the engine returns: per-case plus summaries. */
+export interface RagReport {
+  results: RagCaseResult[];
+  overall: RagMetricAverages;
+  by_category: RagCategorySummary[];
+  model: string | null;
 }

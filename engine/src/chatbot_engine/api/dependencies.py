@@ -19,8 +19,13 @@ from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
 from chatbot_engine.Eval.prompt_evaluation import evaluate_dataset
 from chatbot_engine.mcp.client import McpToolProvider
-from chatbot_engine.models.evals import JudgeReport, JudgeRequest
-from chatbot_engine.ports.agent import Agent, Judge, ToolProvider
+from chatbot_engine.models.evals import (
+    JudgeReport,
+    JudgeRequest,
+    RagEvalRequest,
+    RagReport,
+)
+from chatbot_engine.ports.agent import Agent, Judge, RagEvaluator, ToolProvider
 from chatbot_engine.ports.documents import DocumentRegistry, IngestPipeline
 from chatbot_engine.rag.embeddings import get_embeddings
 from chatbot_engine.rag.pipeline import DocumentIngestPipeline
@@ -61,6 +66,23 @@ def get_judge() -> Judge | None:
         return await evaluate_dataset(request, agent=agent)
 
     return judge
+
+
+@lru_cache
+def get_rag_evaluator() -> RagEvaluator | None:
+    """Scores retrieval with RAGAS. Needs the agent, to answer each case first."""
+    agent = get_agent()
+    if agent is None:
+        return None
+
+    async def evaluate(request: RagEvalRequest) -> RagReport:
+        # Imported here so the heavy, eval-only RAGAS dependency is not pulled
+        # in unless a RAG evaluation is actually requested.
+        from chatbot_engine.Eval.rag_evaluation import evaluate_rag_dataset
+
+        return await evaluate_rag_dataset(request, agent=agent)
+
+    return evaluate
 
 
 @lru_cache
@@ -136,6 +158,7 @@ def get_document_service() -> DocumentService:
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
 JudgeDep = Annotated[Judge | None, Depends(get_judge)]
+RagEvaluatorDep = Annotated[RagEvaluator | None, Depends(get_rag_evaluator)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 

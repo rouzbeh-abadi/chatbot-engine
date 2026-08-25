@@ -4,7 +4,7 @@
 # the engine over HTTP, so the engine has to be up first.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke smoke-docs search eval up down logs clean
+.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke smoke-docs search eval eval-rag up down logs clean
 
 help:
 	@echo ""
@@ -31,7 +31,8 @@ help:
 	@echo "    make seed      load backend/knowledge/ through the backend"
 	@echo '    make search Q="..."  what the vector store would retrieve'
 	@echo "    make eval      score the system prompt against backend/evals/"
-	@echo "    make eval ARGS=--show   re-read the last run, no model calls" 
+	@echo "    make eval ARGS=--show   re-read the last run, no model calls"
+	@echo "    make eval-rag  score retrieval with RAGAS (needs the engine eval extra)"
 	@echo ""
 	@echo "  Docker (the whole stack -- for a demo, not for developing)"
 	@echo "    make up        everything, in the foreground -- Ctrl-C stops it"
@@ -116,6 +117,11 @@ smoke-docs:
 # ARGS passes flags through: make eval ARGS="--dry-run --only refuse_scope"
 eval:
 	uv run python backend/scripts/evaluate_prompt.py $(ARGS)
+
+# Score retrieval with RAGAS. Needs the engine's `eval` extra installed.
+# ARGS passes flags through: make eval-rag ARGS="--only follow_up"
+eval-rag:
+	uv run python backend/scripts/evaluate_rag.py $(ARGS)
 
 # What retrieval would find, without an agent to use it yet.
 search:

@@ -9,7 +9,12 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from chatbot_engine.api import dependencies
-from chatbot_engine.models.evals import JudgeReport, JudgeRequest, Verdict
+from chatbot_engine.models.evals import (
+    GradedVerdict,
+    JudgeReport,
+    JudgeRequest,
+    Verdict,
+)
 
 CASE = {
     "id": "greeting",
@@ -36,7 +41,16 @@ class _StubJudge:
     async def __call__(self, request: JudgeRequest) -> JudgeReport:
         self.seen = request
         return JudgeReport(
-            verdicts=[Verdict(id="greeting", score=10, reason="matches")],
+            verdicts=[
+                Verdict(
+                    id="greeting",
+                    category="greeting",
+                    question="Hi",
+                    score=10,
+                    reason="matches",
+                )
+            ],
+            overall=10.0,
             model="fake/judge",
         )
 
@@ -141,8 +155,16 @@ def test_the_verdicts_come_back_as_the_caller_expects(
 
     assert body == {
         "verdicts": [
-            {"id": "greeting", "score": 10, "reason": "matches", "answer": ""}
+            {
+                "id": "greeting",
+                "category": "greeting",
+                "question": "Hi",
+                "score": 10,
+                "reason": "matches",
+                "answer": "",
+            }
         ],
+        "overall": 10.0,
         "model": "fake/judge",
     }
 
@@ -152,4 +174,4 @@ def test_a_score_outside_the_rubric_is_refused() -> None:
     import pytest
 
     with pytest.raises(ValueError):
-        Verdict(id="x", score=11, reason="too high")
+        GradedVerdict(id="x", score=11, reason="too high")

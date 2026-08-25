@@ -793,3 +793,30 @@ code {
   font-size: 13px;
   color: var(--ink-3);
 }
+
+/* RAG eval: the four headline metrics as a row of tiles. */
+.eval-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.eval-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2, var(--surface));
+}
+.eval-metric__value {
+  font-family: var(--mono);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+.eval-metric__label {
+  font-size: 12px;
+  color: var(--ink-3);
+}

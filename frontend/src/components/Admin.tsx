@@ -3,13 +3,18 @@ import {
   ApiError,
   listBookings,
   listEvalCases,
+  listRagCases,
   listTickets,
+  runRagEval,
   runSystemPromptEval,
 } from "../api/client";
 import type {
   BookingRow,
   EvalCaseInfo,
   EvalRunResult,
+  RagCaseResult,
+  RagMetricAverages,
+  RagReport,
   TicketRow,
 } from "../api/types";
 
@@ -283,7 +288,7 @@ function PromptEvalTab() {
       {result && (
         <section>
           <div className="eval-summary">
-            <span className="eval-score">{result.overall}/10</span>
+            <span className="eval-score">{result.overall ?? 0}/10</span>
             <span className="admin__note">
               {result.passed} of {result.total} at or above {result.pass_mark}/10
               {result.model && ` · judged by ${result.model}`}
@@ -326,16 +331,176 @@ function PromptEvalTab() {
   );
 }
 
-// --- RAG eval tab (placeholder) ----------------------------------------------
+// --- RAG eval tab ------------------------------------------------------------
+
+const RAG_METRICS: { key: keyof RagMetricAverages; label: string }[] = [
+  { key: "faithfulness", label: "Faithfulness" },
+  { key: "answer_relevancy", label: "Answer relevancy" },
+  { key: "context_precision", label: "Context precision" },
+  { key: "context_recall", label: "Context recall" },
+];
+
+/** A metric as two decimals, or an em dash when RAGAS could not score it. */
+function metric(value: number | null | undefined): string {
+  return value == null ? "—" : value.toFixed(2);
+}
 
 function RagEvalTab() {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState<RagReport | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [cases, setCases] = useState<EvalCaseInfo[]>([]);
+  const [selected, setSelected] = useState(""); // "" = all cases
+
+  useEffect(() => {
+    let live = true;
+    listRagCases()
+      .then((found) => live && setCases(found))
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  const categories = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const c of cases) counts.set(c.category, (counts.get(c.category) ?? 0) + 1);
+    return [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  }, [cases]);
+
+  const run = async () => {
+    setRunning(true);
+    setError(null);
+    try {
+      setResult(await runRagEval(selected || undefined));
+    } catch (e) {
+      setError(describe(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+
   return (
     <div className="admin__stack">
-      <h3 className="admin__h3">RAG evaluation</h3>
-      <p className="admin__note">
-        Coming soon — retrieval metrics (hit rate, recall, precision) and
-        faithfulness, run the same way as the system-prompt eval.
-      </p>
+      <div className="eval-intro">
+        <h3 className="admin__h3">RAG evaluation</h3>
+        <p className="admin__note">
+          Scores retrieval with RAGAS — is the answer grounded in the retrieved
+          context (faithfulness), does it address the question (answer
+          relevancy), and did the search find relevant, sufficient chunks
+          (context precision and recall)? Each metric runs 0 to 1. Several model
+          calls per case, so a full run takes a few minutes.
+        </p>
+        <div className="eval-run">
+          <label className="eval-pick">
+            <span>Run</span>
+            <select
+              className="model__select"
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              disabled={running}
+            >
+              <option value="">All cases ({cases.length})</option>
+              {categories.length > 0 && (
+                <optgroup label="A category">
+                  {categories.map(([name, n]) => (
+                    <option key={name} value={name}>
+                      {name} ({n})
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              {cases.length > 0 && (
+                <optgroup label="A single case">
+                  {cases.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.id} · {c.category}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
+          </label>
+          <button className="btn" onClick={run} disabled={running}>
+            {running ? "Running…" : "Run eval"}
+          </button>
+        </div>
+      </div>
+
+      {error && <p className="admin__note admin__note--bad">{error}</p>}
+
+      {result && (
+        <section className="admin__stack">
+          <div className="eval-metrics">
+            {RAG_METRICS.map((m) => (
+              <div className="eval-metric" key={m.key}>
+                <span className="eval-metric__value">
+                  {metric(result.overall[m.key])}
+                </span>
+                <span className="eval-metric__label">{m.label}</span>
+              </div>
+            ))}
+          </div>
+          <p className="admin__note">
+            {result.results.length} cases
+            {result.model && ` · scored by ${result.model}`}
+          </p>
+
+          <div className="admin__scroll">
+            <table className="admin__table">
+              <thead>
+                <tr>
+                  <th>By category</th>
+                  <th>Cases</th>
+                  {RAG_METRICS.map((m) => (
+                    <th key={m.key}>{m.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.by_category.map((c) => (
+                  <tr key={c.category}>
+                    <td>{c.category}</td>
+                    <td className="mono">{c.count}</td>
+                    {RAG_METRICS.map((m) => (
+                      <td className="mono" key={m.key}>
+                        {metric(c.averages[m.key])}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="admin__scroll">
+            <table className="admin__table">
+              <thead>
+                <tr>
+                  <th>Case</th>
+                  <th>Category</th>
+                  {RAG_METRICS.map((m) => (
+                    <th key={m.key}>{m.label}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {result.results.map((row: RagCaseResult) => (
+                  <tr key={row.id}>
+                    <td className="mono">{row.id}</td>
+                    <td>{row.category}</td>
+                    {RAG_METRICS.map((m) => (
+                      <td className="mono" key={m.key}>
+                        {metric(row[m.key])}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
     </div>
   );
 }

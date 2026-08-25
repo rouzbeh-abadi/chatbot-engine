@@ -18,7 +18,12 @@ from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, Protocol
 
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
-from chatbot_engine.models.evals import JudgeReport, JudgeRequest
+from chatbot_engine.models.evals import (
+    JudgeReport,
+    JudgeRequest,
+    RagEvalRequest,
+    RagReport,
+)
 from chatbot_engine.models.events import Event
 
 
@@ -102,5 +107,22 @@ class Judge(Protocol):
 
         Args:
             request: The rubric, the cases, and the model configuration.
+        """
+        ...
+
+
+class RagEvaluator(Protocol):
+    """Answers a retrieval dataset and scores the retrieval with RAGAS.
+
+    Like `Judge`, a callable with no state. Separate because it grades the
+    search rather than the assistant's behaviour, and pulls in a heavy
+    eval-only dependency the chat path never touches.
+    """
+
+    async def __call__(self, request: RagEvalRequest) -> RagReport:
+        """Return one scored result per case.
+
+        Args:
+            request: The retrieval cases and the model configuration.
         """
         ...

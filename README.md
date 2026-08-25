@@ -34,7 +34,8 @@ and tools, and a knowledge base of support documents.
 - **Admin dashboard.** Inspect the application data and run the evaluation from
   the browser.
 - **Evaluation.** An LLM-as-judge harness grades the assistant's behaviour
-  against a rubric.
+  against a rubric, and a RAGAS harness scores the retrieval (faithfulness,
+  answer relevancy, context precision and recall).
 - **Guardrails.** A tool allowlist, prompt-injection handling, and untrusted
   document and tool text treated as data, never as instructions.
 
@@ -141,16 +142,27 @@ dashboard** to view the data and run the evaluation.
 
 ## Evaluation
 
-The assistant's behaviour is graded against a rubric by a judge model: does it
-refuse what it should, stay grounded, and never invent a policy?
+Two harnesses. Both run in the engine (only it holds the model credentials);
+the backend just sends the dataset.
+
+**System prompt.** A judge model grades the assistant's behaviour against a
+rubric: does it refuse what it should, stay grounded, and never invent a policy?
+Run it from the Admin dashboard, or the command line:
 
 ```bash
 make eval                       # score the system prompt (needs the stack running)
 make eval ARGS=--show           # re-read the last run, no model calls
 ```
 
-Or run it from the Admin dashboard, choosing all cases, one category, or a single
-case.
+**Retrieval (RAGAS).** Scores the search itself: is the answer grounded in the
+retrieved context (faithfulness), does it address the question (answer
+relevancy), and did retrieval find relevant, sufficient chunks (context
+precision and recall)? Run it from the Admin dashboard, or the command line:
+
+```bash
+make eval-rag                        # score retrieval (needs the engine eval extra)
+make eval-rag ARGS="--only follow_up"
+```
 
 ## Project layout
 

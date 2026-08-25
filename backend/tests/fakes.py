@@ -90,15 +90,24 @@ class FakeEngine:
         return []
 
     async def judge(self, *, project, judge_prompt, cases, timeout_s=1800.0):
-        """Grade every case a perfect 10, echoing the questions back."""
+        """Grade every raw case a perfect 10, echoing the questions back."""
         from support_agent.evals.models import JudgeReport, Verdict
 
+        verdicts = [
+            Verdict(
+                id=case["id"],
+                category=case["category"],
+                question=case["question"],
+                score=10,
+                reason="ok",
+                answer="answer",
+            )
+            for case in cases
+        ]
         return JudgeReport(
             model="fake/judge",
-            verdicts=[
-                Verdict(id=case.id, score=10, reason="ok", answer="answer")
-                for case in cases
-            ],
+            verdicts=verdicts,
+            overall=10.0 if verdicts else None,
         )
 
     async def delete_document(self, *, project_id: str, doc_id: str) -> DeleteResult:

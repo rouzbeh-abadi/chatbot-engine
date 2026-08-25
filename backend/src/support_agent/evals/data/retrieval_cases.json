@@ -1,0 +1,90 @@
+{
+  "name": "support retrieval",
+  "description": "Retrieval quality for the travel-support knowledge base. `reference` is the ground-truth answer, grounded in the seeded documents, that a correct search must supply enough context to produce. `follow_up` cases put the subject in `history`, so the question alone is ambiguous and retrieval must cope with it.",
+  "cases": [
+    {
+      "id": "baggage_cabin",
+      "category": "single_turn",
+      "question": "What is the standard cabin baggage allowance?",
+      "reference": "Where cabin baggage is included, the SkyDesk reference allowance is one cabin bag up to 55 x 40 x 23 cm and 8 kg. The airline's rules shown on the booking remain authoritative."
+    },
+    {
+      "id": "checked_basic",
+      "category": "single_turn",
+      "question": "Does a Basic fare include checked baggage?",
+      "reference": "Basic fares include no checked baggage. Standard fares include one checked bag up to 23 kg on participating airlines, and Flexible or premium fares include one or more depending on the airline and route."
+    },
+    {
+      "id": "checkin_online_window",
+      "category": "single_turn",
+      "question": "When can I check in online?",
+      "reference": "Online check-in commonly opens between 24 and 48 hours before departure, though the exact window depends on the airline and route. It is available from My Trips and is performed with the operating airline."
+    },
+    {
+      "id": "airport_arrival",
+      "category": "single_turn",
+      "question": "How early should I get to the airport?",
+      "reference": "Arrive at least 2 hours before most short-haul flights and 3 hours before most long-haul international flights. Airline and airport requirements take priority over these general recommendations."
+    },
+    {
+      "id": "nonrefundable_taxes",
+      "category": "single_turn",
+      "question": "If I cancel a non-refundable ticket, is anything refundable?",
+      "reference": "A non-refundable fare normally does not return the base ticket price after a voluntary cancellation, but certain unused government or airport taxes may still be refundable depending on the ticket and applicable rules."
+    },
+    {
+      "id": "exit_row",
+      "category": "single_turn",
+      "question": "Who is not allowed to sit in an exit row?",
+      "reference": "Exit-row passengers must meet the airline's safety requirements. Restrictions commonly apply to children, passengers travelling with infants, passengers who need certain assistance, and anyone unable to perform emergency duties."
+    },
+    {
+      "id": "followup_bag_weight",
+      "category": "follow_up",
+      "question": "What is the maximum weight for a single bag?",
+      "history": [
+        {
+          "role": "user",
+          "content": "Does my Standard fare include a checked bag?"
+        },
+        {
+          "role": "assistant",
+          "content": "Yes. Standard fares include one checked bag up to 23 kg on participating airlines. You can see the exact allowance in your booking under Baggage."
+        }
+      ],
+      "reference": "A single checked bag must normally not exceed 32 kg, even when the passenger has a larger total weight allowance. Bags above the airline's individual bag limit may need to be repacked."
+    },
+    {
+      "id": "followup_seat_per_segment",
+      "category": "follow_up",
+      "question": "Is that charged for each flight?",
+      "history": [
+        {
+          "role": "user",
+          "content": "Can I choose an extra-legroom seat?"
+        },
+        {
+          "role": "assistant",
+          "content": "Yes, when the airline supports it you can choose paid seats such as extra-legroom through My Trips, subject to airline confirmation."
+        }
+      ],
+      "reference": "Seat prices are normally charged per passenger and per flight segment, and they can change. Paid options include standard advance, front-row, extra-legroom, exit-row, and preferred-zone seats."
+    },
+    {
+      "id": "followup_passport_validity",
+      "category": "follow_up",
+      "question": "How long does it need to stay valid?",
+      "history": [
+        {
+          "role": "user",
+          "content": "I'm travelling abroad next month, what document do I need?"
+        },
+        {
+          "role": "assistant",
+          "content": "The required identity document depends on your nationality, destination, and transit countries. Many international journeys need a passport, and you should verify the exact requirement with official government or consular sources."
+        }
+      ],
+      "reference": "A passport may need to remain valid for a minimum period after the planned travel date, and some destinations also require empty passport pages. Requirements should be verified with official government or consular sources."
+    }
+  ]
+}

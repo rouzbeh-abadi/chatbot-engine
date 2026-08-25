@@ -5,19 +5,24 @@ should behave. Answering the questions and grading them both run in the engine,
 which is the only side allowed to hold model credentials.
 """
 
-from support_agent.evals.dataset import load_dataset, load_judge_prompt
+from support_agent.evals.dataset import (
+    load_judge_cases,
+    load_judge_prompt,
+    load_rag_cases,
+)
 from support_agent.evals.models import (
-    EvalCase,
-    EvalDataset,
     JudgeReport,
+    RagCaseResult,
+    RagReport,
     Verdict,
 )
 
 __all__ = [
-    "EvalCase",
-    "EvalDataset",
     "JudgeReport",
+    "RagCaseResult",
+    "RagReport",
     "Verdict",
-    "load_dataset",
+    "load_judge_cases",
     "load_judge_prompt",
+    "load_rag_cases",
 ]

@@ -104,6 +104,25 @@ Depending on the engine's package would put the two services back in one
 deployable. The copy is guarded by `tests/test_contract_parity.py` at the
 repository root, which fails when the two drift.
 
+## Evaluation
+
+Two eval harnesses, both runnable from the terminal (or the Admin dashboard).
+The backend owns the datasets under `src/support_agent/evals/data/` and forwards
+them as raw JSON; the engine answers, grades, and returns the finished report.
+Both need the stack running (`make dev`, `make tools`, `make seed`).
+
+```bash
+make eval                       # score the system prompt against a rubric
+make eval ARGS=--show           # re-read the last run, no model calls
+make eval-rag                   # score retrieval with RAGAS
+make eval-rag ARGS="--only follow_up"
+```
+
+`make eval-rag` needs the engine's `eval` extra (RAGAS) installed:
+`uv pip install -e "engine[eval]"`. If the engine runs under Docker, point the
+eval at the tool server's Docker address:
+`BACKEND_MCP_TOOLS_URL=http://mcp-tools:8200/mcp make eval-rag`.
+
 ## Tests
 
 ```bash

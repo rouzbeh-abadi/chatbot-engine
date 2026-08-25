@@ -19,7 +19,7 @@ from support_agent.engine_client.models import (
     DocumentRecord,
     EngineChatRequest,
 )
-from support_agent.evals.models import EvalCase, JudgeReport
+from support_agent.evals.models import JudgeReport, RagReport
 
 _EVENT = TypeAdapter(ChatEvent)
 _RECORDS = TypeAdapter(list[DocumentRecord])
@@ -168,14 +168,15 @@ class EngineClient:
         *,
         project: AssistantConfig,
         judge_prompt: str,
-        cases: list[EvalCase],
+        cases: list[dict[str, object]],
         timeout_s: float = 1800.0,
     ) -> JudgeReport:
         """Run an evaluation: the engine answers every case, then grades them.
 
         Both halves run in the engine because only it holds model credentials.
-        Uses a much longer timeout than a chat turn, since one request covers
-        dozens of model calls (every case answered, then judged).
+        The engine owns the case shape and validates it, so `cases` is forwarded
+        as-is. Uses a much longer timeout than a chat turn, since one request
+        covers dozens of model calls (every case answered, then judged).
         """
         async with self._client(timeout_s) as client:
             response = await self._request(
@@ -185,10 +186,36 @@ class EngineClient:
                 json={
                     "project": project.model_dump(mode="json", exclude_none=True),
                     "judge_prompt": judge_prompt,
-                    "cases": [case.model_dump(mode="json") for case in cases],
+                    "cases": cases,
                 },
             )
             return JudgeReport.model_validate(response.json())
+
+    async def evaluate_rag(
+        self,
+        *,
+        project: AssistantConfig,
+        cases: list[dict[str, object]],
+        timeout_s: float = 1800.0,
+    ) -> RagReport:
+        """Score retrieval with RAGAS: the engine answers each case, then grades it.
+
+        Runs in the engine, like `judge`, because only it holds model
+        credentials and the RAGAS dependency. The engine owns the case shape and
+        validates it, so `cases` is forwarded as-is. Uses a long timeout: every
+        case is answered and then graded by several metric model calls.
+        """
+        async with self._client(timeout_s) as client:
+            response = await self._request(
+                client,
+                "POST",
+                "/eval/rag",
+                json={
+                    "project": project.model_dump(mode="json", exclude_none=True),
+                    "cases": cases,
+                },
+            )
+            return RagReport.model_validate(response.json())
 
     # plumbing
 
