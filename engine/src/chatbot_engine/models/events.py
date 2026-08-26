@@ -103,6 +103,12 @@ class DoneEvent(_Event):
 
 
 Event = Annotated[
-    RetrievalEvent | TokenEvent | UsageEvent | ErrorEvent | DoneEvent,
+    RetrievalEvent
+    | TokenEvent
+    | ToolCallStartedEvent
+    | ToolCallFinishedEvent
+    | UsageEvent
+    | ErrorEvent
+    | DoneEvent,
     Field(discriminator="type"),
 ]

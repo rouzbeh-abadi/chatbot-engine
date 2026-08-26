@@ -37,8 +37,9 @@ class ChatAgent:
             query=request.message, sources=to_source_refs(hits)
         )
 
-        # stream_completion yields answer text as it is generated, then one
-        # Usage value at the end; turn each into the matching event.
+        # stream_completion yields answer text as it is generated, tool
+        # started/finished events around any tool call, and one Usage value at
+        # the end; turn each into the matching event.
         async for item in stream_completion(request, self._tools, to_context(hits)):
             if isinstance(item, Usage):
                 yield UsageEvent(
@@ -48,7 +49,10 @@ class ChatAgent:
                     cost_usd=item.cost_usd,
                     model=item.model,
                 )
-            else:
+            elif isinstance(item, str):
                 yield TokenEvent(text=item)
+            else:
+                # Already an Event (a tool started/finished), pass it through.
+                yield item
 
         yield DoneEvent(finish_reason="stop")
