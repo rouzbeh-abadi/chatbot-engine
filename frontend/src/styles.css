@@ -376,24 +376,72 @@ code {
 
 .composer {
   display: flex;
-  gap: 10px;
-  align-items: flex-end;
-}
-.composer__input {
-  flex: 1;
-  resize: vertical;
-  font: inherit;
-  color: var(--ink);
+  flex-direction: column;
+  gap: 8px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 10px 12px;
-  min-height: 46px;
+  border-radius: 22px;
+  padding: 12px 14px 10px;
+}
+.composer:focus-within {
+  border-color: var(--accent);
+}
+.composer__input {
+  resize: none;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: none;
+  padding: 2px 4px;
+  min-height: 26px;
+  max-height: 200px;
+  overflow-y: auto;
 }
 .composer__input:focus-visible {
+  outline: none;
+}
+.composer__input::placeholder {
+  color: var(--ink-3);
+}
+.composer__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.composer__tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.composer__send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--bg);
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.composer__send:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.composer__send:not(:disabled):hover {
+  opacity: 0.88;
+}
+.composer__send--stop {
+  background: var(--ink-2);
+}
+.composer__send:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: -1px;
-  border-color: var(--accent);
+  outline-offset: 2px;
 }
 
 .btn {
@@ -523,22 +571,22 @@ code {
 /* The model picker, above the composer. */
 .model {
   display: flex;
-  justify-content: flex-end;
   align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--ink-3);
-  margin-bottom: 10px;
+  min-width: 0;
 }
 .model__select {
   font: inherit;
   font-size: 13px;
   color: var(--ink-2);
-  background: var(--surface);
+  background: transparent;
   border: 1px solid var(--line);
   border-radius: 999px;
   padding: 5px 10px;
+  max-width: 100%;
   cursor: pointer;
+}
+.model__select:hover:not(:disabled) {
+  border-color: var(--ink-3);
 }
 .model__select:disabled {
   opacity: 0.55;

@@ -39,8 +39,7 @@ export function ModelPicker({
   if (first === undefined) return null;
 
   return (
-    <label className="model">
-      <span className="model__label">Model</span>
+    <label className="model" aria-label="Model">
       <select
         className="model__select"
         value={value ?? first}

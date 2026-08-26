@@ -241,12 +241,13 @@ export default function App() {
       </main>
 
       <footer className="footer">
-        <ModelPicker value={model} onChange={setModel} disabled={busy} />
         <Composer
           onSend={send}
           onStop={() => abort.current?.abort()}
           busy={busy}
-        />
+        >
+          <ModelPicker value={model} onChange={setModel} disabled={busy} />
+        </Composer>
       </footer>
 
       {adminOpen && <Admin onClose={() => setAdminOpen(false)} />}
