@@ -72,6 +72,9 @@ services:
     environment:
       BACKEND_ENGINE_URL: http://engine:8100
       BACKEND_ENGINE_API_KEY: ${ENGINE_API_KEY:-}
+      # Guards /admin. Unset leaves the dashboard open, which is only safe while
+      # the published port is reachable from your machine alone.
+      BACKEND_ADMIN_KEY: ${BACKEND_ADMIN_KEY:-}
       BACKEND_DATABASE_URL: postgresql+psycopg://support_agent:support_agent@postgres:5432/support_agent
       # The engine dials the tool server, so this has to be the service name
       # rather than localhost. Which tools are allowed stays in support.yaml.

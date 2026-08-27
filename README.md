@@ -32,7 +32,10 @@ and tools, and a knowledge base of support documents.
   and stores it; re-uploading identical bytes is skipped by content hash.
 - **Conversation export.** Download a transcript as JSON, CSV, or PDF.
 - **Admin dashboard.** Inspect the application data and run the evaluation from
-  the browser.
+  the browser, behind a shared operator key (`BACKEND_ADMIN_KEY`).
+- **Deployable.** Rate limits on the routes that cost money, one seam for real
+  authentication, and a startup check that refuses to serve a production
+  deployment with development defaults — see [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Evaluation.** An LLM-as-judge harness grades the assistant's behaviour
   against a rubric, and a RAGAS harness scores the retrieval (faithfulness,
   answer relevancy, context precision and recall).
@@ -140,6 +143,31 @@ when you give it a booking reference:
 Switch the model from the dropdown, export the chat, or open the **Admin
 dashboard** to view the data and run the evaluation.
 
+## Deploying it
+
+Everything above is set up for a laptop: every service is published to the host,
+the database password is in the compose file, and nothing is authenticated.
+
+For anything other people can reach, set both services to production —
+
+```
+BACKEND_ENV=production
+ENGINE_ENV=production
+```
+
+— and they will refuse to start on a default that is only safe locally, naming
+each variable to set, rather than serve with one. There is a compose overlay
+that does the rest (unpublishes the internal ports, demands every secret):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+```
+
+**[DEPLOYMENT.md](DEPLOYMENT.md)** is the full guide: secrets, the network
+shape, TLS, rate limits, migrations — and an honest list of what is
+authenticated and what is not, which is worth reading before you put this in
+front of users.
+
 ## Evaluation
 
 Two harnesses. Both run in the engine (only it holds the model credentials);
@@ -176,6 +204,9 @@ tests/      the contract-parity test, where the two services meet
 
 ## Documentation
 
+- **[DEPLOYMENT.md](DEPLOYMENT.md)** covers running this where other people can
+  reach it: secrets, the network shape, TLS, rate limits, and what is and is not
+  authenticated.
 - **[docs/backend-integration.md](docs/backend-integration.md)** shows how to
   connect a backend to the engine.
 - **[engine/README.md](engine/README.md)**, **[backend/README.md](backend/README.md)**,

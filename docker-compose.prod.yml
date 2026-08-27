@@ -1,0 +1,80 @@
+# Production overlay. Use it *with* the base file, never instead of it:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# The base file is the demo: it publishes every service to the host and carries
+# a password anyone can read in this repository. That is the right shape for
+# `make up` on a laptop and the wrong shape for anything reachable by others.
+#
+# What this file changes:
+#   - only the frontend keeps a published port; engine, tools and Postgres
+#     become reachable from inside the compose network alone
+#   - every secret comes from the environment, with no fallback, so a missing
+#     one fails the command instead of quietly deploying a known password
+#   - both services run with ENV=production, which makes them refuse to start
+#     on a development default rather than serve with one
+#
+# Still yours to provide: TLS. Nothing here terminates it. Put a reverse proxy
+# (Caddy, Traefik, nginx, or a cloud load balancer) in front of the frontend
+# port, and set Strict-Transport-Security there.
+
+services:
+  frontend:
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    # `!override` replaces the base list rather than adding to it -- without it
+    # compose merges the two and the demo's 5173 stays published as well.
+    ports: !override
+      # Bound to the loopback interface: the TLS terminator in front of this is
+      # expected to run on the same host. Publish it more widely only once
+      # something else is doing TLS.
+      - "127.0.0.1:8080:80"
+
+  postgres:
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      # No `:-` fallback anywhere in this file: compose warns and substitutes an
+      # empty value for an unset variable, and an empty Postgres password is a
+      # database with no password at all.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+    # Not published. Reachable only from the other services on this network.
+    ports: !override []
+
+  engine:
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ENGINE_ENV: production
+      ENGINE_API_KEY: ${ENGINE_API_KEY:?set ENGINE_API_KEY}
+      ENGINE_OPENROUTER_API_KEY: ${ENGINE_OPENROUTER_API_KEY:?set ENGINE_OPENROUTER_API_KEY}
+    ports: !override []
+
+  backend:
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      BACKEND_ENV: production
+      BACKEND_ENGINE_API_KEY: ${ENGINE_API_KEY:?set ENGINE_API_KEY}
+      BACKEND_ADMIN_KEY: ${BACKEND_ADMIN_KEY:?set BACKEND_ADMIN_KEY}
+      BACKEND_DATABASE_URL: postgresql+psycopg://support_agent:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/support_agent
+      # uvicorn only reads X-Forwarded-For from addresses listed here, because
+      # the header is trivially forged and it decides which rate-limit bucket a
+      # caller lands in. `*` is safe *in this arrangement only*: the port below
+      # is unpublished, so the sole thing that can reach the backend is the
+      # frontend's nginx on the compose network. Publish port 8000 and this
+      # becomes wrong -- narrow it to the proxy's address first.
+      FORWARDED_ALLOW_IPS: "*"
+    ports: !override []
+
+  mcp-tools:
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      BACKEND_DATABASE_URL: postgresql+psycopg://support_agent:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/support_agent
+    ports: !override []
