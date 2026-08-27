@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated
-
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
+from support_agent.api.identity import UserIdDep
 from support_agent.api.options import CHAT_MODELS
 from support_agent.api.schemas import ChatRequest, ChatResult
 from support_agent.api.streaming import collect, to_sse
@@ -36,11 +35,11 @@ def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:
         # A copy, not a mutation: `load_project` is cached and its result shared.
         project = project.model_copy(update={"model": body.model})
 
-    # This backend is a showcase for working with the engine, not a production
-    # service: the X-User-Id header is a placeholder, and the admin routes have
-    # no auth at all. A real deployment would replace the header with real
-    # authentication and check this user may use this project; the engine only
-    # ever sees an opaque id.
+    # `user_id` has already been decided by `api/identity.py` -- it is either a
+    # proxy-authenticated id or `anonymous`, never whatever the browser typed.
+    # What is still missing for a multi-tenant product is authorisation: nothing
+    # checks that *this* user may use *this* project. The engine only ever sees
+    # an opaque id, so that check belongs here.
     return EngineChatRequest(
         project=project,
         message=body.message,
@@ -54,15 +53,14 @@ def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:
 async def chat(
     body: ChatRequest,
     engine: EngineDep,
-    x_user_id: Annotated[str, Header()] = "demo-user",
+    user_id: UserIdDep,
 ) -> StreamingResponse:
     """Receive a chat request from the client and stream the engine response back.
 
     The client request is converted to an engine request, sent to the chatbot engine,
     and the returned events are streamed back to the client using SSE.
     """
-   
-    request = _build_request(body, x_user_id)
+    request = _build_request(body, user_id)
 
     # Awaited, so an unreachable engine or a 501 becomes a proper status code
     # here rather than an empty 200 with the error buried in the stream.
@@ -79,8 +77,8 @@ async def chat(
 async def chat_sync(
     body: ChatRequest,
     engine: EngineDep,
-    x_user_id: Annotated[str, Header()] = "demo-user",
+    user_id: UserIdDep,
 ) -> ChatResult:
     """Non-streaming variant, for smoke tests and simple clients."""
-    request = _build_request(body, x_user_id)
+    request = _build_request(body, user_id)
     return await collect(await engine.start_chat(request))

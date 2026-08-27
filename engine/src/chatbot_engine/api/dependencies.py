@@ -12,7 +12,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends
 
 from chatbot_engine.agent.chat_agent import ChatAgent
 from chatbot_engine.documents.blobs import DocumentBlobs
@@ -159,27 +159,6 @@ ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
 JudgeDep = Annotated[Judge | None, Depends(get_judge)]
 RagEvaluatorDep = Annotated[RagEvaluator | None, Depends(get_rag_evaluator)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
-
-
-# caller authentication
-
-
-async def require_api_key(
-    settings: SettingsDep,
-    x_api_key: Annotated[str | None, Header()] = None,
-) -> None:
-    """Optional shared secret between the backend and the engine.
-
-    Unset `ENGINE_API_KEY` leaves the engine open, which is fine on localhost.
-    Set it in any deployment: the engine holds provider credentials and has no notion of end-user permissions, so it must not be reachable by anyone but the application backend.
-    """
-    if settings.api_key is None:
-        return
-    if x_api_key != settings.api_key:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="missing or invalid X-API-Key",
-        )
 
 
 def reset_dependency_cache() -> None:

@@ -20,6 +20,45 @@ import type {
 
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
+/**
+ * Where the operator key for `/admin` is kept.
+ *
+ * `sessionStorage`, not a build-time variable: baking the key into the bundle
+ * would ship it to every visitor, which is the same as having no key at all.
+ * The operator types it once per tab and it dies with the tab.
+ */
+const ADMIN_KEY_ITEM = "support-agent.admin-key";
+
+/** The admin key this tab is holding, if any. */
+export function getAdminKey(): string | null {
+  try {
+    return sessionStorage.getItem(ADMIN_KEY_ITEM);
+  } catch {
+    // Storage can be blocked entirely; the dashboard just asks again.
+    return null;
+  }
+}
+
+/** Remember the admin key for the rest of this tab's life. */
+export function setAdminKey(key: string): void {
+  try {
+    sessionStorage.setItem(ADMIN_KEY_ITEM, key);
+  } catch {
+    // Nothing to do -- the caller's request carries the key regardless.
+  }
+}
+
+/**
+ * The header the admin routes want, or nothing when no key is held.
+ *
+ * Sending no header is right rather than sloppy: a backend with no
+ * `BACKEND_ADMIN_KEY` set leaves `/admin` open, which is how localhost runs.
+ */
+function adminHeaders(): Record<string, string> {
+  const key = getAdminKey();
+  return key ? { "X-Admin-Key": key } : {};
+}
+
 /** A backend response that was not a success, with the detail it explained itself with. */
 export class ApiError extends Error {
   constructor(
@@ -142,8 +181,11 @@ export async function listModels(): Promise<string[]> {
 }
 
 /** GET a JSON endpoint, turning a non-2xx into an `ApiError`. */
-async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${BASE}${path}`);
+async function getJson<T>(
+  path: string,
+  headers?: Record<string, string>,
+): Promise<T> {
+  const response = await fetch(`${BASE}${path}`, { headers });
   if (!response.ok) {
     throw new ApiError(response.status, await detailOf(response));
   }
@@ -152,17 +194,20 @@ async function getJson<T>(path: string): Promise<T> {
 
 /** Every booking in the database (admin). */
 export async function listBookings(): Promise<BookingRow[]> {
-  return getJson<BookingRow[]>("/admin/bookings");
+  return getJson<BookingRow[]>("/admin/bookings", adminHeaders());
 }
 
 /** Every support ticket (admin). */
 export async function listTickets(): Promise<TicketRow[]> {
-  return getJson<TicketRow[]>("/admin/tickets");
+  return getJson<TicketRow[]>("/admin/tickets", adminHeaders());
 }
 
 /** The dataset's cases, for the run selector. */
 export async function listEvalCases(): Promise<EvalCaseInfo[]> {
-  return getJson<EvalCaseInfo[]>("/admin/eval/system-prompt/cases");
+  return getJson<EvalCaseInfo[]>(
+    "/admin/eval/system-prompt/cases",
+    adminHeaders(),
+  );
 }
 
 /**
@@ -177,6 +222,7 @@ export async function runSystemPromptEval(
   const query = only ? `?only=${encodeURIComponent(only)}` : "";
   const response = await fetch(`${BASE}/admin/eval/system-prompt${query}`, {
     method: "POST",
+    headers: adminHeaders(),
   });
   if (!response.ok) {
     throw new ApiError(response.status, await detailOf(response));
@@ -186,7 +232,7 @@ export async function runSystemPromptEval(
 
 /** The retrieval cases, for the RAG run selector. */
 export async function listRagCases(): Promise<EvalCaseInfo[]> {
-  return getJson<EvalCaseInfo[]>("/admin/eval/rag/cases");
+  return getJson<EvalCaseInfo[]>("/admin/eval/rag/cases", adminHeaders());
 }
 
 /**
@@ -200,6 +246,7 @@ export async function runRagEval(only?: string): Promise<RagReport> {
   const query = only ? `?only=${encodeURIComponent(only)}` : "";
   const response = await fetch(`${BASE}/admin/eval/rag${query}`, {
     method: "POST",
+    headers: adminHeaders(),
   });
   if (!response.ok) {
     throw new ApiError(response.status, await detailOf(response));

@@ -33,6 +33,20 @@ class Settings(BaseSettings):
     #: fine on localhost and not fine anywhere else.
     api_key: str | None = None
 
+    #: Named shared secrets, as `name:secret` separated by commas:
+    #:
+    #:     ENGINE_API_KEYS=web:s3cret,batch:0ther,web-next:r0tated
+    #:
+    #: Two things one key cannot do. **Rotation**: issue the new key, let both
+    #: work while callers move over, then withdraw the old one -- with a single
+    #: key every rotation is a synchronised restart of everything that calls the
+    #: engine. **Attribution**: the name is logged and is what rate limits are
+    #: counted against, so one misbehaving caller can be found and cut off
+    #: without disturbing the others.
+    #:
+    #: Combines with `api_key`, which is the same thing named `default`.
+    api_keys: str | None = None
+
     # --- the model provider -------------------------------------------------
 
     #: Checked where the client is built, so an engine that only ingests
@@ -81,7 +95,7 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    @field_validator("api_key", "openrouter_api_key", mode="after")
+    @field_validator("api_key", "api_keys", "openrouter_api_key", mode="after")
     @classmethod
     def _blank_means_unset(cls, value: str | None) -> str | None:
         """`ENGINE_API_KEY=` in a .env file arrives as "", not as None.
@@ -90,6 +104,36 @@ class Settings(BaseSettings):
         request -- a confusing failure for anyone who copied .env.example.
         """
         return value or None
+
+    def credentials(self) -> dict[str, str]:
+        """Every accepted key, by caller name. Empty means the engine is open.
+
+        Malformed entries raise here rather than being skipped: a typo that
+        silently dropped a key would leave a caller mysteriously unable to
+        authenticate, or -- far worse -- drop the only key and open the engine.
+        """
+        keys: dict[str, str] = {}
+
+        if self.api_key is not None:
+            keys["default"] = self.api_key
+
+        for entry in (self.api_keys or "").split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+
+            name, separator, secret = entry.partition(":")
+            name, secret = name.strip(), secret.strip()
+            if not separator or not name or not secret:
+                raise ValueError(
+                    f"ENGINE_API_KEYS entry {entry!r} is not `name:secret`"
+                )
+            if name in keys:
+                raise ValueError(f"ENGINE_API_KEYS names {name!r} twice")
+
+            keys[name] = secret
+
+        return keys
 
     def require_openrouter_key(self) -> str:
         """The provider credential, or a 501 naming the variable to set.

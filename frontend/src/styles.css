@@ -760,6 +760,36 @@ code {
 .admin__note--bad {
   color: var(--bad);
 }
+/* The admin-key prompt, shown in place of a tab once a route answered 401. */
+.admin__auth {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 440px;
+  margin: 40px auto 0;
+}
+.admin__auth-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+.admin__auth-input {
+  flex: 1;
+  font: inherit;
+  font-size: 14px;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.admin__auth-input:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+}
+.admin__auth-input::placeholder {
+  color: var(--ink-3);
+}
 .admin__scroll {
   overflow-x: auto;
   border: 1px solid var(--line);

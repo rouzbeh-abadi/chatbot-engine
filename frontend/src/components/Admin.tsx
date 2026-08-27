@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   listBookings,
@@ -7,6 +7,7 @@ import {
   listTickets,
   runRagEval,
   runSystemPromptEval,
+  setAdminKey,
 } from "../api/client";
 import type {
   BookingRow,
@@ -26,9 +27,25 @@ type Tab = "data" | "prompt-eval" | "rag-eval";
  * A full-screen overlay with tabs: the application data (bookings, tickets),
  * and the evaluations. Kept separate from the chat product; opened from the
  * header and closed with Escape or the close button.
+ *
+ * Whether the backend wants an operator key is not something the UI can know in
+ * advance -- `BACKEND_ADMIN_KEY` may or may not be set -- so it asks only once a
+ * route has answered 401, and then replays the tab with the key in hand.
  */
 export function Admin({ onClose }: { onClose: () => void }) {
   const [tab, setTab] = useState<Tab>("data");
+  const [locked, setLocked] = useState(false);
+  // Bumped after a key is entered; it is the body's `key`, so the tabs remount
+  // and re-run their fetches rather than sitting on the failed one.
+  const [attempt, setAttempt] = useState(0);
+
+  const onDenied = useCallback(() => setLocked(true), []);
+
+  const unlock = (key: string) => {
+    setAdminKey(key);
+    setLocked(false);
+    setAttempt((n) => n + 1);
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -60,12 +77,53 @@ export function Admin({ onClose }: { onClose: () => void }) {
         </TabButton>
       </div>
 
-      <div className="admin__body">
-        {tab === "data" && <DataTab />}
-        {tab === "prompt-eval" && <PromptEvalTab />}
-        {tab === "rag-eval" && <RagEvalTab />}
+      <div className="admin__body" key={attempt}>
+        {locked ? (
+          <AdminKeyForm onSubmit={unlock} />
+        ) : (
+          <>
+            {tab === "data" && <DataTab onDenied={onDenied} />}
+            {tab === "prompt-eval" && <PromptEvalTab onDenied={onDenied} />}
+            {tab === "rag-eval" && <RagEvalTab onDenied={onDenied} />}
+          </>
+        )}
       </div>
     </div>
+  );
+}
+
+/** Asks for the operator key after the backend has turned a request down. */
+function AdminKeyForm({ onSubmit }: { onSubmit: (key: string) => void }) {
+  const [value, setValue] = useState("");
+
+  return (
+    <form
+      className="admin__auth"
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (value) onSubmit(value);
+      }}
+    >
+      <h3 className="admin__h3">Admin key required</h3>
+      <p className="admin__note">
+        This backend runs with <code>BACKEND_ADMIN_KEY</code> set. Enter it to
+        open the dashboard — it is kept for this browser tab only.
+      </p>
+      <div className="admin__auth-row">
+        <input
+          className="admin__auth-input"
+          type="password"
+          autoFocus
+          aria-label="Admin key"
+          placeholder="Admin key"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <button className="btn" type="submit" disabled={!value}>
+          Unlock
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -99,9 +157,17 @@ function describe(error: unknown): string {
   return "Could not reach the backend.";
 }
 
+/** A rejected admin key, which the dialog answers with a prompt rather than text. */
+function isDenied(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 401;
+}
+
+/** What every tab needs: a way to say "the key was refused". */
+type TabProps = { onDenied: () => void };
+
 // --- Database tab ------------------------------------------------------------
 
-function DataTab() {
+function DataTab({ onDenied }: TabProps) {
   const [bookings, setBookings] = useState<BookingRow[] | null>(null);
   const [tickets, setTickets] = useState<TicketRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -114,11 +180,15 @@ function DataTab() {
         setBookings(b);
         setTickets(t);
       })
-      .catch((e: unknown) => live && setError(describe(e)));
+      .catch((e: unknown) => {
+        if (!live) return;
+        if (isDenied(e)) onDenied();
+        else setError(describe(e));
+      });
     return () => {
       live = false;
     };
-  }, []);
+  }, [onDenied]);
 
   if (error) return <p className="admin__note">{error}</p>;
   if (!bookings || !tickets) return <p className="admin__note">Loading…</p>;
@@ -202,7 +272,7 @@ function DataTab() {
 
 // --- System-prompt eval tab --------------------------------------------------
 
-function PromptEvalTab() {
+function PromptEvalTab({ onDenied }: TabProps) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<EvalRunResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -213,11 +283,11 @@ function PromptEvalTab() {
     let live = true;
     listEvalCases()
       .then((found) => live && setCases(found))
-      .catch(() => undefined);
+      .catch((e: unknown) => live && isDenied(e) && onDenied());
     return () => {
       live = false;
     };
-  }, []);
+  }, [onDenied]);
 
   // Distinct categories with how many cases each has.
   const categories = useMemo(() => {
@@ -232,7 +302,8 @@ function PromptEvalTab() {
     try {
       setResult(await runSystemPromptEval(selected || undefined));
     } catch (e) {
-      setError(describe(e));
+      if (isDenied(e)) onDenied();
+      else setError(describe(e));
     } finally {
       setRunning(false);
     }
@@ -345,7 +416,7 @@ function metric(value: number | null | undefined): string {
   return value == null ? "—" : value.toFixed(2);
 }
 
-function RagEvalTab() {
+function RagEvalTab({ onDenied }: TabProps) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RagReport | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -356,11 +427,11 @@ function RagEvalTab() {
     let live = true;
     listRagCases()
       .then((found) => live && setCases(found))
-      .catch(() => undefined);
+      .catch((e: unknown) => live && isDenied(e) && onDenied());
     return () => {
       live = false;
     };
-  }, []);
+  }, [onDenied]);
 
   const categories = useMemo(() => {
     const counts = new Map<string, number>();
@@ -374,7 +445,8 @@ function RagEvalTab() {
     try {
       setResult(await runRagEval(selected || undefined));
     } catch (e) {
-      setError(describe(e));
+      if (isDenied(e)) onDenied();
+      else setError(describe(e));
     } finally {
       setRunning(false);
     }

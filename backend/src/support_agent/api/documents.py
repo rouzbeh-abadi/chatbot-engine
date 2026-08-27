@@ -8,14 +8,20 @@ from __future__ import annotations
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
+from support_agent.api.auth import AdminOnly
 from support_agent.assistant import ProjectNotFoundError, load_project
 from support_agent.engine import EngineDep
 from support_agent.engine_client.models import DeleteResult, DocumentRecord
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
-# TODO: add authentication. Uploading and deleting documents are privileged
-# actions, but these routes currently carry no identity (see api/chat.py).
+# Writing to the knowledge base is an operator action, so the write routes carry
+# the same `BACKEND_ADMIN_KEY` guard as /admin. Whoever can replace a document
+# can change what the assistant tells every user -- a slower, quieter version of
+# editing the system prompt, and the reason these are not merely "authenticated".
+#
+# Listing stays open: it is what the UI's Knowledge panel shows, and it reveals
+# only which documents are indexed, which the answers already cite.
 
 # Matches the engine's own limit. Enforced here too, so an oversized file is
 # rejected before it crosses the network.
@@ -29,7 +35,7 @@ def _project_id(name: str | None) -> str:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.put("", status_code=status.HTTP_201_CREATED)
+@router.put("", status_code=status.HTTP_201_CREATED, dependencies=[AdminOnly])
 async def upsert_document(
     engine: EngineDep,
     external_id: str = Form(...),
@@ -70,7 +76,7 @@ async def list_documents(
     return await engine.list_documents(project_id=_project_id(project))
 
 
-@router.delete("/{doc_id}")
+@router.delete("/{doc_id}", dependencies=[AdminOnly])
 async def delete_document(
     doc_id: str, engine: EngineDep, project: str | None = None
 ) -> DeleteResult:

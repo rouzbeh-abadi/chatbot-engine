@@ -19,6 +19,8 @@ import sys
 
 import httpx
 
+from support_agent.settings import get_settings
+
 BASE_URL = "http://localhost:8000"
 EXTERNAL_ID = "__smoke__/probe.md"
 
@@ -53,8 +55,21 @@ def upload(
     )
 
 
+def admin_headers() -> dict[str, str]:
+    """The operator key, when this machine's .env sets one.
+
+    Uploading and deleting documents are privileged, so with BACKEND_ADMIN_KEY
+    set the smoke run needs it too -- read from the same settings the backend
+    reads, rather than asking whoever runs this to pass it again.
+    """
+    admin_key = get_settings().admin_key
+    return {"X-Admin-Key": admin_key} if admin_key else {}
+
+
 def main() -> int:
-    with httpx.Client(base_url=BASE_URL, timeout=120.0) as client:
+    with httpx.Client(
+        base_url=BASE_URL, timeout=120.0, headers=admin_headers()
+    ) as client:
         try:
             client.get("/health").raise_for_status()
         except httpx.HTTPError:

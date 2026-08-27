@@ -68,15 +68,47 @@ def test_chat_sends_the_project_config_the_engine_needs(
     (request,) = engine.chat_requests
     assert request.project.project_id == "support"
     assert request.project.system_prompt.strip()
-    assert request.user_id == "demo-user"
+    assert request.user_id == "anonymous"
 
 
-def test_chat_forwards_the_authenticated_user_id(
+# --- who the caller is -------------------------------------------------------
+
+
+def test_chat_ignores_a_user_id_the_caller_made_up(
     client: TestClient, engine: FakeEngine
 ) -> None:
+    """`X-User-Id` is a header; a browser can type anything into it.
+
+    With no proxy vouching for it (`BACKEND_TRUST_USER_HEADER` off) it must not
+    reach the engine, or every caller can claim to be every user.
+    """
     client.post("/chat/sync", json={"message": "hi"}, headers={"X-User-Id": "alice"})
 
+    assert engine.chat_requests[0].user_id == "anonymous"
+
+
+def test_chat_uses_the_user_id_a_trusted_proxy_set(
+    proxied_client: TestClient, engine: FakeEngine
+) -> None:
+    proxied_client.post(
+        "/chat/sync", json={"message": "hi"}, headers={"X-User-Id": "alice"}
+    )
+
     assert engine.chat_requests[0].user_id == "alice"
+
+
+def test_chat_rejects_a_request_that_bypassed_the_trusted_proxy(
+    proxied_client: TestClient, engine: FakeEngine
+) -> None:
+    """No header while trusting the proxy means the request did not come through it.
+
+    Serving it anonymously would quietly undo the authentication in front, so it
+    is a 401 -- and nothing reaches the engine.
+    """
+    response = proxied_client.post("/chat/sync", json={"message": "hi"})
+
+    assert response.status_code == 401
+    assert engine.chat_requests == []
 
 
 def test_chat_sync_folds_the_stream(client: TestClient) -> None:
@@ -250,3 +282,69 @@ def test_admin_eval_unknown_filter_returns_empty(client: TestClient) -> None:
     assert body["total"] == 0
     # Nothing graded, so there is no average to report.
     assert body["overall"] is None
+
+
+# --- admin authentication ----------------------------------------------------
+#
+# The guard sits on the router, so one route standing in for the rest is enough
+# -- what is asserted here is that it is wired to every `/admin` path and that
+# an unset key still leaves the dashboard usable on localhost.
+
+ADMIN_ROUTES = [
+    ("GET", "/admin/bookings"),
+    ("GET", "/admin/tickets"),
+    ("GET", "/admin/eval/system-prompt/cases"),
+    ("POST", "/admin/eval/system-prompt"),
+    ("GET", "/admin/eval/rag/cases"),
+    ("POST", "/admin/eval/rag"),
+]
+
+
+@pytest.mark.parametrize(("method", "path"), ADMIN_ROUTES)
+def test_admin_routes_reject_a_missing_key(
+    guarded_client: TestClient, method: str, path: str
+) -> None:
+    response = guarded_client.request(method, path)
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "missing or invalid X-Admin-Key"
+
+
+def test_admin_route_rejects_the_wrong_key(guarded_client: TestClient) -> None:
+    response = guarded_client.post(
+        "/admin/eval/system-prompt?only=greeting",
+        headers={"X-Admin-Key": "not-the-key"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_admin_route_rejects_a_non_ascii_key(guarded_client: TestClient) -> None:
+    """A header is latin-1 decoded, and `compare_digest` raises on such a str.
+
+    Sent as raw bytes, which is what a client that is not httpx would put on the
+    wire. Without the encode in the guard this is a 500, not a 401.
+    """
+    response = guarded_client.post(
+        "/admin/eval/system-prompt?only=greeting",
+        headers={"X-Admin-Key": "clé-secrète".encode("latin-1")},
+    )
+
+    assert response.status_code == 401
+
+
+def test_admin_route_accepts_the_right_key(
+    guarded_client: TestClient, admin_key: str
+) -> None:
+    response = guarded_client.post(
+        "/admin/eval/system-prompt?only=greeting",
+        headers={"X-Admin-Key": admin_key},
+    )
+
+    assert response.status_code == 200
+
+
+def test_chat_is_not_behind_the_admin_key(guarded_client: TestClient) -> None:
+    """The guard is on the admin router only; the product must stay open."""
+    assert guarded_client.post("/chat", json={"message": "hi"}).status_code == 200
+    assert guarded_client.get("/health").status_code == 200

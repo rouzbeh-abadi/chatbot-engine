@@ -8,7 +8,13 @@
  */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, streamChat } from "./client";
+import {
+  ApiError,
+  listBookings,
+  runSystemPromptEval,
+  setAdminKey,
+  streamChat,
+} from "./client";
 import type { ChatEvent } from "./types";
 
 /** A Response whose body streams the given pieces, one per read. */
@@ -37,7 +43,10 @@ async function collect(): Promise<ChatEvent[]> {
 const frame = (event: ChatEvent) =>
   `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  sessionStorage.clear();
+});
 
 describe("frame reassembly", () => {
   it("reads several frames arriving in one chunk", async () => {
@@ -212,5 +221,63 @@ describe("the request", () => {
     expect(String(url)).toContain("/chat");
     expect(init?.method).toBe("POST");
     expect(JSON.parse(String(init?.body))).toEqual({ message: "hello", history: [] });
+  });
+});
+
+describe("the admin key", () => {
+  /** Capture the init of the one request the call under test makes. */
+  function spyOnFetch(body: unknown = [], status = 200) {
+    const spy = vi.fn(
+      async (
+        _url: RequestInfo | URL,
+        _init?: RequestInit,
+      ): Promise<Response> =>
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    vi.stubGlobal("fetch", spy);
+    return spy;
+  }
+
+  it("sends no header when no key is held, so an open backend still works", async () => {
+    const spy = spyOnFetch();
+
+    await listBookings();
+
+    const headers = spy.mock.calls[0]![1]?.headers as Record<string, string>;
+    expect(headers).toEqual({});
+  });
+
+  it("sends the stored key on admin GETs", async () => {
+    setAdminKey("operator-key");
+    const spy = spyOnFetch();
+
+    await listBookings();
+
+    const headers = spy.mock.calls[0]![1]?.headers as Record<string, string>;
+    expect(headers["X-Admin-Key"]).toBe("operator-key");
+  });
+
+  it("sends the stored key on the eval POST as well", async () => {
+    setAdminKey("operator-key");
+    const spy = spyOnFetch({ rows: [] });
+
+    await runSystemPromptEval("greeting");
+
+    const init = spy.mock.calls[0]![1]!;
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>)["X-Admin-Key"]).toBe(
+      "operator-key",
+    );
+  });
+
+  it("surfaces a refused key as a 401 ApiError for the dashboard to catch", async () => {
+    spyOnFetch({ detail: "missing or invalid X-Admin-Key" }, 401);
+
+    const error = (await listBookings().catch((e: unknown) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(401);
   });
 });

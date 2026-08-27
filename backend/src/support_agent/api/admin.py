@@ -3,9 +3,10 @@
 Read-only views of the application data, plus a trigger for the system-prompt
 evaluation. These are operator tools, not part of the chat product.
 
-Note: these routes carry no authentication. This backend is a showcase for
-working with the engine, not a production service - a real admin dashboard
-would sit behind a login. See the note in `api/chat.py`.
+These routes are guarded by `BACKEND_ADMIN_KEY`: a shared operator secret, not
+a login. This backend is a showcase for working with the engine, not a
+production service - a real admin dashboard would sit behind real accounts and
+per-user permissions. See the note in `api/chat.py`.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
+from support_agent.api.auth import AdminOnly
 from support_agent.assistant import load_project
 from support_agent.database.connection import get_session_factory
 from support_agent.database.models import Booking, SupportTicket
@@ -29,7 +31,7 @@ from support_agent.evals import (
     load_rag_cases,
 )
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[AdminOnly])
 
 #: A case scores well at or above this. Matches `scripts/evaluate_prompt.py`.
 PASS_MARK = 8
