@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
 from chatbot_engine.api.dependencies import reset_dependency_cache
+from chatbot_engine.api.rate_limit import reset_rate_limits
 from chatbot_engine.rag import embeddings as embeddings_module
 from chatbot_engine.rag import vector_store as vector_store_module
 
@@ -34,10 +35,12 @@ def offline_vectors(
     monkeypatch.setattr(embeddings_module, "get_embeddings", lambda: fake)
     monkeypatch.setattr(vector_store_module, "get_embeddings", lambda: fake)
     reset_dependency_cache()
+    reset_rate_limits()
 
     yield
 
     reset_dependency_cache()
+    reset_rate_limits()
 
 
 @pytest.fixture

@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from support_agent.api.identity import UserIdDep
 from support_agent.api.options import CHAT_MODELS
+from support_agent.api.rate_limit import limit_chat
 from support_agent.api.schemas import ChatRequest, ChatResult
 from support_agent.api.streaming import collect, to_sse
 from support_agent.assistant import ProjectNotFoundError, load_project
 from support_agent.engine import EngineDep
 from support_agent.engine_client.models import EngineChatRequest
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+# Every turn here is a model call on the provider key, so both routes are
+# metered. On the router, not the endpoints, so a third one cannot forget.
+router = APIRouter(
+    prefix="/chat", tags=["chat"], dependencies=[Depends(limit_chat)]
+)
 
 
 def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:

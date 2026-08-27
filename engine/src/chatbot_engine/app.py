@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 from chatbot_engine import __version__
 from chatbot_engine.api import chat, documents, eval_rag, health, judge
 from chatbot_engine.api.auth import require_api_key
+from chatbot_engine.api.rate_limit import limit_chat, limit_eval
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
 from chatbot_engine.errors import (
     DocumentRejectedError,
@@ -72,12 +73,17 @@ def create_app() -> FastAPI:
     # Health is unauthenticated, so probes and Docker healthchecks can reach it.
     app.include_router(health.router)
 
-    # Everything else requires the shared secret (see api/auth.py).
+    # Everything else requires the shared secret (see api/auth.py), and the
+    # routes that spend provider credits are metered on top of it. On the
+    # routers where every route costs something, so one added later inherits the
+    # limit instead of quietly arriving unmetered. Documents are the exception:
+    # only the upload embeds, so that limit sits on the route itself -- listing
+    # and deleting are free and must not be throttled with it.
     protected = APIRouter(dependencies=[Depends(require_api_key)])
-    protected.include_router(chat.router)
+    protected.include_router(chat.router, dependencies=[Depends(limit_chat)])
     protected.include_router(documents.router)
-    protected.include_router(judge.router)
-    protected.include_router(eval_rag.router)
+    protected.include_router(judge.router, dependencies=[Depends(limit_eval)])
+    protected.include_router(eval_rag.router, dependencies=[Depends(limit_eval)])
     app.include_router(protected)
 
     return app

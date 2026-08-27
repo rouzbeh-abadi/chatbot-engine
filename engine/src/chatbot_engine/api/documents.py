@@ -7,9 +7,19 @@ numbers and layout before the engine ever saw them.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 
 from chatbot_engine.api.dependencies import DocumentServiceDep
+from chatbot_engine.api.rate_limit import limit_ingest
 from chatbot_engine.models.documents import DeleteResult, DocumentRecord
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -23,6 +33,9 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
     "",
     status_code=status.HTTP_201_CREATED,
     responses={501: {"description": "No IngestPipeline is registered yet."}},
+    # Indexing embeds every chunk, which is billed per token. Listing and
+    # deleting call no provider, so neither is metered.
+    dependencies=[Depends(limit_ingest)],
 )
 async def upsert_document(
     service: DocumentServiceDep,

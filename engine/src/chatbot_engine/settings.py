@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     #: Combines with `api_key`, which is the same thing named `default`.
     api_keys: str | None = None
 
+    # --- rate limits --------------------------------------------------------
+    #: Per caller, per process. The engine is where provider credits are
+    #: actually spent, so the limit belongs here as well as in whatever calls
+    #: it: a caller's own limiter is not a control, it is a courtesy. Generous
+    #: by default -- these stop runaway loops, not normal use. Zero disables.
+    chat_rate_limit_per_minute: int = 60
+    eval_rate_limit_per_hour: int = 20
+    ingest_rate_limit_per_minute: int = 20
+
     # --- the model provider -------------------------------------------------
 
     #: Checked where the client is built, so an engine that only ingests

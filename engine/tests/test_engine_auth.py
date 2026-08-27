@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from chatbot_engine.api.auth import OPEN_CALLER, Caller, _match
 from chatbot_engine.api.dependencies import reset_dependency_cache
+from chatbot_engine.api.rate_limit import RateLimiter, reset_rate_limits
 from chatbot_engine.settings import Settings
 
 # --- matching ----------------------------------------------------------------
@@ -90,6 +91,7 @@ def keyed_client(monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setenv("ENGINE_API_KEY", "")
     monkeypatch.setenv("ENGINE_API_KEYS", "web:web-secret,batch:batch-secret")
     reset_dependency_cache()
+    reset_rate_limits()
 
     from chatbot_engine.app import create_app
 
@@ -136,6 +138,23 @@ def test_health_stays_reachable_without_a_key(keyed_client: TestClient) -> None:
 
 
 # --- attribution -------------------------------------------------------------
+
+
+def test_rate_limits_are_counted_per_caller_not_globally() -> None:
+    """One noisy client must not spend everyone else's allowance.
+
+    This is the whole practical payoff of naming keys: without it every caller
+    shares one bucket and the only available response to abuse is to turn the
+    engine off for everybody.
+    """
+    limiter = RateLimiter(name="chat", capacity=1, window_s=60.0)
+
+    limiter.check(Caller(name="web").name)
+    limiter.check(Caller(name="batch").name)
+
+    with pytest.raises(Exception) as caught:
+        limiter.check(Caller(name="web").name)
+    assert getattr(caught.value, "status_code", None) == 429
 
 
 def test_an_open_engine_still_names_its_caller() -> None:

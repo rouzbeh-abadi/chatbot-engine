@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # service name (http://mcp-tools:8200/mcp) when the engine runs in Docker.
     mcp_tools_url: str | None = None
 
+    # --- rate limits --------------------------------------------------------
+    # Per caller, in this process. Generous for a person, tight for a script:
+    # every chat turn and every eval case is a model call on your provider key.
+    # Zero disables a limit.
+    chat_rate_limit_per_minute: int = 30
+    eval_rate_limit_per_hour: int = 20
+
     # Shared secret guarding the /admin routes. When set, every admin request
     # must send a matching `X-Admin-Key`. Left unset the dashboard is open,
     # which is fine on localhost and not fine anywhere else.

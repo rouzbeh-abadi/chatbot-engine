@@ -14,7 +14,16 @@ from fastapi.testclient import TestClient
 
 from support_agent.app import app
 from support_agent.engine import get_engine_client
+from support_agent.api.rate_limit import reset_rate_limits
 from support_agent.settings import get_settings
+
+
+@pytest.fixture(autouse=True)
+def _fresh_rate_limits() -> Iterator[None]:
+    """Buckets are process-wide, so one test's spending must not reach the next."""
+    reset_rate_limits()
+    yield
+    reset_rate_limits()
 
 
 @pytest.fixture
@@ -66,6 +75,24 @@ def guarded_client(engine: FakeEngine, admin_key: str) -> Iterator[TestClient]:
     settings = get_settings().model_copy(update={"admin_key": admin_key})
     app.dependency_overrides[get_engine_client] = lambda: engine
     app.dependency_overrides[get_settings] = lambda: settings
+    with TestClient(app) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+@pytest.fixture
+def limited_client(engine: FakeEngine) -> Iterator[TestClient]:
+    """A backend with the limits turned down to two calls, so a test can reach them."""
+    settings = get_settings().model_copy(
+        update={
+            "admin_key": None,
+            "chat_rate_limit_per_minute": 2,
+            "eval_rate_limit_per_hour": 2,
+        }
+    )
+    app.dependency_overrides[get_engine_client] = lambda: engine
+    app.dependency_overrides[get_settings] = lambda: settings
+    reset_rate_limits()
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()

@@ -13,11 +13,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 
 from support_agent.api.auth import AdminOnly
+from support_agent.api.rate_limit import limit_eval
 from support_agent.assistant import load_project
 from support_agent.database.connection import get_session_factory
 from support_agent.database.models import Booking, SupportTicket
@@ -145,7 +146,7 @@ class EvalRunResult(BaseModel):
     rows: list[Verdict]
 
 
-@router.post("/eval/system-prompt")
+@router.post("/eval/system-prompt", dependencies=[Depends(limit_eval)])
 async def run_system_prompt_eval(
     engine: EngineDep,
     only: str | None = Query(
@@ -199,7 +200,7 @@ async def list_rag_cases() -> list[EvalCaseInfo]:
     ]
 
 
-@router.post("/eval/rag")
+@router.post("/eval/rag", dependencies=[Depends(limit_eval)])
 async def run_rag_eval(
     engine: EngineDep,
     only: str | None = Query(
