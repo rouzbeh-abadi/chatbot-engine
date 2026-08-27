@@ -3,7 +3,7 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 WORKDIR /app
 
-COPY pyproject.toml README.md ./
+COPY pyproject.toml README.md LICENSE NOTICE ./
 COPY src ./src
 # The `eval` extra (RAGAS) is included so the admin dashboard can run the RAG
 # evaluation live. It is imported lazily, so normal serving never loads it.

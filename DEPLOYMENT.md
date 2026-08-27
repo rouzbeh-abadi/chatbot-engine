@@ -7,6 +7,36 @@ the wrong shape for anything other people can reach.
 
 This document is the difference between the two.
 
+## Running the published images
+
+Every version tag publishes multi-architecture images (amd64 and arm64) to this
+repository's container registry, so a deployment does not have to build
+anything:
+
+```
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.0
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.0
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.0
+```
+
+Each is tagged `0.1.0`, `0.1`, `0` and `latest`, so you can pin as tightly as you
+want. Pin to a full version in production — `latest` moves under you.
+
+To run the published images instead of building locally, point the compose
+services at them with `image:` and drop their `build:` blocks.
+
+## Cutting a release
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+That runs the full test suite again (a tag can point at any commit, including
+one that never went through a pull request), publishes the three images, and
+opens a GitHub release with generated notes. Running the *Release* workflow
+manually from the Actions tab builds everything but publishes nothing, which is
+how to rehearse it without moving a tag.
+
 ## The one thing to do first
 
 Set both services to production. They will then refuse to start on a default

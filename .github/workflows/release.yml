@@ -1,0 +1,153 @@
+# Publish container images when a version tag is pushed.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# Images land in this repository's GitHub Container Registry:
+#
+#   ghcr.io/<owner>/chatbot-engine/engine
+#   ghcr.io/<owner>/chatbot-engine/backend
+#   ghcr.io/<owner>/chatbot-engine/frontend
+#
+# The engine is the reusable part -- the other two are the example app, published
+# alongside it so the whole stack can be run from a compose file without a build.
+#
+# Nothing here deploys anywhere. This is a package, so where it runs is the
+# adopter's decision; see DEPLOYMENT.md.
+
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  # Lets you rehearse the whole thing against a branch before cutting a tag.
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  # The tag is only worth publishing if it passes what `main` has to pass. This
+  # duplicates CI on purpose: a tag can point at any commit, including one that
+  # never ran through a pull request.
+  verify:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync
+      - run: uv run pytest -q
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+        working-directory: frontend
+      - run: npx tsc --noEmit
+        working-directory: frontend
+      - run: npm run test
+        working-directory: frontend
+
+  images:
+    name: Publish ${{ matrix.service }}
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [engine, backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 is built under emulation, which is slow but means the images run
+      # unchanged on Apple silicon and Graviton.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
+          # v1.4.2 publishes 1.4.2, 1.4, 1 and latest, so an adopter can pin as
+          # loosely or as tightly as they want. `latest` only moves on a real
+          # tag -- never on a manual run.
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.service }}
+          platforms: linux/amd64,linux/arm64
+          # A manual run builds everything but publishes nothing, so the
+          # workflow can be rehearsed without moving any tag.
+          push: ${{ startsWith(github.ref, 'refs/tags/v') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: true
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  release:
+    name: GitHub release
+    needs: images
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Release notes are generated from the commits since the last tag, so
+          # a shallow clone would produce an empty changelog.
+          fetch-depth: 0
+
+      # Two steps rather than one clever invocation: `--generate-notes` and
+      # `--notes` are used separately here, so neither depends on how gh chooses
+      # to merge them. The body is read back and appended to.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "${{ github.ref_name }}" --generate-notes
+
+      - name: Add the image coordinates to the notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          notes=$(gh release view "$VERSION" --json body --jq .body)
+          gh release edit "$VERSION" --notes "$notes
+
+          ## Container images
+
+          \`\`\`
+          ghcr.io/$REPO/engine:$VERSION
+          ghcr.io/$REPO/backend:$VERSION
+          ghcr.io/$REPO/frontend:$VERSION
+          \`\`\`
+
+          Running this where other people can reach it: see [DEPLOYMENT.md](DEPLOYMENT.md)."

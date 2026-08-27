@@ -3,6 +3,8 @@ name = "support-agent"
 version = "0.1.0"
 description = "Travel support backend: app API, domain tools, and an HTTP client for the AI engine."
 readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "Rouzbeh Abadi" }]
 requires-python = ">=3.13"
 # No dependency on the engine package. The two services share an HTTP contract
 # only -- `engine_client/models.py` mirrors it deliberately.

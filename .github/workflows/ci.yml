@@ -1,0 +1,104 @@
+# Tests and image builds on every push and pull request.
+#
+# Deliberately not a deploy pipeline: this is a package other people run, so CI
+# proves the thing builds and passes its own tests, and stops short of assuming
+# where it lands.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same branch makes the previous run pointless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - run: uv sync
+
+      # No .env is created, on purpose: the suite must pass on a machine with no
+      # configuration at all, which is the same promise `make dev` makes.
+      - name: Run the engine and backend tests
+        run: uv run pytest -q
+
+  frontend:
+    name: Frontend tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - run: npm ci
+
+      # Type errors do not fail vitest, so the compiler runs on its own.
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - run: npm run test
+
+      - name: Build the production bundle
+        run: npm run build
+
+  images:
+    name: Container images
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, engine, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Built but not pushed: a Dockerfile that stopped building is a broken
+      # deployment, and it is worth catching here rather than at deploy time.
+      - name: Build the ${{ matrix.service }} image
+        run: docker build ./${{ matrix.service }}
+
+  compose:
+    name: Compose files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The demo stack resolves
+        run: docker compose -f docker-compose.yml config --quiet
+
+      - name: The production overlay resolves, and demands its secrets
+        env:
+          POSTGRES_PASSWORD: ci-placeholder
+          ENGINE_API_KEY: ci-placeholder
+          BACKEND_ADMIN_KEY: ci-placeholder
+          ENGINE_OPENROUTER_API_KEY: ci-placeholder
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+
+      - name: The production overlay refuses to resolve without them
+        run: |
+          if docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet 2>/dev/null; then
+            echo "the overlay resolved with no secrets set -- a required variable lost its ':?' guard"
+            exit 1
+          fi

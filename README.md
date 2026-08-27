@@ -1,5 +1,10 @@
 # A RAG chatbot engine with tool calling
 
+[![CI](https://github.com/rouzbeh-abadi/chatbot-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/rouzbeh-abadi/chatbot-engine/actions/workflows/ci.yml)
+[![Release](https://github.com/rouzbeh-abadi/chatbot-engine/actions/workflows/release.yml/badge.svg)](https://github.com/rouzbeh-abadi/chatbot-engine/actions/workflows/release.yml)
+[![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+
 A reusable engine for building domain-specific chatbots. It does the AI:
 retrieval from a knowledge base, prompting, streaming the answer, and the loop
 that calls tools and feeds their results back to the model. It knows nothing
@@ -211,6 +216,18 @@ tests/      the contract-parity test, where the two services meet
   connect a backend to the engine.
 - **[engine/README.md](engine/README.md)**, **[backend/README.md](backend/README.md)**,
   and **[frontend/README.md](frontend/README.md)** cover each service in detail.
+
+## Licence
+
+Apache License 2.0 — see [LICENSE](LICENSE).
+
+Chosen over MIT for the explicit patent grant in section 3: an adopter gets a
+licence to any patents covering this code, and loses it if they sue over them.
+That is the clause corporate legal teams look for before building on something,
+and it costs a permissive licence nothing.
+
+The example backend and frontend are under the same licence. Take them, change
+them, ship them — attribution and the notice in section 4 are all that is asked.
 
 ## Tests
 

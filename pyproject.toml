@@ -12,6 +12,8 @@ name = "chatbot-engine-workspace"
 version = "0.1.0"
 description = "A domain-specialised RAG chatbot with advanced retrieval and tool calling."
 readme = "README.md"
+license = "Apache-2.0"
+authors = [{ name = "Rouzbeh Abadi" }]
 requires-python = ">=3.13"
 dependencies = [
     "support-agent",

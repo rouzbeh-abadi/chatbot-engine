@@ -4,6 +4,9 @@ version = "0.1.0"
 description = "A standalone RAG and MCP tool-calling service."
 readme = "README.md"
 license = "Apache-2.0"
+# Kept inside the package: a wheel must carry the text, not just name it.
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Rouzbeh Abadi" }]
 requires-python = ">=3.13"
 
 dependencies = [

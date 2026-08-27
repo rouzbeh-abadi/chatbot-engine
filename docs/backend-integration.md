@@ -54,9 +54,20 @@ Two settings on your side:
 | `BACKEND_ENGINE_URL` | `http://localhost:8100` | `http://engine:8100` under Docker Compose |
 | `BACKEND_ENGINE_API_KEY` | matches the engine's `ENGINE_API_KEY` | Leave both blank on localhost |
 
-If the engine has `ENGINE_API_KEY` set, send it as an `X-API-Key` header on every
-request except `/health`. If it is unset, the engine is open — fine locally, not
-fine in a deployment, because the engine holds the model provider's credentials.
+If the engine has a key set, send it as an `X-API-Key` header on every request
+except `/health`. If none is set, the engine is open — fine locally, not fine in
+a deployment, because the engine holds the model provider's credentials, and
+`ENGINE_ENV=production` refuses to start that way.
+
+The engine also accepts *named* keys (`ENGINE_API_KEYS=web:s3cret,batch:0ther`),
+which is what you want once more than one service calls it: its rate limits are
+counted per name, so one backend cannot spend another's allowance, and you can
+rotate a key by running the old and new side by side rather than restarting every
+caller at once. Nothing changes on the sending side — it is still one
+`X-API-Key` header.
+
+Expect `429` as a normal response, not an exceptional one: the engine meters the
+routes that spend provider credits and returns `Retry-After` in seconds.
 
 **Do not let a browser call the engine directly.** It has no notion of end-user
 permissions and will happily answer anyone who can reach it. Your backend is the
