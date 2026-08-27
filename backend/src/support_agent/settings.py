@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+#: The demo credentials shipped in docker-compose.yml and .env.example. Fine for
+#: `make up` on a laptop; a published database with these is a published database
+#: with no password, so `env=production` refuses to start on them.
+DEMO_DATABASE_CREDENTIALS = "support_agent:support_agent"
+
 
 class Settings(BaseSettings):
     """Application backend configuration."""
@@ -16,6 +23,11 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
     )
+
+    # Which set of defaults to trust. `local` is permissive so `make dev` needs
+    # no configuration; `production` refuses to start on any default that is
+    # only safe on a laptop -- see `unsafe_for_production`.
+    env: Literal["local", "production"] = "local"
 
     # Trust the caller's `X-User-Id`. Only ever true behind a proxy that
     # authenticates the user and overwrites the header itself; a browser can
@@ -62,6 +74,39 @@ class Settings(BaseSettings):
         admin request -- a confusing failure for anyone who copied .env.example.
         """
         return value or None
+
+    def unsafe_for_production(self) -> list[str]:
+        """Defaults that are convenient locally and dangerous on the internet.
+
+        Returned rather than raised so the caller decides what to do with them:
+        `app.py` refuses to start when `env=production`, and logs them as
+        warnings otherwise. Each string is a whole sentence naming the variable
+        to set, because it is the only thing a stuck operator will read.
+        """
+        problems: list[str] = []
+
+        if self.admin_key is None:
+            problems.append(
+                "BACKEND_ADMIN_KEY is not set, so /admin -- every booking, every "
+                "ticket, and the evaluation runs that spend model credits -- is "
+                "open to anyone who can reach this port."
+            )
+
+        if self.engine_api_key is None:
+            problems.append(
+                "BACKEND_ENGINE_API_KEY is not set, so this backend cannot "
+                "authenticate to the engine. Set ENGINE_API_KEY on the engine "
+                "and the same value here, or the engine holds your provider "
+                "credentials on an open port."
+            )
+
+        if DEMO_DATABASE_CREDENTIALS in self.database_url:
+            problems.append(
+                "BACKEND_DATABASE_URL still carries the demo credentials "
+                f"({DEMO_DATABASE_CREDENTIALS}). Generate a real password."
+            )
+
+        return problems
 
 
 @lru_cache

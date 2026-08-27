@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -27,6 +28,11 @@ class Settings(BaseSettings):
     )
 
     # --- who may call us ----------------------------------------------------
+
+    #: Which set of defaults to trust. `local` is permissive so the engine runs
+    #: with no configuration; `production` refuses to start without a key, since
+    #: an open engine is an open provider account.
+    env: Literal["local", "production"] = "local"
 
     #: Optional shared secret. When set, every request except the /health routes
     #: must send a matching `X-API-Key`. Left unset the engine is open, which is
@@ -143,6 +149,25 @@ class Settings(BaseSettings):
             keys[name] = secret
 
         return keys
+
+    def unsafe_for_production(self) -> list[str]:
+        """Defaults that are convenient locally and dangerous on the internet.
+
+        Returned rather than raised so the caller decides: `app.py` refuses to
+        start under `env=production`, and logs them as warnings otherwise.
+        """
+        problems: list[str] = []
+
+        if not self.credentials():
+            problems.append(
+                "No API key is set (ENGINE_API_KEY or ENGINE_API_KEYS), so "
+                "anyone who can reach this port can spend your provider "
+                "credits and read anything indexed. The engine has no notion "
+                "of end users -- it must only ever be reachable by your "
+                "application backend."
+            )
+
+        return problems
 
     def require_openrouter_key(self) -> str:
         """The provider credential, or a 501 naming the variable to set.

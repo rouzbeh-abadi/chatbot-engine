@@ -7,6 +7,8 @@ not depend on being served over HTTP.
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -24,6 +26,36 @@ from chatbot_engine.errors import (
 from chatbot_engine.settings import get_settings
 
 
+logger = logging.getLogger(__name__)
+
+
+class InsecureConfiguration(RuntimeError):
+    """`ENGINE_ENV=production` with a default that is only safe on a laptop."""
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Refuse to serve a production deployment with development defaults.
+
+    Checked at startup, not per request: an engine that will hand out provider
+    credits to anonymous callers should fail its health check and never enter
+    the load balancer, rather than serve and log about it.
+    """
+    settings = get_settings()
+    problems = settings.unsafe_for_production()
+
+    if problems and settings.env == "production":
+        raise InsecureConfiguration(
+            "refusing to start with ENGINE_ENV=production:\n"
+            + "\n".join(f"  - {problem}" for problem in problems)
+        )
+
+    for problem in problems:
+        logger.warning("insecure for deployment: %s", problem)
+
+    yield
+
+
 def create_app() -> FastAPI:
     """Build the FastAPI app: exception handlers, then the routers."""
     settings = get_settings()
@@ -36,6 +68,7 @@ def create_app() -> FastAPI:
             "RAG and MCP tool-calling service. Configuration arrives with every "
             "request, so the engine stores none of it."
         ),
+        lifespan=lifespan,
     )
 
     # Register most-specific first: Starlette matches handlers by walking the

@@ -1,6 +1,10 @@
-"""FastAPI application: routes, and engine-error to HTTP-status mapping."""
+"""FastAPI application: routes, startup checks, and engine-error to HTTP status."""
 
 from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -15,6 +19,38 @@ from support_agent.engine_client import (
     EngineRejected,
     EngineUnavailable,
 )
+from support_agent.settings import get_settings
+
+logger = logging.getLogger(__name__)
+
+
+class InsecureConfiguration(RuntimeError):
+    """`BACKEND_ENV=production` with a default that is only safe on a laptop."""
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Refuse to serve a production deployment with development defaults.
+
+    Checked at startup rather than per request: a container that will leak data
+    the moment it takes traffic should fail its health check and never enter the
+    load balancer, not serve and log about it. Locally the same problems are
+    warnings, so `make dev` still needs no configuration at all.
+    """
+    settings = get_settings()
+    problems = settings.unsafe_for_production()
+
+    if problems and settings.env == "production":
+        raise InsecureConfiguration(
+            "refusing to start with BACKEND_ENV=production:\n"
+            + "\n".join(f"  - {problem}" for problem in problems)
+        )
+
+    for problem in problems:
+        logger.warning("insecure for deployment: %s", problem)
+
+    yield
+
 
 app = FastAPI(
     title="Support Agent API",
@@ -23,6 +59,7 @@ app = FastAPI(
         "Travel support assistant. Calls the chatbot-engine service over HTTP and "
         "exposes this project's domain tools to it over MCP."
     ),
+    lifespan=lifespan,
 )
 
 
