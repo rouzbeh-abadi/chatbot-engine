@@ -9,7 +9,7 @@
 # The backend and the tool server run the same image with different entrypoints:
 # they share the models and the database, but one speaks HTTP and the other MCP.
 
-name: rabadi-ae-afa-3-5
+name: chatbot-engine
 
 services:
   # The built UI, served by nginx, which also proxies /api to the backend so the

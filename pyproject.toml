@@ -6,7 +6,9 @@
 # it is what catches the wire contract drifting between them.
 
 [project]
-name = "rabadi-ae-afa-3-5"
+# Not "chatbot-engine": that name belongs to the engine package below, and a
+# workspace root cannot depend on itself.
+name = "chatbot-engine-workspace"
 version = "0.1.0"
 description = "A domain-specialised RAG chatbot with advanced retrieval and tool calling."
 readme = "README.md"
