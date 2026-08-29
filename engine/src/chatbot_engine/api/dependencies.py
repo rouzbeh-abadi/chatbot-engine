@@ -17,7 +17,7 @@ from fastapi import Depends
 from chatbot_engine.agent.chat_agent import ChatAgent
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
-from chatbot_engine.Eval.prompt_evaluation import evaluate_dataset
+from chatbot_engine.eval.prompt_evaluation import evaluate_dataset
 from chatbot_engine.mcp.client import McpToolProvider
 from chatbot_engine.models.evals import (
     JudgeReport,
@@ -77,7 +77,7 @@ def get_rag_evaluator() -> RagEvaluator | None:
     async def evaluate(request: RagEvalRequest) -> RagReport:
         # Imported here so the heavy, eval-only RAGAS dependency is not pulled
         # in unless a RAG evaluation is actually requested.
-        from chatbot_engine.Eval.rag_evaluation import evaluate_rag_dataset
+        from chatbot_engine.eval.rag_evaluation import evaluate_rag_dataset
 
         return await evaluate_rag_dataset(request)
 

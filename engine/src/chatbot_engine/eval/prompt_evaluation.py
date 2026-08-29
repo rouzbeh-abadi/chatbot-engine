@@ -7,7 +7,7 @@ report that preserves the assistant's original answers.
 
 from __future__ import annotations
 
-from chatbot_engine.agent.Chains.judge_chain import create_judge_chain
+from chatbot_engine.agent.judge_chain import create_judge_chain
 from chatbot_engine.agent.client import build_chat_model
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.evals import (

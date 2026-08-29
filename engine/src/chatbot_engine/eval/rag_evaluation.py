@@ -101,7 +101,7 @@ def _build_metrics() -> tuple:
     Collections metrics take a ragas-native LLM built from an OpenAI client, so
     we point one at OpenRouter rather than reusing the LangChain chat model.
     """
-    from chatbot_engine.Eval import _ragas_compat  # noqa: F401  patch before ragas
+    from chatbot_engine.eval import _ragas_compat  # noqa: F401  patch before ragas
     from ragas.embeddings import embedding_factory
     from ragas.llms import llm_factory
     from ragas.metrics.collections import (

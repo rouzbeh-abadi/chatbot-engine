@@ -12,7 +12,7 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 
-from chatbot_engine.agent.Chains.chat_chain import create_chain
+from chatbot_engine.agent.chat_chain import create_chain
 from chatbot_engine.errors import EngineError
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import (

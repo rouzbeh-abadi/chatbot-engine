@@ -41,7 +41,7 @@ every implementation on one screen:
 | `IngestPipeline` | `DocumentIngestPipeline` | `rag/pipeline.py` |
 | `DocumentRegistry` | `SqliteDocumentRegistry` | `documents/sqlite_registry.py` |
 | `BlobStore` | `DocumentBlobs` | `documents/blobs.py` |
-| `Judge` / `RagEvaluator` | functions in `Eval/` | `Eval/` |
+| `Judge` / `RagEvaluator` | functions in `eval/` | `eval/` |
 
 `documents/registry.py` contains a second, in-memory registry used only by the
 test suite. It is not wired into the running engine and can be disregarded when
@@ -104,7 +104,7 @@ mcp/          the MCP client that reaches the application's tools
 documents/    document bookkeeping: the registry and the stored originals
 models/       the request, response, and event schemas — the wire contract
 services/     readiness boundaries between the routes and the ports
-Eval/         the two graders: the system-prompt judge and RAGAS retrieval
+eval/         the two graders: the system-prompt judge and RAGAS retrieval
 settings.py   every ENGINE_* option, with its default declared inline
 ```
 
