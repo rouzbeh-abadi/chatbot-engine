@@ -209,6 +209,9 @@ tests/      the contract-parity test, where the two services meet
 
 ## Documentation
 
+- **[docs/engine-architecture.md](docs/engine-architecture.md)** maps the
+  engine's structure: entry points, the layers a request passes through, and the
+  file responsible for each step.
 - **[DEPLOYMENT.md](DEPLOYMENT.md)** covers running this where other people can
   reach it: secrets, the network shape, TLS, rate limits, and what is and is not
   authenticated.

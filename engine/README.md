@@ -21,6 +21,12 @@ Your backend        →  HTTP    →  chatbot engine
 chatbot engine      →  MCP     →  your tool server
 ```
 
+## Architecture
+
+**[Engine architecture](../docs/engine-architecture.md)** maps the entry points,
+the layers a request passes through, and the file responsible for each step.
+Read it before the source.
+
 ## Running it
 
 ```bash
