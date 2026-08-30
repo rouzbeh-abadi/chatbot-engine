@@ -12,7 +12,6 @@ import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 
-from chatbot_engine.agent.chat_chain import create_chain
 from chatbot_engine.errors import EngineError
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import (
@@ -30,6 +29,7 @@ from langchain_core.messages import (
     ToolCall,
     ToolMessage,
 )
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 
 #: Model -> (input $/1M tokens, output $/1M tokens), from OpenRouter's price list
@@ -216,8 +216,19 @@ async def stream_completion(
 
     server_for = {tool["name"]: tool["server"] for tool in tools}
 
+    # The prompt is the system prompt followed by the running conversation; the
+    # model is bound to the tools when there are any. This used to live in a
+    # one-function module -- it is small enough to read in place.
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            SystemMessage(content=request.project.system_prompt),
+            MessagesPlaceholder("messages"),
+        ]
+    )
     model = build_chat_model(request.project)
-    chain = create_chain(model, request.project.system_prompt, tools)
+    # bind_tools wants plain dicts, not the Mapping views the provider returns.
+    bound = model.bind_tools([dict(tool) for tool in tools]) if tools else model
+    chain = prompt | bound
     messages = to_messages(request, context)
 
     # Tokens accumulate across rounds: a turn with tool calls is several model
