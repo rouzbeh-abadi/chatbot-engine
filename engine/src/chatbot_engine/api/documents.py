@@ -42,6 +42,7 @@ async def upsert_document(
     project_id: str = Form(...),
     external_id: str = Form(...),
     file: UploadFile = File(...),
+    embedding_model: str | None = Form(default=None),
 ) -> DocumentRecord:
     """Upsert one document, keyed by the caller's `external_id`.
 
@@ -64,6 +65,7 @@ async def upsert_document(
         filename=file.filename or external_id,
         mimetype=file.content_type or "application/octet-stream",
         data=data,
+        embedding_model=embedding_model,
     )
 
 

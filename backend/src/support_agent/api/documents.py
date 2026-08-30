@@ -56,8 +56,10 @@ async def upsert_document(
         )
 
     # Resolve the project first, so an unknown name is a 404 from us rather than
-    # an error from the engine.
+    # an error from the engine. `load_project` is cached, so reading the config
+    # again for its embedding model costs nothing.
     project_id = _project_id(project)
+    embedding_model = load_project(project).embedding_model
 
     return await engine.ingest_document(
         project_id=project_id,
@@ -65,6 +67,7 @@ async def upsert_document(
         filename=file.filename or external_id,
         mimetype=file.content_type or "application/octet-stream",
         data=data,
+        embedding_model=embedding_model,
     )
 
 

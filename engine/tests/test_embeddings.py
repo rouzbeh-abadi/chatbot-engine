@@ -40,7 +40,7 @@ def _clean(monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture
 def fake(monkeypatch: pytest.MonkeyPatch) -> FakeEmbeddings:
     stub = FakeEmbeddings()
-    monkeypatch.setattr(module, "get_embeddings", lambda: stub)
+    monkeypatch.setattr(module, "get_embeddings", lambda *a, **k: stub)
 
     return stub
 

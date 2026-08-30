@@ -71,7 +71,7 @@ async def retrieve(request: ChatRequest) -> list[Hit]:
     from an empty store.
     """
     queries = await rewrite_queries(request)
-    store = load_vector_store()
+    store = load_vector_store(request.project.embedding_model)
     top_k = request.project.top_k
     where = {"project_id": request.project.project_id}
 

@@ -34,6 +34,7 @@ class IngestPipeline(Protocol):
         filename: str,
         mimetype: str,
         data: bytes,
+        embedding_model: str | None = None,
     ) -> DocumentRecord: ...
 
 

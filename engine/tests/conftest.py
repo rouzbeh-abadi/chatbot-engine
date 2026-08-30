@@ -32,8 +32,8 @@ def offline_vectors(
     fake = DeterministicFakeEmbedding(size=64)
     # Both modules: `vector_store` imports the name directly, so patching only
     # `embeddings` would leave it holding the real one.
-    monkeypatch.setattr(embeddings_module, "get_embeddings", lambda: fake)
-    monkeypatch.setattr(vector_store_module, "get_embeddings", lambda: fake)
+    monkeypatch.setattr(embeddings_module, "get_embeddings", lambda *a, **k: fake)
+    monkeypatch.setattr(vector_store_module, "get_embeddings", lambda *a, **k: fake)
     reset_dependency_cache()
     reset_rate_limits()
 

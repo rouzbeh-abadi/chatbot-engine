@@ -56,6 +56,9 @@ class AssistantConfig(BaseModel):
     name: str
     system_prompt: str
     model: str | None = None
+    #: The embedding model for this project's knowledge base; None uses the
+    #: engine's default. Mirrors the engine's AssistantConfig -- see the parity test.
+    embedding_model: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_k: int = Field(default=5, ge=1, le=100)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)

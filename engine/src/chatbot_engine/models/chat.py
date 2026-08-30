@@ -47,6 +47,10 @@ class AssistantConfig(BaseModel):
     name: str
     system_prompt: str
     model: str | None = None
+    #: The embedding model for this project's knowledge base. Like `model`, the
+    #: backend supplies it and the engine falls back to its own default. It keys
+    #: the vector collection, so retrieval only ever compares like with like.
+    embedding_model: str | None = None
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     #: How many chunks to retrieve per turn.
     top_k: int = Field(default=5, ge=1, le=100)

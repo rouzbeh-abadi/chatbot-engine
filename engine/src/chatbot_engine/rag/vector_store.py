@@ -27,8 +27,14 @@ _store: Chroma | None = None
 _store_lock = threading.Lock()
 
 
-def open_vector_store() -> Chroma:
-    """Open the store for reading or writing, creating it once if absent."""
+def open_vector_store(embedding_model: str | None = None) -> Chroma:
+    """Open the store for reading or writing, creating it once if absent.
+
+    `embedding_model` comes from the assistant config; None uses the engine
+    default. There is one shared collection, so the first open fixes the model
+    for the process -- the engine serves one embedding model at a time, and the
+    backend is expected to send a consistent value.
+    """
     global _store
 
     if _store is None:
@@ -39,7 +45,7 @@ def open_vector_store() -> Chroma:
                 settings = get_settings()
                 _store = Chroma(
                     collection_name=settings.chroma_collection,
-                    embedding_function=get_embeddings(),
+                    embedding_function=get_embeddings(embedding_model),
                     persist_directory=str(settings.chroma_dir),
                 )
 
@@ -53,14 +59,14 @@ def reset_vector_store() -> None:
         _store = None
 
 
-def load_vector_store() -> Chroma:
+def load_vector_store(embedding_model: str | None = None) -> Chroma:
     """Open an already populated store, for querying.
 
     Raises if nothing has been ingested, so an empty database fails loudly
     instead of silently retrieving zero chunks and letting the model invent
     an answer from nothing.
     """
-    store = open_vector_store()
+    store = open_vector_store(embedding_model)
 
     if count_chunks(store) == 0:
         raise EmptyVectorStoreError(
@@ -87,8 +93,19 @@ def reset_collection() -> None:
 class ChromaChunkStore:
     """The write side: one document's chunks, replaced as a unit."""
 
-    def __init__(self, store: Chroma | None = None) -> None:
-        self._store = store or open_vector_store()
+    def __init__(
+        self,
+        embedding_model: str | None = None,
+        store: Chroma | None = None,
+    ) -> None:
+        # Opened lazily, so constructing this at wiring time does not fix the
+        # embedding model before a request has said which one to use.
+        self._explicit = store
+        self._embedding_model = embedding_model
+
+    @property
+    def _store(self) -> Chroma:
+        return self._explicit or open_vector_store(self._embedding_model)
 
     async def write(self, *, doc_id: str, chunks: list[Document]) -> None:
         """Replace everything stored for `doc_id` with `chunks`.

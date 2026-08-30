@@ -64,6 +64,7 @@ class DocumentIngestPipeline:
         filename: str,
         mimetype: str,
         data: bytes,
+        embedding_model: str | None = None,
     ) -> DocumentRecord:
         """Ingest one document and report what happened to it.
 
@@ -104,7 +105,9 @@ class DocumentIngestPipeline:
             updated_at=now,
         )
 
-        return await self._index(record, extractor, data, keep_original=True)
+        return await self._index(
+            record, extractor, data, keep_original=True, embedding_model=embedding_model
+        )
 
     async def reindex(self, *, project_id: str, doc_id: str) -> DocumentRecord:
         """Re-chunk and re-embed one document from the bytes already stored.
@@ -139,6 +142,7 @@ class DocumentIngestPipeline:
         data: bytes,
         *,
         keep_original: bool,
+        embedding_model: str | None = None,
     ) -> DocumentRecord:
         """Store, split, embed, record. Shared by `ingest` and `reindex`."""
         try:
@@ -152,9 +156,13 @@ class DocumentIngestPipeline:
             chunks = await asyncio.to_thread(self._split, extractor, data, record)
 
             if self._vectors is not None:
-                # Inside the try on purpose: a rate limit or a bad key here must
-                # leave a `failed` record, not a document that vanishes.
-                await self._vectors.write(doc_id=record.doc_id, chunks=chunks)
+                # `self._vectors` is only the "embeddings are available" signal;
+                # the store to write to depends on the embedding model, which
+                # arrives with the request. Inside the try on purpose: a rate
+                # limit or a bad key must leave a `failed` record, not a document
+                # that vanishes.
+                store = ChromaChunkStore(embedding_model)
+                await store.write(doc_id=record.doc_id, chunks=chunks)
         except Exception as exc:
             # Keep the failure in GET /documents, not only in a log line.
             await self._registry.upsert(

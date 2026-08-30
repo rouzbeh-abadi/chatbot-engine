@@ -47,6 +47,7 @@ class DocumentService:
         filename: str,
         mimetype: str,
         data: bytes,
+        embedding_model: str | None = None,
     ) -> DocumentRecord:
         if self._pipeline is None:
             raise NotConfiguredError(
@@ -58,6 +59,7 @@ class DocumentService:
             filename=filename,
             mimetype=mimetype,
             data=data,
+            embedding_model=embedding_model,
         )
 
     async def list(self, *, project_id: str) -> Sequence[DocumentRecord]:

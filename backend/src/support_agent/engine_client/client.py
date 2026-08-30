@@ -126,18 +126,25 @@ class EngineClient:
         filename: str,
         mimetype: str,
         data: bytes,
+        embedding_model: str | None = None,
     ) -> DocumentRecord:
         """Upload one document's raw bytes to the engine for indexing.
 
         Raw bytes, not extracted text: extraction is the engine's job, and the
         original file carries layout that extracted text would have lost.
         """
+        form = {"project_id": project_id, "external_id": external_id}
+        # Only when set, so an unconfigured project leaves the engine on its
+        # default rather than sending an empty field.
+        if embedding_model is not None:
+            form["embedding_model"] = embedding_model
+
         async with self._client() as client:
             response = await self._request(
                 client,
                 "PUT",
                 "/documents",
-                data={"project_id": project_id, "external_id": external_id},
+                data=form,
                 files={"file": (filename, data, mimetype)},
             )
             return DocumentRecord.model_validate(response.json())
