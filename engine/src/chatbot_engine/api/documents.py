@@ -21,6 +21,7 @@ from fastapi import (
 from chatbot_engine.api.dependencies import DocumentServiceDep
 from chatbot_engine.api.rate_limit import limit_ingest
 from chatbot_engine.models.documents import DeleteResult, DocumentRecord
+from chatbot_engine.rag.splitter import ChunkStrategy
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -43,7 +44,7 @@ async def upsert_document(
     external_id: str = Form(...),
     file: UploadFile = File(...),
     embedding_model: str | None = Form(default=None),
-    chunking_strategy: str | None = Form(default=None),
+    chunking_strategy: ChunkStrategy | None = Form(default=None),
     chunk_size: int | None = Form(default=None),
     chunk_overlap: int | None = Form(default=None),
 ) -> DocumentRecord:

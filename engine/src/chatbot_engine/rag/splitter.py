@@ -35,6 +35,9 @@ from langchain_text_splitters import (
 #:   when the document has no pages.
 ChunkStrategy = Literal["size", "headings", "page"]
 
+#: The same values at runtime, to check a string that came off the wire.
+CHUNK_STRATEGIES: frozenset[str] = frozenset(("size", "headings", "page"))
+
 #: The heading levels `headings` splits on. Deeper levels stay inside the
 #: section: splitting on every `####` would produce chunks of a sentence or two.
 _HEADERS = [("#", "h1"), ("##", "h2"), ("###", "h3")]
@@ -52,6 +55,14 @@ class DocumentChunker:
         settings = get_settings()
 
         self._strategy: ChunkStrategy = strategy or settings.chunk_strategy
+        if self._strategy not in CHUNK_STRATEGIES:
+            # Falling through to `size` would silently index the document a
+            # different way than the caller asked for -- the kind of wrong that
+            # only shows up later as poor retrieval.
+            raise ValueError(
+                f"unknown chunking strategy {self._strategy!r}; "
+                f"expected one of {sorted(CHUNK_STRATEGIES)}"
+            )
         self._splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size if chunk_size is not None else settings.chunk_size,
             chunk_overlap=(

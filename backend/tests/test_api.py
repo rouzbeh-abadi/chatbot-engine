@@ -177,6 +177,37 @@ def test_document_upload_forwards_raw_bytes(
     assert call["mimetype"] == "text/markdown"
 
 
+def test_upload_forwards_the_projects_chunking_config(
+    client: TestClient, engine: FakeEngine
+) -> None:
+    """The project owns how its knowledge base is chunked, so the backend must
+    send that config -- the engine has no idea which project this file is for."""
+    client.put(
+        "/documents",
+        data={"external_id": "baggage.md"},
+        files={"file": ("baggage.md", b"# Baggage\n\nOne bag.\n", "text/markdown")},
+    )
+
+    (call,) = engine.ingested
+    assert call["chunking_strategy"] == "headings"
+    assert call["chunk_size"] == 1000
+    assert call["chunk_overlap"] == 200
+
+
+def test_upload_forwards_the_projects_embedding_model(
+    client: TestClient, engine: FakeEngine
+) -> None:
+    """Documents must be embedded the same way queries will be."""
+    client.put(
+        "/documents",
+        data={"external_id": "baggage.md"},
+        files={"file": ("baggage.md", b"# Baggage\n\nOne bag.\n", "text/markdown")},
+    )
+
+    (call,) = engine.ingested
+    assert call["embedding_model"] == "openai/text-embedding-3-small"
+
+
 def test_empty_upload_is_rejected_before_the_engine(
     client: TestClient, engine: FakeEngine
 ) -> None:
