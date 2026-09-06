@@ -80,6 +80,26 @@ all, rather than serving openly. See [DEPLOYMENT.md](../DEPLOYMENT.md).
 decided *which person* may ask something would need your user model, and it has
 no business having one. That check belongs in the service calling it.
 
+## Agents
+
+A turn runs either as the built-in tool loop or as a LangGraph state machine,
+chosen per assistant:
+
+```yaml
+agent: loop     # loop | graph
+```
+
+Both emit the same events, so the choice is invisible to the caller. You can
+also install your own agent and select it by name, without forking the engine.
+The bundled graph needs an optional extra:
+
+```bash
+pip install "chatbot-engine[graph]"
+```
+
+The loop is the default, and is the right answer until a turn needs to pause,
+branch, or resume. **[Agents](../docs/agents.md)** explains the trade.
+
 ## Connecting a backend to it
 
 Everything a backend needs is written up in one guide: the endpoints, the

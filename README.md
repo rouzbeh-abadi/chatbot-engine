@@ -35,6 +35,10 @@ and tools, and a knowledge base of support documents.
   the backend owns the prompt.
 - **Document ingestion.** Upload a file and the engine extracts, chunks, embeds,
   and stores it; re-uploading identical bytes is skipped by content hash.
+- **Pluggable agents.** The chat turn runs as a built-in tool loop, as a
+  LangGraph state machine, or as an agent you install yourself: register a
+  factory under an entry point and name it in the project config, no fork
+  required. See [docs/agents.md](docs/agents.md).
 - **Chunking strategies.** Cut documents by fixed size, by Markdown heading, or
   by page. Chosen per project, so PDFs can carry page numbers into their
   citations. See [docs/chunking.md](docs/chunking.md).
@@ -220,6 +224,8 @@ tests/      the contract-parity test, where the two services meet
   authenticated.
 - **[docs/backend-integration.md](docs/backend-integration.md)** shows how to
   connect a backend to the engine.
+- **[docs/agents.md](docs/agents.md)** covers the two agents, when a graph is
+  worth its weight, and how to add a third.
 - **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies:
   what each cuts at, when to use it, and why changing one means re-indexing.
 - **[engine/README.md](engine/README.md)**, **[backend/README.md](backend/README.md)**,

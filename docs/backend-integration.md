@@ -147,7 +147,7 @@ configuration, so you send the whole assistant definition every time.**
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The whole assistant: prompt, model, retrieval settings, tools |
+| `project` | yes | The whole assistant: prompt, model, retrieval settings, tools. `agent` picks which agent runs the turn (`loop` or `graph`, see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base |
 | `message` | yes | What the user just said. Must not be empty |
 | `session_id` | no | Your conversation id. The engine passes it through |
 | `user_id` | no | Opaque. Sent to your MCP server as an `X-User-Id` header so *it* can authorise |

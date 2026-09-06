@@ -36,7 +36,7 @@ every implementation on one screen:
 
 | Port | Implementation | Location |
 | --- | --- | --- |
-| `Agent` | `ChatAgent` | `agent/chat_agent.py` |
+| `Agent` | `AgentRouter`, over `ChatAgent` and `LangGraphAgent` | `agent/router.py` |
 | `ToolProvider` | `McpToolProvider` | `mcp/client.py` |
 | `IngestPipeline` | `DocumentIngestPipeline` | `rag/pipeline.py` |
 | `DocumentRegistry` | `SqliteDocumentRegistry` | `documents/sqlite_registry.py` |
@@ -66,11 +66,15 @@ flowchart LR
    it raises 501; otherwise it delegates. The layer exists so that `/chat` and
    `/documents` report a missing implementation uniformly. It contains no other
    logic.
-3. **`agent/chat_agent.py`** runs the turn (retrieve, emit sources, stream the
-   answer, emit `done`) and translates raw model output into typed events.
-4. **`agent/retriever.py`** performs retrieval: rewrite the query, search the
+3. **`agent/router.py`** picks the agent the assistant config asked for, then
+   delegates. Both agents emit the same events, so nothing downstream changes.
+4. **`agent/chat_agent.py`** is the default: it runs the turn (retrieve, emit
+   sources, stream the answer, emit `done`) and translates raw model output into
+   typed events. `agent/graph_agent.py` runs the identical turn as a LangGraph
+   state machine instead. See [agents.md](agents.md).
+5. **`agent/retriever.py`** performs retrieval: rewrite the query, search the
    vector store, return the hits and the numbered context.
-5. **`agent/client.py`** runs the model-and-tool loop: discover the MCP tools,
+6. **`agent/client.py`** runs the model-and-tool loop: discover the MCP tools,
    call the model, execute any requested tool through the `ToolProvider`, return
    the result to the model, and repeat until it produces a final answer. This is
    the densest file in the engine, reflecting the inherent complexity of the tool
@@ -100,8 +104,8 @@ How the document is cut before embedding is configurable per project. See
 api/          HTTP surface: routes, auth, rate limits, streaming, and
               dependencies.py, the record of what is wired to what
 ports/        the interfaces every other module depends on
-agent/        the chat turn: chat_agent (orchestration), retriever (RAG),
-              client (the model and tool loop)
+agent/        the chat turn: router (which agent), chat_agent and graph_agent
+              (the two of them), retriever (RAG), client (model and tool loop)
 rag/          vectors, chunking, embeddings, the ingest pipeline
 mcp/          the MCP client that reaches the application's tools
 documents/    document bookkeeping: the registry and the stored originals
