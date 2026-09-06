@@ -91,6 +91,9 @@ Storage fans out to three of them — `ChromaChunkStore` for vectors,
 `DocumentBlobs` for the original file, and `SqliteDocumentRegistry` for the
 record.
 
+How the document is cut before embedding is configurable per project —
+`rag/splitter.py`, described in [chunking.md](chunking.md).
+
 ## Directory reference
 
 ```text

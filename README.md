@@ -35,6 +35,9 @@ and tools, and a knowledge base of support documents.
   the backend owns the prompt.
 - **Document ingestion.** Upload a file and the engine extracts, chunks, embeds,
   and stores it; re-uploading identical bytes is skipped by content hash.
+- **Chunking strategies.** Cut documents by fixed size, by Markdown heading, or
+  by page — chosen per project, so PDFs can carry page numbers into their
+  citations. See [docs/chunking.md](docs/chunking.md).
 - **Conversation export.** Download a transcript as JSON, CSV, or PDF.
 - **Admin dashboard.** Inspect the application data and run the evaluation from
   the browser, behind a shared operator key (`BACKEND_ADMIN_KEY`).
@@ -217,6 +220,8 @@ tests/      the contract-parity test, where the two services meet
   authenticated.
 - **[docs/backend-integration.md](docs/backend-integration.md)** shows how to
   connect a backend to the engine.
+- **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies —
+  what each cuts at, when to use it, and why changing one means re-indexing.
 - **[engine/README.md](engine/README.md)**, **[backend/README.md](backend/README.md)**,
   and **[frontend/README.md](frontend/README.md)** cover each service in detail.
 

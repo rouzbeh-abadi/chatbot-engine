@@ -262,6 +262,13 @@ curl -X PUT localhost:8100/documents \
 | `project_id` | Which knowledge base this belongs to |
 | `external_id` | **Your** identifier for the document — a path, a row id, anything stable |
 | `file` | The file itself |
+| `embedding_model` | Optional. Must match what queries will use, or retrieval compares vectors from two models |
+| `chunking_strategy` | Optional. `size`, `headings`, or `page` — see [chunking.md](chunking.md) |
+| `chunk_size`, `chunk_overlap` | Optional. The size cap every strategy ends with |
+
+The optional fields default to the engine's own settings. Send them from your
+project config so a document is chunked and embedded the same way every time —
+these are applied at ingest, so changing them means re-indexing.
 
 Returns `201` and a record:
 
