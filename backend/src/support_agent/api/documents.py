@@ -59,7 +59,7 @@ async def upsert_document(
     # an error from the engine. `load_project` is cached, so reading the config
     # again for its embedding model costs nothing.
     project_id = _project_id(project)
-    embedding_model = load_project(project).embedding_model
+    config = load_project(project)
 
     return await engine.ingest_document(
         project_id=project_id,
@@ -67,7 +67,10 @@ async def upsert_document(
         filename=file.filename or external_id,
         mimetype=file.content_type or "application/octet-stream",
         data=data,
-        embedding_model=embedding_model,
+        embedding_model=config.embedding_model,
+        chunking_strategy=config.chunking_strategy,
+        chunk_size=config.chunk_size,
+        chunk_overlap=config.chunk_overlap,
     )
 
 

@@ -24,7 +24,7 @@ from chatbot_engine.documents.extractor import DocumentExtractor, select_extract
 from chatbot_engine.errors import DocumentRejectedError, NotConfiguredError
 from chatbot_engine.models.documents import DocumentRecord, IngestStatus
 from chatbot_engine.ports.documents import DocumentRegistry
-from chatbot_engine.rag.splitter import DocumentChunker
+from chatbot_engine.rag.splitter import ChunkStrategy, DocumentChunker
 from chatbot_engine.rag.vector_store import ChromaChunkStore
 from langchain_core.documents import Document
 
@@ -65,6 +65,9 @@ class DocumentIngestPipeline:
         mimetype: str,
         data: bytes,
         embedding_model: str | None = None,
+        chunking_strategy: ChunkStrategy | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> DocumentRecord:
         """Ingest one document and report what happened to it.
 
@@ -105,8 +108,24 @@ class DocumentIngestPipeline:
             updated_at=now,
         )
 
+        # Only when the request actually specifies chunking. Otherwise the
+        # chunker this pipeline was wired with stands, which is what keeps it
+        # injectable.
+        chunker = None
+        if (chunking_strategy, chunk_size, chunk_overlap) != (None, None, None):
+            chunker = DocumentChunker(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                strategy=chunking_strategy,
+            )
+
         return await self._index(
-            record, extractor, data, keep_original=True, embedding_model=embedding_model
+            record,
+            extractor,
+            data,
+            keep_original=True,
+            embedding_model=embedding_model,
+            chunker=chunker,
         )
 
     async def reindex(self, *, project_id: str, doc_id: str) -> DocumentRecord:
@@ -143,6 +162,7 @@ class DocumentIngestPipeline:
         *,
         keep_original: bool,
         embedding_model: str | None = None,
+        chunker: DocumentChunker | None = None,
     ) -> DocumentRecord:
         """Store, split, embed, record. Shared by `ingest` and `reindex`."""
         try:
@@ -153,7 +173,9 @@ class DocumentIngestPipeline:
                     doc_id=record.doc_id, data=data, mimetype=record.mimetype
                 )
 
-            chunks = await asyncio.to_thread(self._split, extractor, data, record)
+            chunks = await asyncio.to_thread(
+                self._split, extractor, data, record, chunker or self._chunker
+            )
 
             if self._vectors is not None:
                 # `self._vectors` is only the "embeddings are available" signal;
@@ -192,6 +214,7 @@ class DocumentIngestPipeline:
         extractor: DocumentExtractor,
         data: bytes,
         record: DocumentRecord,
+        chunker: DocumentChunker | None = None,
     ) -> list[Document]:
         """Extract the text and split it, carrying the document's identity along.
 
@@ -209,17 +232,14 @@ class DocumentIngestPipeline:
             )
 
         # This metadata is copied onto every chunk, and is what a citation is
-        # built from later. The chunker adds `start_index` on top.
-        return self._chunker.chunk(
-            [
-                Document(
-                    page_content=extracted.text,
-                    metadata={
-                        "doc_id": record.doc_id,
-                        "project_id": record.project_id,
-                        "source": record.external_id,
-                        "filename": record.filename,
-                    },
-                )
-            ]
+        # built from later. The chunker adds `start_index`, and -- depending on
+        # the strategy -- the page number or the heading trail.
+        return (chunker or self._chunker).chunk(
+            extracted,
+            {
+                "doc_id": record.doc_id,
+                "project_id": record.project_id,
+                "source": record.external_id,
+                "filename": record.filename,
+            },
         )

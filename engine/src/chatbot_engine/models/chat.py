@@ -51,6 +51,12 @@ class AssistantConfig(BaseModel):
     #: backend supplies it and the engine falls back to its own default. It keys
     #: the vector collection, so retrieval only ever compares like with like.
     embedding_model: str | None = None
+    #: How the knowledge base is cut into chunks, and the size cap every
+    #: strategy ends with. None uses the engine's defaults. Applied when a
+    #: document is ingested, so changing them means re-indexing.
+    chunking_strategy: Literal["size", "headings", "page"] | None = None
+    chunk_size: int | None = Field(default=None, ge=100, le=8000)
+    chunk_overlap: int | None = Field(default=None, ge=0, le=2000)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     #: How many chunks to retrieve per turn.
     top_k: int = Field(default=5, ge=1, le=100)

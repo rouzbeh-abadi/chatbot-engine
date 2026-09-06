@@ -127,6 +127,9 @@ class EngineClient:
         mimetype: str,
         data: bytes,
         embedding_model: str | None = None,
+        chunking_strategy: str | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> DocumentRecord:
         """Upload one document's raw bytes to the engine for indexing.
 
@@ -138,6 +141,12 @@ class EngineClient:
         # default rather than sending an empty field.
         if embedding_model is not None:
             form["embedding_model"] = embedding_model
+        if chunking_strategy is not None:
+            form["chunking_strategy"] = chunking_strategy
+        if chunk_size is not None:
+            form["chunk_size"] = str(chunk_size)
+        if chunk_overlap is not None:
+            form["chunk_overlap"] = str(chunk_overlap)
 
         async with self._client() as client:
             response = await self._request(

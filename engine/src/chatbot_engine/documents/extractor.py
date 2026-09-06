@@ -70,13 +70,15 @@ class PdfDocumentExtractor(DocumentExtractor):
         """
         reader = PdfReader(BytesIO(data))
 
-        text = "\n\n".join(
+        # Kept per page as well as joined: the page chunking strategy needs the
+        # boundaries, and joining first would destroy them irrecoverably.
+        pages = tuple(
             page_text
             for page in reader.pages
             if (page_text := page.extract_text())
         )
 
-        return ExtractedDocument(text=text)
+        return ExtractedDocument(text="\n\n".join(pages), pages=pages)
 
 
 def select_extractor(

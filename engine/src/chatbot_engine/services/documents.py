@@ -48,6 +48,9 @@ class DocumentService:
         mimetype: str,
         data: bytes,
         embedding_model: str | None = None,
+        chunking_strategy: str | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> DocumentRecord:
         if self._pipeline is None:
             raise NotConfiguredError(
@@ -60,6 +63,9 @@ class DocumentService:
             mimetype=mimetype,
             data=data,
             embedding_model=embedding_model,
+            chunking_strategy=chunking_strategy,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
         )
 
     async def list(self, *, project_id: str) -> Sequence[DocumentRecord]:

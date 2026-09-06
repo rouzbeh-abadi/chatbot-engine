@@ -43,6 +43,9 @@ async def upsert_document(
     external_id: str = Form(...),
     file: UploadFile = File(...),
     embedding_model: str | None = Form(default=None),
+    chunking_strategy: str | None = Form(default=None),
+    chunk_size: int | None = Form(default=None),
+    chunk_overlap: int | None = Form(default=None),
 ) -> DocumentRecord:
     """Upsert one document, keyed by the caller's `external_id`.
 
@@ -66,6 +69,9 @@ async def upsert_document(
         mimetype=file.content_type or "application/octet-stream",
         data=data,
         embedding_model=embedding_model,
+        chunking_strategy=chunking_strategy,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
     )
 
 

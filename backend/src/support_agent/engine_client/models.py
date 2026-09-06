@@ -59,6 +59,11 @@ class AssistantConfig(BaseModel):
     #: The embedding model for this project's knowledge base; None uses the
     #: engine's default. Mirrors the engine's AssistantConfig -- see the parity test.
     embedding_model: str | None = None
+    #: How the knowledge base is chunked, and the size cap. None uses the
+    #: engine's defaults. Mirrors the engine's AssistantConfig.
+    chunking_strategy: Literal["size", "headings", "page"] | None = None
+    chunk_size: int | None = Field(default=None, ge=100, le=8000)
+    chunk_overlap: int | None = Field(default=None, ge=0, le=2000)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_k: int = Field(default=5, ge=1, le=100)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)

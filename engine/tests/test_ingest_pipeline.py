@@ -11,6 +11,7 @@ from collections.abc import Sequence
 from langchain_core.documents import Document
 
 from chatbot_engine.documents.registry import InMemoryDocumentRegistry
+from chatbot_engine.documents.models import ExtractedDocument
 from chatbot_engine.rag.pipeline import DocumentIngestPipeline, doc_id_for
 from chatbot_engine.rag.splitter import DocumentChunker
 
@@ -24,8 +25,10 @@ class RecordingChunker(DocumentChunker):
         super().__init__(chunk_size=80, chunk_overlap=10)
         self.produced: list[Document] = []
 
-    def chunk(self, documents: list[Document]) -> list[Document]:
-        self.produced = super().chunk(documents)
+    def chunk(
+        self, extracted: ExtractedDocument, metadata: dict[str, object]
+    ) -> list[Document]:
+        self.produced = super().chunk(extracted, metadata)
 
         return self.produced
 

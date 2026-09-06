@@ -103,6 +103,10 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
+    #: Default chunking strategy when the assistant config names none:
+    #: `size`, `headings`, or `page`. See rag/splitter.py.
+    chunk_strategy: Literal["size", "headings", "page"] = "size"
+
     # --- everything else ----------------------------------------------------
 
     #: Seconds to wait on an MCP server before giving up.

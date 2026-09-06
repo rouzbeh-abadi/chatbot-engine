@@ -35,6 +35,9 @@ class IngestPipeline(Protocol):
         mimetype: str,
         data: bytes,
         embedding_model: str | None = None,
+        chunking_strategy: str | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
     ) -> DocumentRecord: ...
 
 
