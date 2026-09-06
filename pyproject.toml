@@ -31,7 +31,9 @@ support-agent = { workspace = true }
 chatbot-engine = { workspace = true }
 
 [dependency-groups]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+# langgraph is an optional extra for consumers, but a dev dependency here so the
+# graph agent is exercised by the suite rather than skipped.
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "langgraph>=0.2"]
 
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "backend/tests", "tests"]

@@ -18,6 +18,7 @@ from chatbot_engine.api import chat, documents, eval_rag, health, judge
 from chatbot_engine.api.auth import require_api_key
 from chatbot_engine.api.rate_limit import limit_chat, limit_eval
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
+from chatbot_engine.agent.registry import UnknownAgentError
 from chatbot_engine.errors import (
     DocumentRejectedError,
     EngineError,
@@ -83,6 +84,11 @@ def create_app() -> FastAPI:
     async def not_implemented(_: Request, exc: NotImplementedError) -> JSONResponse:
         """501: a bare `raise NotImplementedError` from half-written code."""
         return JSONResponse(status_code=501, content={"detail": str(exc)})
+
+    @app.exception_handler(UnknownAgentError)
+    async def unknown_agent(_: Request, exc: UnknownAgentError) -> JSONResponse:
+        """422: the assistant named an agent this engine does not have."""
+        return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     @app.exception_handler(DocumentRejectedError)
     async def document_rejected(

@@ -58,6 +58,10 @@ class AssistantConfig(BaseModel):
     model: str | None = None
     #: The embedding model for this project's knowledge base; None uses the
     #: engine's default. Mirrors the engine's AssistantConfig -- see the parity test.
+    #: Which agent runs the turn: `loop` (the built-in tool loop) or `graph`
+    #: (the same turn as a LangGraph state machine). None uses the engine
+    #: default. Both produce the same events; `graph` needs the `graph` extra.
+    agent: str | None = None
     embedding_model: str | None = None
     #: How the knowledge base is chunked, and the size cap. None uses the
     #: engine's defaults. Mirrors the engine's AssistantConfig.

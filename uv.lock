@@ -482,6 +482,9 @@ eval = [
     { name = "langchain-community" },
     { name = "ragas" },
 ]
+graph = [
+    { name = "langgraph" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -498,13 +501,14 @@ requires-dist = [
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
+    { name = "langgraph", marker = "extra == 'graph'", specifier = ">=0.2" },
     { name = "mcp", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "pypdf", specifier = ">=6.16.1" },
     { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.4,<0.5" },
 ]
-provides-extras = ["chroma", "eval"]
+provides-extras = ["chroma", "eval", "graph"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -523,6 +527,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "langgraph" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -535,6 +540,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "langgraph", specifier = ">=0.2" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
 ]

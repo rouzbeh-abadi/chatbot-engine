@@ -14,7 +14,7 @@ from typing import Annotated
 
 from fastapi import Depends
 
-from chatbot_engine.agent.chat_agent import ChatAgent
+from chatbot_engine.agent.router import AgentRouter
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
 from chatbot_engine.eval.prompt_evaluation import evaluate_dataset
@@ -45,11 +45,15 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 def get_agent() -> Agent | None:
     """Create the agent responsible for processing chat turns.
 
-    The agent retrieves relevant context, calls the model with access to MCP tools,
+    The agent retrieves relevant context, calls the model with access to MCP
+    tools, and streams the resulting chat events.
 
-    and streams the resulting chat events.
+    Which agent runs is decided per request from the assistant config, across
+    the built-ins and any installed plugin (see `agent/registry.py`). Agents are
+    constructed on first use, so an optional dependency is only imported when a
+    request actually asks for the agent that needs it.
     """
-    return ChatAgent(tools=get_tool_provider())
+    return AgentRouter(tools=get_tool_provider())
 
 
 @lru_cache
