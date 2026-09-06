@@ -4,7 +4,7 @@ A standalone RAG and MCP tool-calling service.
 
 The engine answers questions from a knowledge base, calls tools when it needs
 live data, and streams the result back token by token. It knows how to retrieve,
-how to prompt a model, and how to run a tool loop — and nothing at all about your
+how to prompt a model, and how to run a tool loop, and nothing at all about your
 users, your product, or your domain.
 
 That split is deliberate. Everything specific to an application stays in the
@@ -37,7 +37,7 @@ Interactive API docs: http://localhost:8100/docs
 
 ## Authentication and limits
 
-The engine holds your provider credentials and has no notion of end users — it
+The engine holds your provider credentials and has no notion of end users. It
 cannot tell a cheap question from an expensive one, because both look identical
 on the wire. So it authenticates *callers*, not people, and meters what they
 spend.
@@ -50,13 +50,17 @@ Every route but `/health` then needs a matching `X-API-Key`. Keys are compared i
 constant time; a rejected one is logged with the path and client address, and
 never with the key itself.
 
-Names are not decoration. Rate limits are counted per name, so one runaway caller
-can be throttled without turning the engine off for everyone; and rotation is
-running the old and new key side by side until callers have moved, rather than
-restarting everything at once. `ENGINE_API_KEY` is the single-key shorthand, and
-is simply named `default`.
+Names are not decoration. They buy two things.
 
-The limits below are per caller and generous by default — they stop runaway loops,
+**Throttling.** Rate limits are counted per name, so one runaway caller can be
+slowed without turning the engine off for everyone else.
+
+**Rotation.** Run the old and new key side by side until every caller has moved
+across, then withdraw the old one. No synchronised restart.
+
+`ENGINE_API_KEY` is the single-key shorthand, and is simply named `default`.
+
+The limits below are per caller and generous by default: they stop runaway loops,
 not normal use. Zero disables one.
 
 | Variable | Default | Applies to |
@@ -66,7 +70,7 @@ not normal use. Zero disables one.
 | `ENGINE_INGEST_RATE_LIMIT_PER_MINUTE` | 20 | `PUT /documents` |
 
 Buckets live in the process's memory, so two replicas mean twice the effective
-limit. That is a real limitation and the limit is still worth having — for an
+limit. That is a real limitation and the limit is still worth having. For an
 exact global one, back `_Bucket` in `api/rate_limit.py` with Redis.
 
 Set `ENGINE_ENV=production` and the engine refuses to start without a key at
@@ -78,9 +82,9 @@ no business having one. That check belongs in the service calling it.
 
 ## Connecting a backend to it
 
-Everything a backend needs — the endpoints, the request shape, how to read the
-streamed answer, how to upload documents, how to handle the engine being down, and
-how to expose your own tools over MCP — is written up here:
+Everything a backend needs is written up in one guide: the endpoints, the
+request shape, how to read the streamed answer, how to upload documents, how to
+handle the engine being down, and how to expose your own tools over MCP.
 
 **→ [Connecting a backend to the chatbot engine](../docs/backend-integration.md)**
 

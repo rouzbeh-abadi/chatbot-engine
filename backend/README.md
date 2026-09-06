@@ -1,4 +1,4 @@
-# support-agent — application backend
+# support-agent: application backend
 
 The product API. Owns users, assistant configuration, the document endpoints, the
 domain tools, and the browser-facing transport. Calls the AI engine over HTTP and
@@ -7,12 +7,12 @@ domain tools, and the browser-facing transport. Calls the AI engine over HTTP an
 ## What it owns
 
 - FastAPI routes for the app, and request validation
-- Authentication and the user identity boundary (`X-User-Id` is a placeholder)
-- Assistant configuration — `projects/*.yaml`, validated on load
+- The operator key on the privileged routes, and the user identity boundary
+- Assistant configuration in `projects/*.yaml`, validated on load
 - Document upload / list / delete, forwarding raw bytes to the engine
 - The domain tools, and the MCP server that exposes them to the engine
 - SSE formatting for the frontend
-- `engine_client/` — the only code that talks to the engine
+- `engine_client/` is the only code that talks to the engine
 
 It owns no prompts, no retrieval, no chunking and no model calls.
 
@@ -23,6 +23,12 @@ It owns no prompts, no retrieval, no chunking and no model calls.
 | `app.py` | The app, `/health`, and engine-error → HTTP status mapping |
 | `api/chat.py` | `POST /chat`, `/chat/sync` |
 | `api/documents.py` | Upload, list and delete the knowledge base |
+| `api/admin.py` | The admin dashboard: data views and evaluation runs |
+| `api/auth.py` | The `BACKEND_ADMIN_KEY` guard on the privileged routes |
+| `api/identity.py` | Who the caller is; the seam for real authentication |
+| `api/rate_limit.py` | Per-caller limits on the routes that cost money |
+| `api/options.py` | The model choices the UI may offer |
+| `api/schemas.py` | The browser-facing request and response shapes |
 | `api/streaming.py` | SSE framing and folding, for the browser |
 | `engine_client/client.py` | `EngineClient` and its error taxonomy |
 | `engine_client/models.py` | The wire contract, mirrored deliberately |
@@ -40,11 +46,12 @@ make tools      # :8200 -- the MCP tool server
 
 ## Configuration
 
-`projects/support.yaml` is the assistant: prompt, model, `top_k`, and which MCP
-tools it may use. It is validated against the wire contract on load, so a typo
-fails here with our error message rather than as a 422 from the engine.
+`projects/support.yaml` is the assistant: prompt, model, embedding model, how
+the knowledge base is chunked, `top_k`, and which MCP tools it may use. It is
+validated against the wire contract on load, so a typo fails here with our error
+message rather than as a 422 from the engine.
 
-`load_project` is cached — **restart after editing the YAML.**
+`load_project` is cached, so **restart after editing the YAML.**
 
 ## The tools
 
@@ -58,17 +65,21 @@ database:
 | `create_support_ticket` | a ticket row, after checking the booking exists |
 
 `get_booking_status` returns the flight number on purpose: it is what lets the
-model chain a second call — "my booking is AB12CD, is my flight delayed?" — which
+model chain a second call ("my booking is AB12CD, is my flight delayed?"), which
 is the conversation worth demonstrating.
 
 They run *here*, not in the engine: they read this application's data and must
 execute with the calling user's permissions, which the engine cannot evaluate.
 Only allowlisted names in `support.yaml` are ever exposed.
 
-Two conventions, both aimed at the model: every value is a string in words a
-customer would recognise ("cabin baggage only" rather than `null`), and a missing
-record is returned as data rather than raised — a tool that raises for "not found"
-teaches the model the tool is broken.
+Two conventions, both aimed at the model.
+
+**Values are strings a customer would recognise.** "cabin baggage only" rather
+than `null`, so the model can quote the result directly.
+
+**A missing record is data, not an exception.** It comes back as a `not_found`
+result. A tool that raises for "not found" teaches the model the tool is broken,
+and it stops trying.
 
 ## The database
 
@@ -89,10 +100,10 @@ covering a case the knowledge base discusses:
 | --- | --- | --- |
 | `AB12CD` | Flexible fare, refundable, inside the check-in window | refunds, check_in |
 | `XY34ZT` | Basic fare, non-refundable, already cancelled | refunds, cancellations |
-| `RF77KL` | Airline cancelled the flight — involuntary refund | cancellations, refunds |
+| `RF77KL` | Airline cancelled the flight (involuntary refund) | cancellations, refunds |
 | `MS55TR` | Two-leg itinerary, partial refund scope | refunds, booking_changes |
 | `BG88QP` | Cabin baggage only, no checked allowance | baggage |
-| `PS22WD` | Travel already completed — refund window closed | refunds |
+| `PS22WD` | Travel already completed, refund window closed | refunds |
 
 Fare names match the knowledge base (`Flexible` / `Standard` / `Basic`) so a
 retrieved policy and a tool result never contradict each other.

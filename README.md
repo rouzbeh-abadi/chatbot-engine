@@ -36,14 +36,14 @@ and tools, and a knowledge base of support documents.
 - **Document ingestion.** Upload a file and the engine extracts, chunks, embeds,
   and stores it; re-uploading identical bytes is skipped by content hash.
 - **Chunking strategies.** Cut documents by fixed size, by Markdown heading, or
-  by page — chosen per project, so PDFs can carry page numbers into their
+  by page. Chosen per project, so PDFs can carry page numbers into their
   citations. See [docs/chunking.md](docs/chunking.md).
 - **Conversation export.** Download a transcript as JSON, CSV, or PDF.
 - **Admin dashboard.** Inspect the application data and run the evaluation from
   the browser, behind a shared operator key (`BACKEND_ADMIN_KEY`).
 - **Deployable.** Rate limits on the routes that cost money, one seam for real
   authentication, and a startup check that refuses to serve a production
-  deployment with development defaults — see [DEPLOYMENT.md](DEPLOYMENT.md).
+  deployment with development defaults. See [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Evaluation.** An LLM-as-judge harness grades the assistant's behaviour
   against a rubric, and a RAGAS harness scores the retrieval (faithfulness,
   answer relevancy, context precision and recall).
@@ -156,14 +156,14 @@ dashboard** to view the data and run the evaluation.
 Everything above is set up for a laptop: every service is published to the host,
 the database password is in the compose file, and nothing is authenticated.
 
-For anything other people can reach, set both services to production —
+For anything other people can reach, set both services to production:
 
 ```
 BACKEND_ENV=production
 ENGINE_ENV=production
 ```
 
-— and they will refuse to start on a default that is only safe locally, naming
+They will then refuse to start on a default that is only safe locally, naming
 each variable to set, rather than serve with one. There is a compose overlay
 that does the rest (unpublishes the internal ports, demands every secret):
 
@@ -172,7 +172,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
 **[DEPLOYMENT.md](DEPLOYMENT.md)** is the full guide: secrets, the network
-shape, TLS, rate limits, migrations — and an honest list of what is
+shape, TLS, rate limits, migrations, and an honest list of what is
 authenticated and what is not, which is worth reading before you put this in
 front of users.
 
@@ -220,14 +220,14 @@ tests/      the contract-parity test, where the two services meet
   authenticated.
 - **[docs/backend-integration.md](docs/backend-integration.md)** shows how to
   connect a backend to the engine.
-- **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies —
+- **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies:
   what each cuts at, when to use it, and why changing one means re-indexing.
 - **[engine/README.md](engine/README.md)**, **[backend/README.md](backend/README.md)**,
   and **[frontend/README.md](frontend/README.md)** cover each service in detail.
 
 ## Licence
 
-Apache License 2.0 — see [LICENSE](LICENSE).
+Apache License 2.0. See [LICENSE](LICENSE).
 
 Chosen over MIT for the explicit patent grant in section 3: an adopter gets a
 licence to any patents covering this code, and loses it if they sue over them.
@@ -235,7 +235,7 @@ That is the clause corporate legal teams look for before building on something,
 and it costs a permissive licence nothing.
 
 The example backend and frontend are under the same licence. Take them, change
-them, ship them — attribution and the notice in section 4 are all that is asked.
+them, ship them. Attribution and the notice in section 4 are all that is asked.
 
 ## Tests
 

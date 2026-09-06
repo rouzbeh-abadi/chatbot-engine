@@ -1,7 +1,7 @@
 # frontend
 
 A React + TypeScript chat interface for the support assistant. It talks only to
-the application backend on port `8000` — never to the engine directly, which holds
+the application backend on port `8000`, never to the engine directly, which holds
 the model provider's credentials and has no notion of end-user permissions.
 
 ## Running it
@@ -24,7 +24,7 @@ too (`make engine`).
 | `npm run dev` | Dev server with hot reload |
 | `npm run build` | Typecheck, then a production build into `dist/` |
 | `npm run typecheck` | Types only |
-| `npm test` | 35 tests: the SSE reader, the event loop, markdown rendering |
+| `npm test` | The SSE reader, the API client, markdown rendering, and the app's event loop |
 
 ## How it reaches the backend
 
@@ -37,7 +37,7 @@ add CORS to the backend and set `VITE_API_BASE`.
 
 `POST /chat` returns server-sent events. `EventSource` cannot issue a POST, so
 [`api/client.ts`](src/api/client.ts) reads the response body directly. Two details
-that matters:
+matter:
 
 - **Frames are reassembled across chunks.** A network chunk can end mid-frame, so
   anything after the last blank line stays buffered for the next read.
@@ -50,7 +50,7 @@ Each event maps to something on screen:
 | --- | --- |
 | `retrieval` | A collapsible source list with scores, headings and excerpts |
 | `token` | Appended to the answer, with a blinking caret while streaming |
-| `tool_call_started` | An amber pulsing chip — the progress indicator |
+| `tool_call_started` | An amber pulsing chip, the progress indicator |
 | `tool_call_finished` | The chip turns teal with its duration, or red on failure |
 | `usage` | Token count, cost and model under the answer |
 | `error` | An inline problem card; the stream is already committed to `200` by then |
@@ -59,21 +59,21 @@ Each event maps to something on screen:
 An unrecognised `type` is ignored rather than treated as an error, so the UI keeps
 working against a newer backend.
 
-## Showing the real state instead of looking broken
+## Telling failures apart
 
-The engine's agent is not implemented yet, so `/chat` answers `501` today. Rather
-than a generic failure, the UI distinguishes:
+A chat request can fail for reasons the user can act on, so the UI names each one
+instead of showing a generic error:
 
 | Situation | What you see |
 | --- | --- |
 | `501` from the engine | "The engine has no agent yet", with the function to implement |
-| `503` — engine not running | "The engine service is not running. Start it with `make engine`." |
+| `503`, engine not running | "The engine service is not running. Start it with `make engine`." |
 | Backend unreachable | "Could not reach the backend… start it with `make backend`." |
 | You pressed Stop | "Stopped" |
 
-The knowledge-base panel no longer hits that state: `GET /documents` is wired, so
-it lists what the engine holds with each document's chunk count and status. A
-document that failed to ingest shows as `failed` there rather than disappearing.
+The knowledge-base panel reads `GET /documents`, so it lists what the engine
+holds with each document's chunk count and status. A document that failed to
+ingest shows as `failed` there rather than disappearing.
 
 ## Files
 
@@ -87,15 +87,18 @@ src/
 ├── components/
 │   ├── Message.tsx       one turn: tools, answer, sources, usage
 │   ├── Answer.tsx        the assistant's markdown, rendered safely
-│   ├── Sources.tsx       collapsible citations
+│   ├── Citations.tsx     collapsible sources under an answer
 │   ├── ToolCalls.tsx     the tool chips
 │   ├── Composer.tsx      the input; Enter sends, Shift+Enter newlines
-│   └── Knowledge.tsx     what the assistant knows
+│   ├── ModelPicker.tsx   the model dropdown
+│   ├── ExportMenu.tsx    download the transcript as JSON, CSV or PDF
+│   ├── Knowledge.tsx     what the assistant knows
+│   └── Admin.tsx         the admin dashboard overlay
 └── styles.css            one token set, light and dark from the OS
 ```
 
 `api/types.ts` is a deliberate copy of the backend's event contract, not a
-generated client — the frontend is a separate deployable. Keep it in step with
+generated client; the frontend is a separate deployable. Keep it in step with
 `backend/src/support_agent/engine_client/models.py`.
 
 ## Notes
@@ -107,7 +110,7 @@ generated client — the frontend is a separate deployable. Keep it in step with
   retrieved documents and tool output; neither is trusted enough to execute in the
   page, so `rehype-raw` is intentionally absent. Generated links open in a new tab
   with the opener severed.
-  The user's own message stays literal — their line breaks are meaningful and
+  The user's own message stays literal: their line breaks are meaningful and
   their asterisks are not formatting.
 - Conversation history is sent from the browser on each turn, which is fine for a
   demo. A real deployment should keep transcripts server-side, since a client can

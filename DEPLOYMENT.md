@@ -20,7 +20,7 @@ ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.0
 ```
 
 Each is tagged `0.1.0`, `0.1`, `0` and `latest`, so you can pin as tightly as you
-want. Pin to a full version in production — `latest` moves under you.
+want. Pin to a full version in production; `latest` moves under you.
 
 To run the published images instead of building locally, point the compose
 services at them with `image:` and drop their `build:` blocks.
@@ -31,11 +31,13 @@ services at them with `image:` and drop their `build:` blocks.
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-That runs the full test suite again (a tag can point at any commit, including
-one that never went through a pull request), publishes the three images, and
-opens a GitHub release with generated notes. Running the *Release* workflow
-manually from the Actions tab builds everything but publishes nothing, which is
-how to rehearse it without moving a tag.
+That does three things: runs the full test suite, publishes the three images,
+and opens a GitHub release with generated notes. The suite runs again because a
+tag can point at any commit, including one that never went through a pull
+request.
+
+To rehearse without moving a tag, run the *Release* workflow manually from the
+Actions tab. It builds everything and publishes nothing.
 
 ## The one thing to do first
 
@@ -65,11 +67,11 @@ Generate real values. `openssl rand -hex 32` is a fine source for all three.
 
 | Variable | Guards |
 | --- | --- |
-| `ENGINE_API_KEY` | The engine. It holds your provider credentials and has no notion of end users, so only the backend may reach it. Set the same value as `BACKEND_ENGINE_API_KEY`. For more than one caller, use `ENGINE_API_KEYS` instead — see below. |
+| `ENGINE_API_KEY` | The engine. It holds your provider credentials and has no notion of end users, so only the backend may reach it. Set the same value as `BACKEND_ENGINE_API_KEY`. For more than one caller, use `ENGINE_API_KEYS` instead (see below). |
 | `BACKEND_ADMIN_KEY` | `/admin` and the document write routes: every booking, every ticket, the evaluation runs, and what the assistant knows. |
 | `POSTGRES_PASSWORD` | The database. The demo value is in this repository, so it is not a password. |
 
-Keep them out of the image and out of git — pass them through your platform's
+Keep them out of the image and out of git. Pass them through your platform's
 secret mechanism. Nothing in this repo reads a secret at build time.
 
 ## The network shape
@@ -101,14 +103,14 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 It unpublishes every port but the frontend's, binds that one to `127.0.0.1`,
 requires each secret from the environment with no fallback, and sets both
-services to production. Read it before you run it — it is short, and it is the
+services to production. Read it before you run it: it is short, and it is the
 executable version of this section.
 
 ## TLS
 
 Nothing here terminates TLS, on purpose: it is the one piece that depends
 entirely on where you run. Put Caddy, Traefik, nginx, or a cloud load balancer
-in front of the frontend port, and set `Strict-Transport-Security` there — the
+in front of the frontend port, and set `Strict-Transport-Security` there. The
 frontend container speaks plain HTTP to whatever is in front of it, so an HSTS
 header set inside it would be ignored.
 
@@ -116,26 +118,29 @@ header set inside it would be ignored.
 
 Be clear-eyed about this before you put it in front of users.
 
-**Guarded by `BACKEND_ADMIN_KEY`** — `/admin/*` (bookings, tickets, evaluation
+**Guarded by `BACKEND_ADMIN_KEY`**: `/admin/*` (bookings, tickets, evaluation
 runs) and the document write routes (`PUT /documents`, `DELETE /documents/{id}`).
 One shared operator secret, compared in constant time. It tells you someone is
 an operator; it cannot tell you *which* operator, so there is no audit trail.
 
-**Open** — `GET /health`, `GET /models`, `GET /documents`, and the chat routes.
+**Open**: `GET /health`, `GET /models`, `GET /documents`, and the chat routes.
 Chat is rate limited but unauthenticated: anyone who reaches the frontend can
 spend model credits within that limit. If that is not acceptable for your
 deployment, chat is where to put your authentication.
 
-**Not implemented: user accounts.** `api/identity.py` is the seam. Today it
-returns `anonymous` unless `BACKEND_TRUST_USER_HEADER=true`, in which case it
-believes the `X-User-Id` header — which is only correct when a proxy in front
-authenticates the user and *overwrites* that header, as the bundled nginx config
-does. Replace `resolve_user_id` with your own (a session cookie, a validated
-JWT) and every route that takes `UserIdDep` follows.
+**Not implemented: user accounts.** `api/identity.py` is the seam.
+
+By default every caller is `anonymous`. Set `BACKEND_TRUST_USER_HEADER=true` and
+the backend believes the `X-User-Id` header instead. That is only safe when a
+proxy in front authenticates the user and *overwrites* the header, so a browser
+cannot set it itself. The bundled nginx config does exactly that.
+
+To add real accounts, replace `resolve_user_id`. Every route that takes
+`UserIdDep` follows automatically.
 
 **Not implemented: authorisation.** Nothing checks that a given user may use a
 given project, or that a booking belongs to the person asking about it. For a
-multi-tenant product that check belongs in the backend, next to identity — the
+multi-tenant product that check belongs in the backend, next to identity; the
 engine only ever sees an opaque id.
 
 ## The engine's keys
@@ -160,7 +165,7 @@ Naming buys two things a lone secret cannot give you:
   turning the engine off for everybody.
 
 Keys are matched in constant time against every configured value. A rejected key
-is logged with the path and the client address — and never with the key itself.
+is logged with the path and the client address, and never with the key itself.
 
 ## Rate limits
 
@@ -177,21 +182,24 @@ verify exists.
 | `BACKEND_EVAL_RATE_LIMIT_PER_HOUR` | 20 | `POST /admin/eval/*` |
 | `ENGINE_CHAT_RATE_LIMIT_PER_MINUTE` | 60 | the engine's `POST /chat` |
 | `ENGINE_EVAL_RATE_LIMIT_PER_HOUR` | 20 | the engine's `POST /judge`, `POST /eval/rag` |
-| `ENGINE_INGEST_RATE_LIMIT_PER_MINUTE` | 20 | `PUT /documents` — listing and deleting are free, and unmetered |
+| `ENGINE_INGEST_RATE_LIMIT_PER_MINUTE` | 20 | `PUT /documents`; listing and deleting are free, and unmetered |
 
 The backend buckets by user id or client address; the engine buckets by the name
 of the key that authenticated the call.
 
-Zero disables a limit. Callers are bucketed by user id when one is
-authenticated, and by client address otherwise — which is why the containers run
-uvicorn with `--proxy-headers`, and why you must set `FORWARDED_ALLOW_IPS` to
-your proxy's address if the backend port is reachable from anywhere else.
-`X-Forwarded-For` is trivially forged, so believing it from an untrusted source
-lets one client spread its usage across as many buckets as it likes.
+Zero disables a limit. Each caller gets its own bucket, keyed by user id when
+one is authenticated and by client address otherwise.
+
+Because the address decides the bucket, the containers run uvicorn with
+`--proxy-headers` so it reads the real client address rather than the proxy's.
+If the backend port is reachable from anywhere but your proxy, also set
+`FORWARDED_ALLOW_IPS` to your proxy's address. `X-Forwarded-For` is trivially
+forged, and a client that can forge it can spread its usage across as many
+buckets as it likes.
 
 The buckets live in the process's memory. Two replicas means twice the effective
 limit, and a restart forgets everything. That is a real limitation, and the
-limit is still worth having — it stops runaway clients and accidental loops. For
+limit is still worth having: it stops runaway clients and accidental loops. For
 an exact global limit, back `_Bucket` in `api/rate_limit.py` with Redis; nothing
 above `RateLimiter.check` changes.
 
@@ -204,7 +212,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   run --rm backend alembic upgrade head
 ```
 
-Do not run `make seed-db` against a real database — it loads the demo bookings.
+Do not run `make seed-db` against a real database: it loads the demo bookings.
 
 ## Operational notes
 
@@ -223,7 +231,7 @@ Do not run `make seed-db` against a real database — it loads the demo bookings
   requires no authentication. The engine also has `GET /health/ready`, which
   reports which capabilities are wired up.
 - **Logs** go to stdout at `ENGINE_LOG_LEVEL` (default `INFO`). Anything the
-  startup check found but did not block on is logged as a warning at boot —
+  startup check found but did not block on is logged as a warning at boot,
   worth alerting on, since it means something is misconfigured.
 - **Streaming.** Chat is server-sent events. Any proxy you add must not buffer
   `/api/chat`, or the answer arrives in one lump at the end. The bundled nginx

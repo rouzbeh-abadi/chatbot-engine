@@ -1,7 +1,7 @@
 # Connecting a backend to the chatbot engine
 
 The engine is a separate HTTP service. It knows how to retrieve, prompt a model,
-and call tools — and nothing about your users, your product, or your domain.
+and call tools, and nothing about your users, your product, or your domain.
 
 Your backend supplies all of that on every request, then relays the answer to
 whatever is in front of it.
@@ -55,16 +55,22 @@ Two settings on your side:
 | `BACKEND_ENGINE_API_KEY` | matches the engine's `ENGINE_API_KEY` | Leave both blank on localhost |
 
 If the engine has a key set, send it as an `X-API-Key` header on every request
-except `/health`. If none is set, the engine is open — fine locally, not fine in
+except `/health`. If none is set, the engine is open: fine locally, not fine in
 a deployment, because the engine holds the model provider's credentials, and
 `ENGINE_ENV=production` refuses to start that way.
 
-The engine also accepts *named* keys (`ENGINE_API_KEYS=web:s3cret,batch:0ther`),
-which is what you want once more than one service calls it: its rate limits are
-counted per name, so one backend cannot spend another's allowance, and you can
-rotate a key by running the old and new side by side rather than restarting every
-caller at once. Nothing changes on the sending side — it is still one
-`X-API-Key` header.
+The engine also accepts *named* keys, which is what you want once more than one
+service calls it:
+
+```
+ENGINE_API_KEYS=web:s3cret,batch:0ther
+```
+
+Rate limits are counted per name, so one backend cannot spend another's
+allowance. You can also rotate a key by running the old and new side by side,
+then withdrawing the old one, instead of restarting every caller at once.
+
+Nothing changes on the sending side. It is still one `X-API-Key` header.
 
 Expect `429` as a normal response, not an exceptional one: the engine meters the
 routes that spend provider credits and returns `Retry-After` in seconds.
@@ -99,7 +105,8 @@ a 501":
 ```
 
 `false` means nobody has registered an implementation in the engine's
-`api/deps.py` yet, so that route will return 501 no matter what you send.
+`api/dependencies.py`, so that route returns 501 no matter what you send. In a
+normal deployment both are `true`.
 
 ---
 
@@ -150,7 +157,7 @@ configuration, so you send the whole assistant definition every time.**
 
 Because it means the engine holds no state you have to migrate, and you stay the
 single source of truth for what your assistant is. Change a prompt in your own
-config file and the next request uses it — no engine restart, no deployment.
+config file and the next request uses it: no engine restart, no deployment.
 
 It also means one engine can serve several applications, each sending its own
 configuration.
@@ -164,7 +171,7 @@ List the names explicitly.
 
 **Never let your frontend supply `project`.** If a browser can send a
 `system_prompt`, anyone can rewrite your assistant. Accept a small request from
-the browser — a message and maybe a session id — and build the `project` block
+the browser (a message and maybe a session id) and build the `project` block
 server-side from your own configuration.
 
 The reference backend does exactly this: [`api/chat.py`](../backend/src/support_agent/api/chat.py)
@@ -210,14 +217,14 @@ Read it line by line. Each line is complete JSON; switch on `type`.
 | `done` | `finish_reason` | Always last. Stop reading |
 
 Each `sources[]` entry has `doc_id`, `source`, `score`, and optionally `heading`
-and `excerpt` — enough to render a citation.
+and `excerpt`, enough to render a citation.
 
 ### Two rules for consuming the stream
 
 **A run always ends with `done`**, including when it fails. If a failure happens
 after the response has started, you get an `error` event followed by a `done` with
-`finish_reason: "error"`. The engine cannot change the status code at that point —
-`200` has already been sent — so the failure arrives as data.
+`finish_reason: "error"`. The engine cannot change the status code at that point,
+because `200` has already been sent, so the failure arrives as data.
 
 **Handle a `type` you do not recognise by ignoring it.** New event types will be
 added. Skipping unknown lines keeps your backend working against a newer engine.
@@ -238,7 +245,7 @@ Full version: [`api/streaming.py`](../backend/src/support_agent/api/streaming.py
 
 ### If you do not want to stream
 
-Collect the events and fold them into one object — answer, sources, tool calls,
+Collect the events and fold them into one object: answer, sources, tool calls,
 usage. `collect()` in the same file does this, and the reference backend exposes
 it as `POST /chat/sync` for smoke tests and simple clients.
 
@@ -260,15 +267,15 @@ curl -X PUT localhost:8100/documents \
 | Field | Meaning |
 | --- | --- |
 | `project_id` | Which knowledge base this belongs to |
-| `external_id` | **Your** identifier for the document — a path, a row id, anything stable |
+| `external_id` | **Your** identifier for the document: a path, a row id, anything stable |
 | `file` | The file itself |
 | `embedding_model` | Optional. Must match what queries will use, or retrieval compares vectors from two models |
-| `chunking_strategy` | Optional. `size`, `headings`, or `page` — see [chunking.md](chunking.md) |
+| `chunking_strategy` | Optional. `size`, `headings`, or `page`. See [chunking.md](chunking.md) |
 | `chunk_size`, `chunk_overlap` | Optional. The size cap every strategy ends with |
 
 The optional fields default to the engine's own settings. Send them from your
-project config so a document is chunked and embedded the same way every time —
-these are applied at ingest, so changing them means re-indexing.
+project config so a document is chunked and embedded the same way every time.
+They are applied at ingest, so changing them means re-indexing.
 
 Returns `201` and a record:
 
@@ -295,7 +302,7 @@ Returns `201` and a record:
 
 `external_id` is the key. Send the same id again and the document is **replaced**,
 not duplicated. Send identical bytes and the engine skips the work entirely and
-answers `unchanged` — so you can safely re-run a sync over your whole corpus.
+answers `unchanged`, so you can safely re-run a sync over your whole corpus.
 
 That is what makes bulk loading simple:
 [`scripts/seed_knowledge.py`](../backend/scripts/seed_knowledge.py) walks a folder
@@ -308,7 +315,7 @@ curl "localhost:8100/documents?project_id=support"
 curl -X DELETE "localhost:8100/documents/89ad9185...?project_id=support"
 ```
 
-`project_id` is required on both — the engine keeps knowledge bases separate.
+`project_id` is required on both: the engine keeps knowledge bases separate.
 
 ### Validate before you forward
 
@@ -325,9 +332,9 @@ and your backend should say which of these went wrong:
 
 | What happened | Engine returns | Your backend should return |
 | --- | --- | --- |
-| Engine is not running | *connection refused* | **503** — try again shortly |
-| Capability not implemented yet | `501` | **501** — pass it through |
-| Your request was malformed | `4xx` | **502** — your bug, not the caller's |
+| Engine is not running | *connection refused* | **503**, try again shortly |
+| Capability not implemented yet | `501` | **501**, pass it through |
+| Your request was malformed | `4xx` | **502**, your bug, not the caller's |
 | Engine broke | `5xx` | **502** |
 
 Keeping these apart matters. "The engine is not running" and "this feature does
@@ -338,7 +345,7 @@ The `501` body names the exact function to implement:
 
 ```json
 {
-  "detail": "no Agent is registered -- implement one under chatbot_engine/agent/ and return it from chatbot_engine.api.deps.get_agent()"
+  "detail": "no Agent is registered -- implement one under chatbot_engine/agent/ and return it from chatbot_engine.api.dependencies.get_agent()"
 }
 ```
 
@@ -353,8 +360,8 @@ without the engine.
 
 Start the request and check the status **before** you begin your own response.
 If you use a lazy generator, the HTTP call does not happen until the first
-iteration — by which point you have already committed to `200`, and a `501` reaches
-the browser as an empty success.
+iteration. By then you have already committed to `200`, so a `501` from the
+engine reaches the browser as an empty success.
 
 The reference client makes `start_chat()` an awaited call that returns an iterator,
 so the status check happens while the status line can still change. See
@@ -365,7 +372,7 @@ so the status check happens while the status line can still change. See
 ## 7. Letting the engine call your tools
 
 Your tools stay in your backend. The engine only learns their **name, description
-and input schema** — never their code.
+and input schema**, never their code.
 
 ```text
 once per turn
@@ -385,7 +392,7 @@ per tool call
 ### What you have to do
 
 **1. Run an MCP server.** The reference one is
-[`mcp_tools.py`](../backend/src/support_agent/mcp_tools.py) — about 200 lines for
+[`mcp_tools.py`](../backend/src/support_agent/mcp_tools.py), about 200 lines for
 three tools:
 
 ```bash
@@ -394,7 +401,7 @@ make tools     # http://localhost:8200/mcp
 
 **2. Tell the engine where it is,** in the `mcp_servers` block of your `project`
 config. Under Docker Compose this must be the service name (`http://mcp-tools:8200/mcp`),
-not `localhost` — containers do not share a network namespace.
+not `localhost`: containers do not share a network namespace.
 
 **3. Write the docstrings for the model, not for a developer.** The name, type
 hints and docstring *are* the schema the model reads when deciding whether to call
@@ -432,8 +439,8 @@ invent an explanation.
 
 **Give the model something to chain.** `get_booking_status` returns the flight
 number, which is what lets the model then ask `get_flight_status` about it in the
-same turn. Without that link, a perfectly reasonable question — "is my flight
-delayed?" — cannot be answered.
+same turn. Without that link, a perfectly reasonable question ("is my flight
+delayed?") cannot be answered.
 
 ### Tool results are untrusted
 
@@ -487,7 +494,7 @@ async def ask(question: str) -> None:
                     handle(json.loads(line))     # switch on event["type"]
 ```
 
-`raise_for_status()` before the loop is the important part — it is what stops a
+`raise_for_status()` before the loop is the important part: it is what stops a
 `501` from being mistaken for an empty answer.
 
 ---
