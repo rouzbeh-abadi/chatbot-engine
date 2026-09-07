@@ -11,15 +11,8 @@ from __future__ import annotations
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
+from typing import cast
 
-from chatbot_engine.errors import EngineError
-from chatbot_engine.models.chat import AssistantConfig, ChatRequest
-from chatbot_engine.models.events import (
-    ToolCallFinishedEvent,
-    ToolCallStartedEvent,
-)
-from chatbot_engine.ports.agent import ToolProvider
-from chatbot_engine.settings import Settings, get_settings
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -32,15 +25,35 @@ from langchain_core.messages import (
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_openai import ChatOpenAI
 
-#: Model -> (input $/1M tokens, output $/1M tokens), from OpenRouter's price list
-#: (https://openrouter.ai/models). These are OpenRouter's own per-token prices, so
-#: the computed cost matches what it bills. Keep in step with `CHAT_MODELS`; an
-#: unlisted model yields no cost rather than a wrong one.
-PRICING: dict[str, tuple[float, float]] = {
-    "openai/gpt-5-mini": (0.25, 2.00),
-    "anthropic/claude-haiku-4.5": (1.00, 5.00),
-    "google/gemini-2.5-flash": (0.30, 2.50),
-}
+from chatbot_engine.errors import EngineError
+from chatbot_engine.models.chat import AssistantConfig, ChatRequest
+from chatbot_engine.models.events import (
+    ToolCallFinishedEvent,
+    ToolCallStartedEvent,
+)
+from chatbot_engine.ports.agent import ToolProvider
+from chatbot_engine.settings import Settings, get_settings
+
+#: Token totals, as accumulated across a turn's model calls.
+Totals = dict[str, int]
+
+
+def empty_totals() -> Totals:
+    return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+
+
+def add_usage(totals: Totals, message: BaseMessage) -> None:
+    """Add one model reply's token counts to `totals`.
+
+    `usage_metadata` is present on a reply from a model built with
+    `stream_usage=True`, and absent from one a provider did not report on, so
+    a missing count is treated as zero rather than an error.
+    """
+    metadata = getattr(message, "usage_metadata", None)
+    if not metadata:
+        return
+    for key in totals:
+        totals[key] += metadata.get(key, 0)
 
 
 @dataclass(frozen=True)
@@ -178,6 +191,8 @@ async def stream_completion(
     request: ChatRequest,
     tools_provider: ToolProvider,
     context: str = "",
+    *,
+    prior: Totals | None = None,
 ) -> AsyncIterator[str | Usage | ToolCallStartedEvent | ToolCallFinishedEvent]:
     """Run the LLM and tool-calling loop, then stream the final answer.
 
@@ -197,6 +212,9 @@ async def stream_completion(
             model calls.
         context: The retrieved knowledge-base extracts, already numbered for
             citation. Empty when nothing was retrieved.
+        prior: Token counts already spent on this turn before the answer,
+            by retrieval's query rewrite and rerank. Folded into the reported
+            usage so the cost a caller sees is the whole turn's.
 
     Yields:
         The final answer text in pieces, as the model generates it, followed by a
@@ -234,7 +252,7 @@ async def stream_completion(
 
     # Tokens accumulate across rounds: a turn with tool calls is several model
     # calls, and reporting only the last one would understate the total.
-    totals = {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    totals = dict(prior) if prior else empty_totals()
 
     for _ in range(request.project.max_tool_iterations):
         reply: AIMessageChunk | None = None
@@ -246,7 +264,7 @@ async def stream_completion(
             # Chunks add up into the whole message, and only the whole message
             # has usable `tool_calls`: a fragment cannot know whether the model
             # was part-way through asking for a tool.
-            reply = chunk if reply is None else reply + chunk
+            reply = cast(AIMessageChunk, chunk if reply is None else reply + chunk)
 
         if reply is None:
             # The model produced nothing at all. An empty answer, which is what
@@ -254,7 +272,7 @@ async def stream_completion(
             yield price_usage(totals, model.model_name)
             return
 
-        _add_usage(totals, reply)
+        add_usage(totals, reply)
         messages.append(reply)
 
         if not reply.tool_calls:
@@ -276,27 +294,24 @@ async def stream_completion(
     )
 
 
-def _add_usage(totals: dict[str, int], reply: AIMessageChunk) -> None:
-    """Add one model call's token counts to the running totals.
+def price_usage(
+    totals: Totals,
+    model_name: str | None,
+    pricing: Mapping[str, tuple[float, float]] | None = None,
+) -> Usage:
+    """Package token totals as a `Usage`, priced when the model is in the table.
 
-    `usage_metadata` is present because the model is built with
-    `stream_usage=True`, but it can be `None` for a provider that omits it, so a
-    missing count is treated as zero rather than an error.
+    The table is `ENGINE_PRICING` unless one is passed. Public because an agent
+    plugin reports cost too, and two agents that priced a turn differently
+    would be a bug: this is the one place a cost is computed.
+
+    One rate for the whole turn. The rewrite and rerank may run on a cheaper
+    utility model, and their tokens are priced at the answer model's rate,
+    which overstates the cost by a small, known amount rather than requiring
+    per-call bookkeeping.
     """
-    metadata = reply.usage_metadata
-    if metadata is None:
-        return
-    for key in totals:
-        totals[key] += metadata.get(key, 0)
-
-
-def price_usage(totals: dict[str, int], model_name: str | None) -> Usage:
-    """Package token totals as a `Usage`, priced when the model is in `PRICING`.
-
-    Public because an agent plugin reports cost too, and two agents that priced
-    a turn differently would be a bug. This is the one place a cost is computed.
-    """
-    prices = PRICING.get(model_name or "")
+    table = pricing if pricing is not None else get_settings().pricing
+    prices = table.get(model_name or "")
     cost = (
         (totals["input_tokens"] * prices[0] + totals["output_tokens"] * prices[1])
         / 1_000_000

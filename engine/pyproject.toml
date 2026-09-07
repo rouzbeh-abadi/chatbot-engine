@@ -19,6 +19,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-settings>=2.7",
     "pypdf>=6.16.1",
+    "rank-bm25>=0.2",
 ]
 
 [build-system]

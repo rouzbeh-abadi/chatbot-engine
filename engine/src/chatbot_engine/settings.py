@@ -80,6 +80,20 @@ class Settings(BaseSettings):
     #: Used when the backend sends no `model` in `AssistantConfig`.
     chat_model: str = "openai/gpt-5-mini"
 
+    #: The model for the small calls a turn makes besides the answer: the
+    #: query rewrite and the rerank. Unset, the assistant's own model is used.
+    #: A cheap, fast model here cuts latency and cost without touching the
+    #: answer, which those calls never write.
+    utility_model: str | None = None
+
+    #: Prices per million tokens, `{model: [input, output]}` in USD, used to
+    #: put a cost on the `usage` event. The engine ships none: prices belong
+    #: to the provider and change without notice, so they are configuration.
+    #: A model not listed reports no cost rather than a wrong one.
+    #:
+    #:     ENGINE_PRICING='{"openai/gpt-5-mini": [0.25, 2.00]}'
+    pricing: dict[str, tuple[float, float]] = {}
+
     #: Changing this invalidates every vector already stored -- distances against
     #: a different model are nonsense, not an error. Treat it as a full re-index.
     embedding_model: str = "openai/text-embedding-3-small"
@@ -109,6 +123,20 @@ class Settings(BaseSettings):
     #: model is an internal re-index rather than a re-upload for every caller.
     blob_dir: Path = Path("var/blobs")
 
+    # --- retrieval ----------------------------------------------------------
+
+    #: How chunks are found when the assistant config does not say. `hybrid`
+    #: fuses vector similarity with a BM25 keyword search; `vector` is
+    #: similarity alone.
+    retrieval: Literal["vector", "hybrid"] = "hybrid"
+
+    #: Whether the assistant's model re-orders the candidates before the top
+    #: `top_k` are kept. Off by default: it is one more model call per turn.
+    rerank: bool = False
+
+    #: Candidates per search before fusion and reranking.
+    retrieval_candidates: int = 20
+
     # --- chunking -----------------------------------------------------------
 
     #: The overlap keeps a sentence that straddles a boundary findable from both
@@ -134,8 +162,23 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
+    @field_validator("pricing", mode="after")
+    @classmethod
+    def _prices_are_not_negative(
+        cls, value: dict[str, tuple[float, float]]
+    ) -> dict[str, tuple[float, float]]:
+        for model, (input_price, output_price) in value.items():
+            if input_price < 0 or output_price < 0:
+                raise ValueError(f"ENGINE_PRICING for {model!r} is negative")
+        return value
+
     @field_validator(
-        "api_key", "api_keys", "openrouter_api_key", "redis_url", "chroma_url",
+        "api_key",
+        "api_keys",
+        "openrouter_api_key",
+        "redis_url",
+        "chroma_url",
+        "utility_model",
         mode="after",
     )
     @classmethod

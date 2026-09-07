@@ -19,7 +19,7 @@ class Message(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: str = Field(max_length=32_000)
 
 
 class McpServerConfig(BaseModel):
@@ -63,8 +63,19 @@ class AssistantConfig(BaseModel):
     chunk_size: int | None = Field(default=None, ge=100, le=8000)
     chunk_overlap: int | None = Field(default=None, ge=0, le=2000)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    #: How many chunks to retrieve per turn.
+    #: How many chunks reach the model per turn.
     top_k: int = Field(default=5, ge=1, le=100)
+    #: How chunks are found. `vector` is similarity search alone; `hybrid`
+    #: fuses it with a keyword (BM25) search, which catches exact terms such
+    #: as fare names and codes that embeddings blur. None uses the engine
+    #: default.
+    retrieval: Literal["vector", "hybrid"] | None = None
+    #: Whether the assistant's model re-orders the candidates by relevance
+    #: before the top `top_k` are kept. One extra model call per turn.
+    rerank: bool | None = None
+    #: How many candidates each search returns before fusion and reranking.
+    #: More improves recall at the cost of a longer rerank prompt.
+    retrieval_candidates: int | None = Field(default=None, ge=1, le=200)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     #: Bounds the tool-calling loop, so a misbehaving model cannot spin.
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
@@ -81,7 +92,9 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project: AssistantConfig
-    message: str = Field(min_length=1)
-    session_id: str | None = None
-    user_id: str | None = None
-    history: list[Message] = Field(default_factory=list)
+    #: Bounded here as well as by the caller: the engine cannot assume its
+    #: caller validated anything, and an unbounded prompt is an unbounded bill.
+    message: str = Field(min_length=1, max_length=32_000)
+    session_id: str | None = Field(default=None, max_length=256)
+    user_id: str | None = Field(default=None, max_length=256)
+    history: list[Message] = Field(default_factory=list, max_length=200)

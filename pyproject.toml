@@ -43,8 +43,35 @@ dev = [
     "pytest-asyncio>=0.24",
     "langgraph>=0.2",
     "fakeredis[lua]>=2.20",
+    "ruff>=0.14",
+    "ty>=0.0.1a0",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "examples/backend/tests", "tests"]
 asyncio_mode = "auto"
+
+# One configuration for the whole workspace, so CI and a laptop agree on what
+# passes. Explicit rather than ruff's defaults, which a user-level config can
+# widen without anyone noticing.
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+extend-exclude = ["examples/backend/alembic/versions"]
+
+[tool.ruff.lint]
+select = [
+    "E4", "E7", "E9", "F",   # errors and undefined names
+    "I",                     # import order
+    "B",                     # likely bugs
+    "UP",                    # modern syntax
+    "SIM",                   # simplifications
+    "RUF",                   # ruff's own checks
+]
+ignore = [
+    "B008",   # FastAPI's Depends(), File() and Form() are called in defaults by design
+    "RUF012", # pydantic and test doubles use class-level mutable defaults
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["chatbot_engine", "support_agent", "langgraph_agent"]

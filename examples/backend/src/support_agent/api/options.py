@@ -10,7 +10,8 @@ router = APIRouter(tags=["options"])
 
 # Allowed model ids, from https://openrouter.ai/models. The first is the default
 # the picker selects before the user chooses, so keep it in sync with the
-# `model:` in projects/support.yaml.
+# `model:` in projects/support.yaml. A model shows a cost in the UI only when
+# the engine's ENGINE_PRICING lists it; see .env.example.
 CHAT_MODELS = [
     "openai/gpt-5-mini",
     "anthropic/claude-haiku-4.5",

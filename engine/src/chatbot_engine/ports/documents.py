@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from chatbot_engine.models.documents import DocumentRecord
+from chatbot_engine.models.documents import ChunkStrategy, DocumentRecord
 
 
 class IngestPipeline(Protocol):
@@ -35,7 +35,7 @@ class IngestPipeline(Protocol):
         mimetype: str,
         data: bytes,
         embedding_model: str | None = None,
-        chunking_strategy: str | None = None,
+        chunking_strategy: ChunkStrategy | None = None,
         chunk_size: int | None = None,
         chunk_overlap: int | None = None,
     ) -> DocumentRecord: ...

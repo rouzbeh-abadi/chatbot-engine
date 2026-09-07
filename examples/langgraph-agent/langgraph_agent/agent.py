@@ -27,7 +27,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, TypedDict, cast
+
+from langchain_core.messages import (
+    AIMessageChunk,
+    BaseMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langgraph.graph import END, START, StateGraph
 
 from chatbot_engine.agent.client import (
     build_chat_model,
@@ -35,7 +43,11 @@ from chatbot_engine.agent.client import (
     run_tool_calls,
     to_messages,
 )
-from chatbot_engine.agent.retriever import retrieve, to_context, to_source_refs
+from chatbot_engine.agent.retriever import (
+    retrieve_with_usage,
+    to_context,
+    to_source_refs,
+)
 from chatbot_engine.errors import EngineError
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import (
@@ -46,13 +58,6 @@ from chatbot_engine.models.events import (
     UsageEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
-from langchain_core.messages import (
-    AIMessageChunk,
-    BaseMessage,
-    SystemMessage,
-    ToolMessage,
-)
-from langgraph.graph import END, START, StateGraph
 
 #: Marks the end of the event stream, so `run` knows the graph has finished.
 _DONE = object()
@@ -126,7 +131,7 @@ class LangGraphAgent:
 
     def _build(self, request: ChatRequest, events: asyncio.Queue[Any]) -> Any:
         async def retrieve_node(state: _State) -> _State:
-            hits = await retrieve(request)
+            hits, spent = await retrieve_with_usage(request)
             # Before the answer, so the UI can show what it was based on while
             # the model is still thinking.
             await events.put(
@@ -142,6 +147,9 @@ class LangGraphAgent:
                     *to_messages(request, context),
                 ],
                 "context": context,
+                # What retrieval's own model calls cost, so the turn's usage
+                # is the whole turn's, as it is for the loop agent.
+                "usage": spent,
             }
 
         async def model_node(state: _State) -> _State:
@@ -153,7 +161,7 @@ class LangGraphAgent:
             async for chunk in bound.astream(state["messages"]):
                 if chunk.text:
                     await events.put(TokenEvent(text=chunk.text))
-                reply = chunk if reply is None else reply + chunk
+                reply = cast(AIMessageChunk, chunk if reply is None else reply + chunk)
 
             assert reply is not None
             return {
@@ -196,7 +204,7 @@ class LangGraphAgent:
             last = state["messages"][-1]
             return "tools" if getattr(last, "tool_calls", None) else "finish"
 
-        graph = StateGraph(_State)
+        graph = StateGraph(_State)  # ty: ignore[invalid-argument-type]  a TypedDict with reducers is what LangGraph documents
         graph.add_node("retrieve", retrieve_node)
         graph.add_node("model", model_node)
         graph.add_node("tools", tools_node)
@@ -215,7 +223,9 @@ class LangGraphAgent:
     async def _discover(self, request: ChatRequest) -> list[dict[str, Any]]:
         """The tools this assistant allows, named in the error if unreachable."""
         try:
-            return list(await self._tools.list_tools(request.project))
+            return [
+                dict(tool) for tool in await self._tools.list_tools(request.project)
+            ]
         except Exception as exc:
             urls = ", ".join(server.url for server in request.project.mcp_servers)
             raise EngineError(f"could not discover tools from {urls}") from exc

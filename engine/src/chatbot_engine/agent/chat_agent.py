@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 
 from chatbot_engine.agent.client import Usage, stream_completion
-from chatbot_engine.agent.retriever import retrieve, to_context, to_source_refs
+from chatbot_engine.agent.retriever import (
+    retrieve_with_usage,
+    to_context,
+    to_source_refs,
+)
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import (
     DoneEvent,
@@ -29,7 +33,7 @@ class ChatAgent:
 
     async def run(self, request: ChatRequest) -> AsyncIterator[Event]:
         """Process one chat request and yield events as the answer is produced."""
-        hits = await retrieve(request)
+        hits, spent = await retrieve_with_usage(request)
 
         # Before the answer, so the UI can show what it was based on while the
         # model is still thinking.
@@ -38,7 +42,9 @@ class ChatAgent:
         # stream_completion yields answer text as it is generated, tool
         # started/finished events around any tool call, and one Usage value at
         # the end; turn each into the matching event.
-        async for item in stream_completion(request, self._tools, to_context(hits)):
+        async for item in stream_completion(
+            request, self._tools, to_context(hits), prior=spent
+        ):
             if isinstance(item, Usage):
                 yield UsageEvent(
                     input_tokens=item.input_tokens,

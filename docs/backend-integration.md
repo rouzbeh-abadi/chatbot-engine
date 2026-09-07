@@ -139,7 +139,7 @@ request carries the whole assistant definition:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base |
+| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)) |
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
@@ -198,7 +198,7 @@ Read it line by line and switch on `type`.
 | `token` | `text` | Append to the answer |
 | `tool_call_started` | `call_id`, `tool`, `server`, `arguments` | Show progress |
 | `tool_call_finished` | `call_id`, `tool`, `ok`, `duration_ms`, `error` | Pair with `started` by `call_id` |
-| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model` | Display cost |
+| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model` | Display cost. Tokens cover every model call in the turn; `cost_usd` is null unless the engine's `ENGINE_PRICING` lists the model |
 | `error` | `code`, `message` | The turn failed after the response started |
 | `done` | `finish_reason` | Always last |
 
@@ -399,8 +399,11 @@ async def get_booking_status(booking_reference: str) -> dict[str, str]:
 **Return a missing record as data, not an exception.**
 
 ```python
-return {"booking_reference": ref, "status": "not_found",
-        "message": "No booking was found with this reference."}
+return {
+    "booking_reference": ref,
+    "status": "not_found",
+    "message": "No booking was found with this reference.",
+}
 ```
 
 A tool that raises for "not found" teaches the model that the tool is broken.
@@ -460,18 +463,19 @@ In Python:
 ```python
 import httpx
 
+
 async def ask(question: str) -> None:
     payload = {
-        "project": load_my_assistant_config(),   # server-side
+        "project": load_my_assistant_config(),  # server-side
         "message": question,
         "user_id": "alice",
     }
     async with httpx.AsyncClient(base_url="http://localhost:8100") as client:
         async with client.stream("POST", "/chat", json=payload) as response:
-            response.raise_for_status()          # 4xx / 5xx surface here
+            response.raise_for_status()  # 4xx / 5xx surface here
             async for line in response.aiter_lines():
                 if line.strip():
-                    handle(json.loads(line))     # switch on event["type"]
+                    handle(json.loads(line))  # switch on event["type"]
 ```
 
 `raise_for_status()` before the loop is what keeps a `501` from being read as an

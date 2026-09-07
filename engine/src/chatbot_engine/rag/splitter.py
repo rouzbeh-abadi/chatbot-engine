@@ -13,15 +13,13 @@ boundaries; the size cap keeps the pieces usable.
 
 from __future__ import annotations
 
-from typing import Literal
-
-from chatbot_engine.documents.models import ExtractedDocument
-from chatbot_engine.settings import get_settings
 from langchain_core.documents import Document
 from langchain_text_splitters import (
     MarkdownHeaderTextSplitter,
     RecursiveCharacterTextSplitter,
 )
+
+from chatbot_engine.documents.models import ExtractedDocument
 
 #: How a document is cut into chunks.
 #:
@@ -33,7 +31,8 @@ from langchain_text_splitters import (
 #: - `page`: never let a chunk span a page boundary, and label each with its
 #:   page number. Only meaningful for paged formats (PDF); falls back to `size`
 #:   when the document has no pages.
-ChunkStrategy = Literal["size", "headings", "page"]
+from chatbot_engine.models.documents import ChunkStrategy
+from chatbot_engine.settings import get_settings
 
 #: The same values at runtime, to check a string that came off the wire.
 CHUNK_STRATEGIES: frozenset[str] = frozenset(("size", "headings", "page"))
@@ -66,9 +65,7 @@ class DocumentChunker:
         self._splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size if chunk_size is not None else settings.chunk_size,
             chunk_overlap=(
-                chunk_overlap
-                if chunk_overlap is not None
-                else settings.chunk_overlap
+                chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
             ),
             add_start_index=True,
         )
@@ -95,9 +92,7 @@ class DocumentChunker:
 
         return self._by_size(extracted.text, metadata)
 
-    def _by_size(
-        self, text: str, metadata: dict[str, object]
-    ) -> list[Document]:
+    def _by_size(self, text: str, metadata: dict[str, object]) -> list[Document]:
         """Fixed-length windows. Also the last step of every other strategy."""
         return self._splitter.split_documents(
             [Document(page_content=text, metadata=dict(metadata))]

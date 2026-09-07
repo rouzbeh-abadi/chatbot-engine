@@ -14,9 +14,7 @@ from chatbot_engine.rag import vector_store as vector_store_module
 
 
 @pytest.fixture(autouse=True)
-def offline_vectors(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> Iterator[None]:
+def offline_vectors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
     """A real Chroma in a temporary directory, with fake vectors.
 
     Real store, so the tests exercise the actual write, replace and delete paths.
@@ -28,6 +26,12 @@ def offline_vectors(
     monkeypatch.setenv("ENGINE_REGISTRY_DB", str(tmp_path / "documents.sqlite3"))
     monkeypatch.setenv("ENGINE_BLOB_DIR", str(tmp_path / "blobs"))
     monkeypatch.setenv("ENGINE_OPENROUTER_API_KEY", "sk-or-fake-for-tests")
+    # The engine ships no prices. The suite runs with the demo's table, so a
+    # test can assert a cost the way the demo shows one.
+    monkeypatch.setenv(
+        "ENGINE_PRICING",
+        '{"openai/gpt-5-mini": [0.25, 2.0], "anthropic/claude-haiku-4.5": [1.0, 5.0]}',
+    )
 
     fake = DeterministicFakeEmbedding(size=64)
     # Both modules: `vector_store` imports the name directly, so patching only

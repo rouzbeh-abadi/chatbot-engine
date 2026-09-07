@@ -25,7 +25,7 @@ class Message(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role: Literal["system", "user", "assistant"]
-    content: str
+    content: str = Field(max_length=32_000)
 
 
 class McpServerConfig(BaseModel):
@@ -56,12 +56,11 @@ class AssistantConfig(BaseModel):
     name: str
     system_prompt: str
     model: str | None = None
-    #: The embedding model for this project's knowledge base; None uses the
-    #: engine's default. Mirrors the engine's AssistantConfig -- see the parity test.
-    #: Which agent runs the turn: `loop` (the built-in tool loop) or `graph`
-    #: (the same turn as a LangGraph state machine). None uses the engine
-    #: default. Both produce the same events; `graph` needs the `graph` extra.
+    #: Which agent runs the turn: `loop`, or the name of a plugin installed in
+    #: the engine. None uses the engine default.
     agent: str | None = None
+    #: The embedding model for this project's knowledge base; None uses the
+    #: engine's default. Mirrors the engine's AssistantConfig, see the parity test.
     embedding_model: str | None = None
     #: How the knowledge base is chunked, and the size cap. None uses the
     #: engine's defaults. Mirrors the engine's AssistantConfig.
@@ -70,6 +69,12 @@ class AssistantConfig(BaseModel):
     chunk_overlap: int | None = Field(default=None, ge=0, le=2000)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
     top_k: int = Field(default=5, ge=1, le=100)
+    #: Retrieval: `vector` or `hybrid` (vector fused with keyword search),
+    #: whether the model reranks the candidates, and how many candidates each
+    #: search returns. None uses the engine's defaults.
+    retrieval: Literal["vector", "hybrid"] | None = None
+    rerank: bool | None = None
+    retrieval_candidates: int | None = Field(default=None, ge=1, le=200)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
 
@@ -80,12 +85,12 @@ class EngineChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     project: AssistantConfig
-    message: str = Field(min_length=1)
-    session_id: str | None = None
+    message: str = Field(min_length=1, max_length=32_000)
+    session_id: str | None = Field(default=None, max_length=256)
     # Opaque to the engine: it forwards this to MCP tool servers for their own
     # authorization. User identity remains the backend's responsibility.
-    user_id: str | None = None
-    history: list[Message] = Field(default_factory=list)
+    user_id: str | None = Field(default=None, max_length=256)
+    history: list[Message] = Field(default_factory=list, max_length=200)
 
 
 # --- what we read back ------------------------------------------------------
@@ -186,7 +191,9 @@ class DoneEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["done"] = "done"
-    finish_reason: Literal["stop", "length", "tool_limit", "error", "cancelled"] = "stop"
+    finish_reason: Literal["stop", "length", "tool_limit", "error", "cancelled"] = (
+        "stop"
+    )
 
 
 # One chat turn arrives as a sequence of these events. Pydantic uses the `type`

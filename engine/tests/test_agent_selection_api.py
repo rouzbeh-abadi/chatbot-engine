@@ -48,7 +48,7 @@ class OneWordModel(BaseChatModel):
 
 
 async def _no_retrieval(_request):
-    return []
+    return [], {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
 
 def _events(body: str) -> list[dict]:
@@ -66,8 +66,8 @@ def _ask(client: TestClient, project: dict, agent: str | None) -> list[dict]:
     with (
         patch("chatbot_engine.agent.client.build_chat_model", return_value=model),
         patch("langgraph_agent.agent.build_chat_model", return_value=model),
-        patch("chatbot_engine.agent.chat_agent.retrieve", new=_no_retrieval),
-        patch("langgraph_agent.agent.retrieve", new=_no_retrieval),
+        patch("chatbot_engine.agent.chat_agent.retrieve_with_usage", new=_no_retrieval),
+        patch("langgraph_agent.agent.retrieve_with_usage", new=_no_retrieval),
     ):
         response = client.post("/chat", json={"project": config, "message": "hello"})
 
@@ -86,5 +86,3 @@ def test_either_agent_answers_over_http(
     assert types[-1] == "done"
     answer = "".join(e["text"] for e in events if e["type"] == "token")
     assert answer == "Hi."
-
-

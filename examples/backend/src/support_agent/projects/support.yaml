@@ -27,8 +27,16 @@ chunk_size: 1000
 chunk_overlap: 200
 temperature: 0.2
 
-# How many chunks to retrieve per turn.
+# How many chunks reach the model per turn.
 top_k: 5
+
+# How they are found. `hybrid` fuses vector similarity with a keyword search,
+# which catches exact terms (fare names, codes) that embeddings blur; `vector`
+# is similarity alone. `rerank` has the model re-order the candidates first,
+# at the cost of one extra model call per turn. See docs/retrieval.md.
+retrieval: hybrid
+rerank: false
+retrieval_candidates: 20
 
 # Bounds the agent's tool-calling loop.
 max_tool_iterations: 6

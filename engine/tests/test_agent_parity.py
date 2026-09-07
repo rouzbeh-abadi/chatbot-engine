@@ -24,7 +24,6 @@ from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
 
 from chatbot_engine.agent.chat_agent import ChatAgent
-from langgraph_agent.agent import LangGraphAgent
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import (
     DoneEvent,
@@ -33,6 +32,7 @@ from chatbot_engine.models.events import (
     ToolCallStartedEvent,
     UsageEvent,
 )
+from langgraph_agent.agent import LangGraphAgent
 
 AGENTS = ["loop", "graph"]
 
@@ -81,7 +81,7 @@ class FakeTools:
 
 
 async def _no_retrieval(_request):
-    return []
+    return [], {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
 
 
 def _request() -> ChatRequest:
@@ -123,7 +123,7 @@ def _rounds_with_a_tool_call() -> list:
 
 
 async def _run(
-    which: str, rounds: list, tools: FakeTools, model: "ScriptedModel | None" = None
+    which: str, rounds: list, tools: FakeTools, model: ScriptedModel | None = None
 ) -> list:
     """Drive one agent through a scripted conversation and collect its events."""
     model = model or ScriptedModel(rounds=rounds, seen=[])
@@ -132,7 +132,9 @@ async def _run(
         agent = ChatAgent(tools=tools)
         targets = [
             patch("chatbot_engine.agent.client.build_chat_model", return_value=model),
-            patch("chatbot_engine.agent.chat_agent.retrieve", new=_no_retrieval),
+            patch(
+                "chatbot_engine.agent.chat_agent.retrieve_with_usage", new=_no_retrieval
+            ),
         ]
     else:
         agent = LangGraphAgent(tools=tools)
@@ -141,7 +143,7 @@ async def _run(
                 "langgraph_agent.agent.build_chat_model",
                 return_value=model,
             ),
-            patch("langgraph_agent.agent.retrieve", new=_no_retrieval),
+            patch("langgraph_agent.agent.retrieve_with_usage", new=_no_retrieval),
         ]
 
     with targets[0], targets[1]:
@@ -175,7 +177,11 @@ async def test_usage_is_summed_across_tool_rounds(which: str) -> None:
 
     usage = next(e for e in events if isinstance(e, UsageEvent))
 
-    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (80, 30, 110)
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (
+        80,
+        30,
+        110,
+    )
     assert usage.cost_usd == pytest.approx(0.00008)
     assert usage.model == "openai/gpt-5-mini"
 

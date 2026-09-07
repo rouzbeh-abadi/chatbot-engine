@@ -9,8 +9,13 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+#: How a document is cut into chunks. Part of the contract: it is sent with an
+#: upload and named in the assistant configuration.
+ChunkStrategy = Literal["size", "headings", "page"]
 
 
 class IngestStatus(StrEnum):

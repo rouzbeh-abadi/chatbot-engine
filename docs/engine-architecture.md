@@ -68,7 +68,9 @@ flowchart LR
    raw model output into typed events. Any other agent, including the bundled
    LangGraph one, is an installed plugin. See [agents.md](agents.md).
 5. **`agent/retriever.py`** performs retrieval: rewrite the query, search the
-   vector store, return the hits and the numbered context.
+   vector store and, under `hybrid`, the keyword index in `rag/sparse.py`,
+   fuse the rankings, rerank with the model when enabled, and return the hits
+   and the numbered context. See [retrieval.md](retrieval.md).
 6. **`agent/client.py`** runs the model-and-tool loop: discover the MCP tools,
    call the model, execute any requested tool through the `ToolProvider`, return
    the result to the model, and repeat until it produces a final answer. This is
@@ -101,7 +103,8 @@ api/          HTTP surface: routes, auth, rate limits, streaming, and
 ports/        the interfaces every other module depends on
 agent/        the chat turn: router (which agent), registry (which exist),
               chat_agent (the built-in), retriever (RAG), client (model loop)
-rag/          vectors, chunking, embeddings, the ingest pipeline
+rag/          vectors, the keyword index, fusion and reranking, chunking,
+              embeddings, the ingest pipeline
 mcp/          the MCP client that reaches the application's tools
 documents/    document bookkeeping: the registry and the stored originals
 models/       the request, response, and event schemas (the wire contract)

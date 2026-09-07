@@ -20,14 +20,16 @@ import asyncio
 import hashlib
 from datetime import UTC, datetime
 
+from langchain_core.documents import Document
+
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.extractor import DocumentExtractor, select_extractor
 from chatbot_engine.errors import DocumentRejectedError, NotConfiguredError
 from chatbot_engine.models.documents import DocumentRecord, IngestStatus
 from chatbot_engine.ports.documents import DocumentRegistry
+from chatbot_engine.rag import sparse
 from chatbot_engine.rag.splitter import ChunkStrategy, DocumentChunker
 from chatbot_engine.rag.vector_store import ChromaChunkStore
-from langchain_core.documents import Document
 
 
 def doc_id_for(project_id: str, external_id: str) -> str:
@@ -186,6 +188,9 @@ class DocumentIngestPipeline:
                 # that vanishes.
                 store = ChromaChunkStore(embedding_model)
                 await store.write(doc_id=record.doc_id, chunks=chunks)
+                # The keyword index is built from the collection; this process
+                # must not keep searching the version from before this write.
+                sparse.invalidate(record.project_id)
         except Exception as exc:
             # Keep the failure in GET /documents, not only in a log line.
             await self._registry.upsert(

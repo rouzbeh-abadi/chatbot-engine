@@ -52,6 +52,8 @@ services:
     environment:
       ENGINE_API_KEY: ${ENGINE_API_KEY:-}
       ENGINE_OPENROUTER_API_KEY: ${ENGINE_OPENROUTER_API_KEY:-}
+      # The demo's price table, so the UI shows a cost. See .env.example.
+      ENGINE_PRICING: ${ENGINE_PRICING:-}
       ENGINE_LOG_LEVEL: INFO
       # Inside the container, so it lands on the volume below rather than in a
       # layer that `docker compose down` throws away.
@@ -70,7 +72,9 @@ services:
 
   backend:
     build:
-      context: ./examples/backend
+      # The repository root, so the build installs from uv.lock.
+      context: .
+      dockerfile: examples/backend/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -92,7 +96,8 @@ services:
   # This project's domain tools, exposed to the engine over MCP.
   mcp-tools:
     build:
-      context: ./examples/backend
+      context: .
+      dockerfile: examples/backend/Dockerfile
     command: ["python", "-m", "support_agent.mcp_tools"]
     ports:
       - "8200:8200"

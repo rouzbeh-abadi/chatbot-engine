@@ -24,7 +24,9 @@ replace all of it.
 ## What it does
 
 - **Retrieval-augmented answers.** Documents are chunked and embedded, then
-  searched per question.
+  searched per question with hybrid retrieval: vector similarity fused with
+  keyword search, and an optional rerank by the model. See
+  [docs/retrieval.md](docs/retrieval.md).
 - **Tool calling over MCP.** The model calls the backend's own tools when it
   needs live data; the engine only ever sees the tools a request allowlists.
 - **Streaming.** The answer appears token by token, with tool activity and token
@@ -268,6 +270,8 @@ all of it.
 - **[docs/memory.md](docs/memory.md)** covers long-term memory: what is stored,
   why reading is injected rather than a tool, and why the unauthenticated owner
   id partitions notes without protecting them.
+- **[docs/retrieval.md](docs/retrieval.md)** covers retrieval: hybrid search,
+  rank fusion, reranking, and how to evaluate a change.
 - **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies:
   what each cuts at, when to use it, and why changing one means re-indexing.
 - **[engine/README.md](engine/README.md)** covers the engine itself.
@@ -292,4 +296,5 @@ them, ship them. Attribution and the notice in section 4 are all that is asked.
 
 ```bash
 make test           # Python (engine + backend) and the frontend suite
+make lint           # ruff, formatting, and ty, as CI runs them
 ```

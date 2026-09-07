@@ -10,8 +10,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from chatbot_engine.documents.blobs import DocumentBlobs
-from chatbot_engine.models.documents import DocumentRecord
+from chatbot_engine.models.documents import ChunkStrategy, DocumentRecord
 from chatbot_engine.ports.documents import DocumentRegistry, IngestPipeline
+from chatbot_engine.rag import sparse
 from chatbot_engine.rag.vector_store import ChromaChunkStore
 
 
@@ -41,7 +42,7 @@ class DocumentService:
         mimetype: str,
         data: bytes,
         embedding_model: str | None = None,
-        chunking_strategy: str | None = None,
+        chunking_strategy: ChunkStrategy | None = None,
         chunk_size: int | None = None,
         chunk_overlap: int | None = None,
     ) -> DocumentRecord:
@@ -68,6 +69,7 @@ class DocumentService:
         """
         if self._vectors is not None:
             await self._vectors.delete(doc_id=doc_id)
+            sparse.invalidate(project_id)
         if self._blobs is not None:
             await self._blobs.delete(doc_id=doc_id)
 

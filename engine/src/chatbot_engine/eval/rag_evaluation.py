@@ -16,8 +16,10 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
+from openai import AsyncOpenAI
+
 from chatbot_engine.agent.client import stream_completion
-from chatbot_engine.agent.retriever import retrieve, to_context
+from chatbot_engine.agent.retriever import retrieve_with_usage, to_context
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.evals import (
     RagCaseResult,
@@ -28,7 +30,6 @@ from chatbot_engine.models.evals import (
     RagReport,
 )
 from chatbot_engine.settings import get_settings
-from openai import AsyncOpenAI
 
 
 class _NoTools:
@@ -49,6 +50,7 @@ class _NoTools:
         name: str,
         arguments: Mapping[str, Any],
         user_id: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         return ""
 
@@ -101,7 +103,6 @@ def _build_metrics() -> tuple:
     Collections metrics take a ragas-native LLM built from an OpenAI client, so
     we point one at OpenRouter rather than reusing the LangChain chat model.
     """
-    from chatbot_engine.eval import _ragas_compat  # noqa: F401  patch before ragas
     from ragas.embeddings import embedding_factory
     from ragas.llms import llm_factory
     from ragas.metrics.collections import (
@@ -110,6 +111,8 @@ def _build_metrics() -> tuple:
         ContextRecall,
         Faithfulness,
     )
+
+    from chatbot_engine.eval import _ragas_compat  # noqa: F401  patch before ragas
 
     settings = get_settings()
     # RAGAS fires many calls per case, so a rate-limited account (429s) will
@@ -147,16 +150,16 @@ async def _answer_and_contexts(
     cheaper (one search, no tool discovery) and more correct: faithfulness then
     grades the answer against the context it was actually generated from.
     """
-    request = ChatRequest(
-        project=project, message=case.question, history=case.history
-    )
-    hits = await retrieve(request)
+    request = ChatRequest(project=project, message=case.question, history=case.history)
+    hits, spent = await retrieve_with_usage(request)
     contexts = [document.page_content for document, _ in hits]
 
     answer = "".join(
         [
             item
-            async for item in stream_completion(request, _NO_TOOLS, to_context(hits))
+            async for item in stream_completion(
+                request, _NO_TOOLS, to_context(hits), prior=spent
+            )
             if isinstance(item, str)
         ]
     )

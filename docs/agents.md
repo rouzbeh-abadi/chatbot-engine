@@ -54,16 +54,18 @@ engine's events:
 ```python
 # my_package/agent.py
 class MyAgent:
-    def __init__(self, tools):        # the engine's ToolProvider
+    def __init__(self, tools):  # the engine's ToolProvider
         self._tools = tools
 
     def run(self, request):
         async def events():
             yield TokenEvent(text="...")
             yield DoneEvent(finish_reason="stop")
+
         return events()
 
-def build(tools) -> MyAgent:          # the factory the entry point names
+
+def build(tools) -> MyAgent:  # the factory the entry point names
     return MyAgent(tools)
 ```
 
@@ -125,8 +127,11 @@ failed tool as `ok=false` rather than ending the turn, and feeds the result back
 as a `ToolMessage`. Two agents that ran tools differently would report them
 differently.
 
-**Cost.** Use `chatbot_engine.agent.client.price_usage` for the `usage` event,
-so both agents price a turn identically.
+**Cost.** Retrieve with `retrieve_with_usage()`, which returns the hits and
+the token counts of retrieval's own model calls, and pass those counts to
+`stream_completion(..., prior=...)`, so the turn's `usage` covers every call
+it made. Price with `chatbot_engine.agent.client.price_usage`, so both agents
+price a turn identically.
 
 `engine/tests/test_agent_parity.py` asserts all four points for `loop` and
 `graph`.
@@ -161,8 +166,7 @@ graph.add_node("finish", finish_node)
 
 graph.add_edge(START, "retrieve")
 graph.add_edge("retrieve", "model")
-graph.add_conditional_edges("model", next_step,
-                            {"tools": "tools", "finish": "finish"})
+graph.add_conditional_edges("model", next_step, {"tools": "tools", "finish": "finish"})
 graph.add_edge("tools", "model")
 graph.add_edge("finish", END)
 
