@@ -46,7 +46,12 @@ from chatbot_engine.models.events import (
     UsageEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
-from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
+from langchain_core.messages import (
+    AIMessageChunk,
+    BaseMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from langgraph.graph import END, START, StateGraph
 
 #: Marks the end of the event stream, so `run` knows the graph has finished.
@@ -128,7 +133,16 @@ class LangGraphAgent:
                 RetrievalEvent(query=request.message, sources=to_source_refs(hits))
             )
             context = to_context(hits)
-            return {"messages": to_messages(request, context), "context": context}
+            # The system prompt leads, exactly as it does in the engine's loop
+            # agent. Without it the model has no persona, no grounding rules,
+            # and none of the notes the backend recalled for this customer.
+            return {
+                "messages": [
+                    SystemMessage(content=request.project.system_prompt),
+                    *to_messages(request, context),
+                ],
+                "context": context,
+            }
 
         async def model_node(state: _State) -> _State:
             tools = await self._discover(request)

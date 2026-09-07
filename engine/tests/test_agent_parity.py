@@ -40,6 +40,8 @@ AGENTS = ["loop", "graph"]
 class ScriptedModel(BaseChatModel):
     rounds: list
     model_name: str = "openai/gpt-5-mini"
+    #: Every message list this model was called with, one entry per round.
+    seen: list = []
 
     @property
     def _llm_type(self) -> str:
@@ -52,6 +54,9 @@ class ScriptedModel(BaseChatModel):
         return self
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        # Kept so tests can assert what actually reached the model, not only
+        # what came back out of the agent.
+        self.seen.append(list(messages))
         for chunk in self.rounds.pop(0):
             yield ChatGenerationChunk(message=chunk)
 
@@ -117,9 +122,11 @@ def _rounds_with_a_tool_call() -> list:
     ]
 
 
-async def _run(which: str, rounds: list, tools: FakeTools) -> list:
+async def _run(
+    which: str, rounds: list, tools: FakeTools, model: "ScriptedModel | None" = None
+) -> list:
     """Drive one agent through a scripted conversation and collect its events."""
-    model = ScriptedModel(rounds=rounds)
+    model = model or ScriptedModel(rounds=rounds, seen=[])
 
     if which == "loop":
         agent = ChatAgent(tools=tools)
@@ -220,3 +227,41 @@ async def test_both_agents_report_the_same_usage_and_answer() -> None:
         return text, started, usage.total_tokens, usage.cost_usd
 
     assert summary(loop) == summary(graph)
+
+
+# --- what reaches the model ----------------------------------------------------
+
+
+@pytest.mark.parametrize("which", AGENTS)
+async def test_the_system_prompt_reaches_the_model(which: str) -> None:
+    """Every agent must send the assistant's system prompt.
+
+    Events alone cannot show this: an agent that drops the system prompt still
+    emits a perfectly well-formed stream, and only the content of the answer
+    changes. A `graph` agent once did exactly that, losing the persona, the
+    grounding rules, and the memory notes the backend had appended to the
+    prompt, while every other parity test stayed green.
+    """
+    model = ScriptedModel(rounds=[[AIMessageChunk(content="Hi.")]], seen=[])
+
+    await _run(which, [], FakeTools(), model=model)
+
+    first_call = model.seen[0]
+    assert first_call, "the model was called with no messages at all"
+    assert any(
+        getattr(m, "type", None) == "system" and "p" in m.content for m in first_call
+    ), f"{which} sent no system prompt: {[getattr(m, 'type', '?') for m in first_call]}"
+
+
+async def test_both_agents_send_the_same_system_prompt() -> None:
+    """Parity on the prompt, not only on the events it produces."""
+    prompts = {}
+
+    for which in AGENTS:
+        model = ScriptedModel(rounds=[[AIMessageChunk(content="Hi.")]], seen=[])
+        await _run(which, [], FakeTools(), model=model)
+        prompts[which] = [
+            m.content for m in model.seen[0] if getattr(m, "type", None) == "system"
+        ]
+
+    assert prompts["loop"] == prompts["graph"]

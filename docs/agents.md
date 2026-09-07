@@ -118,6 +118,11 @@ emit the same events in the same order.
 plugin's `graph` are indistinguishable on all of it. An agent written outside
 the engine is not a second-class citizen, and that test is what keeps it true.
 
+An agent must also send `project.system_prompt` to the model, ahead of the
+conversation. This is not visible in the event stream: an agent that omits it
+still emits a well-formed one, and only the content of the answer changes. The
+same test file asserts it separately.
+
 ## A worked example you can copy
 
 [`examples/langgraph-agent/`](../examples/langgraph-agent) is a complete, working
