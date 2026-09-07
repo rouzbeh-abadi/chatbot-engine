@@ -5,9 +5,10 @@ WORKDIR /app
 
 COPY pyproject.toml README.md LICENSE NOTICE ./
 COPY src ./src
-# The `eval` extra (RAGAS) is included so the admin dashboard can run the RAG
-# evaluation live. It is imported lazily, so normal serving never loads it.
-RUN uv pip install --system --no-cache ".[eval]"
+# `eval` (RAGAS) so the admin dashboard can run the RAG evaluation live, and
+# `redis` so ENGINE_REDIS_URL can be set without rebuilding. Both are imported
+# lazily, so normal serving loads neither.
+RUN uv pip install --system --no-cache ".[eval,redis]"
 
 # Drop root, and own the data directory: the engine writes vectors, the document
 # registry, and uploaded blobs, so its volume has to belong to the same user.

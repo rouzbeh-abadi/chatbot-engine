@@ -39,6 +39,9 @@ eval = [
     "ragas>=0.4,<0.5",
     "langchain-community>=0.4",
 ]
+redis = [
+    "redis>=5",
+]
 
 [dependency-groups]
 dev = [

@@ -15,8 +15,10 @@ WORKDIR /app
 
 COPY engine/pyproject.toml engine/README.md engine/LICENSE engine/NOTICE ./
 COPY engine/src ./src
-# `eval` (RAGAS) so the admin dashboard can run the RAG evaluation live.
-RUN uv pip install --system --no-cache ".[eval]"
+# `eval` (RAGAS) so the admin dashboard can run the RAG evaluation live, and
+# `redis` so ENGINE_REDIS_URL can be set without rebuilding. Both are imported
+# lazily, so normal serving loads neither.
+RUN uv pip install --system --no-cache ".[eval,redis]"
 
 # The agent plugin. `--no-deps` because the engine it depends on is already
 # installed above and is not published to PyPI; LangGraph comes with it.

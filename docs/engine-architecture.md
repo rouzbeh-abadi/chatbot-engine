@@ -43,10 +43,6 @@ every implementation on one screen:
 | `BlobStore` | `DocumentBlobs` | `documents/blobs.py` |
 | `Judge` / `RagEvaluator` | functions in `eval/` | `eval/` |
 
-`documents/registry.py` contains a second, in-memory registry used only by the
-test suite. It is not wired into the running engine and can be disregarded when
-tracing the request path.
-
 ## Chat request path
 
 ```mermaid
@@ -58,14 +54,13 @@ flowchart LR
     E --> F["McpToolProvider<br/>mcp/client.py"]
 ```
 
-1. **`api/chat.py`** receives the request, delegates to the chat service, and
-   opens an NDJSON stream. The response status is resolved before the body is
-   sent, so a failure returns a correct 501 rather than an empty `200` with the
-   error inside the stream.
-2. **`services/chat.py`** enforces one precondition: if no `Agent` is registered,
-   it raises 501; otherwise it delegates. The layer exists so that `/chat` and
-   `/documents` report a missing implementation uniformly. It contains no other
-   logic.
+1. **`api/chat.py`** receives the request, checks the two preconditions that
+   can still become a status code (a provider key, 501; a known agent name,
+   422), then opens an NDJSON stream. Anything that fails after that point
+   arrives inside the stream as an `error` event followed by `done`.
+2. **`services/chat.py`** delegates to the agent. The layer exists so the route
+   depends on one object rather than on the agent's construction, and so a test
+   can hand the route any agent. It contains no logic.
 3. **`agent/router.py`** picks the agent the assistant config asked for, then
    delegates. Both agents emit the same events, so nothing downstream changes.
 4. **`agent/chat_agent.py`** is the only agent the engine ships: it runs the
@@ -89,8 +84,8 @@ flowchart LR
     C --> D["extract → chunk → embed → store"]
 ```
 
-The structure mirrors the chat path: a route, a service that verifies its
-dependencies are wired, and a pipeline that performs the work behind ports.
+The structure mirrors the chat path: a route, a thin service, and a pipeline
+that performs the work behind ports.
 Storage fans out to three of them: `ChromaChunkStore` for vectors,
 `DocumentBlobs` for the original file, and `SqliteDocumentRegistry` for the
 record.
@@ -110,7 +105,7 @@ rag/          vectors, chunking, embeddings, the ingest pipeline
 mcp/          the MCP client that reaches the application's tools
 documents/    document bookkeeping: the registry and the stored originals
 models/       the request, response, and event schemas (the wire contract)
-services/     readiness boundaries between the routes and the ports
+services/     thin boundaries between the routes and the ports
 eval/         the two graders: the system-prompt judge and RAGAS retrieval
 settings.py   every ENGINE_* option, with its default declared inline
 ```
@@ -121,8 +116,15 @@ settings.py   every ENGINE_* option, with its default declared inline
   port table above gives its file.
 - **The wire contract**: `models/` defines everything a caller may send or
   receive. No other module defines request or response shapes.
-- **The `services/` layer**: a readiness guard by design. It holds no business
-  logic; the work is behind the port it delegates to.
+- **The `services/` layer**: holds no business logic. Each service exists so a
+  route depends on one object, and so a test can substitute it.
+- **Readiness**: `GET /health/ready` reports whether a provider key is set,
+  whether the vector store answers, and which agents are installed. Without a
+  key the engine still records and chunks documents, and answers 501 to
+  anything that needs a model.
+- **One process or several**: embedded Chroma and in-memory rate-limit buckets
+  belong to one process. `ENGINE_CHROMA_URL` and `ENGINE_REDIS_URL` move each
+  to a shared service; see `DEPLOYMENT.md`, "Scaling out".
 - **Caller context**: a tool call carries `X-User-Id` and `X-Session-Id`, the
   caller's own identifiers, forwarded untouched. The engine attaches no meaning
   to either; a tool server needs them to scope what it reads and writes, and the

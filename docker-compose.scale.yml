@@ -1,0 +1,59 @@
+# Scale-out overlay. Use it on top of the base file and the production overlay:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+#                  -f docker-compose.scale.yml up -d
+#
+# The base engine runs embedded Chroma and in-memory rate limits, both of which
+# belong to one process. This overlay moves each into a shared service so the
+# engine can run as several replicas:
+#   - vectors move to a Chroma server, reached through ENGINE_CHROMA_URL
+#   - rate-limit buckets move to Redis, reached through ENGINE_REDIS_URL
+# and the engine runs two replicas behind compose's built-in DNS round robin.
+#
+# The engine volume is no longer used for vectors, only for the document
+# registry and stored originals. Those are SQLite and files, and still belong
+# to one writer: a real multi-replica deployment puts them on shared storage
+# or replaces them, which is outside what an overlay can do.
+
+services:
+  chroma:
+    image: chromadb/chroma:1.5.9
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      ANONYMIZED_TELEMETRY: "false"
+    volumes:
+      - chroma_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8000'"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  engine:
+    deploy:
+      replicas: 2
+    environment:
+      ENGINE_CHROMA_URL: http://chroma:8000
+      ENGINE_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      chroma:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  chroma_data:

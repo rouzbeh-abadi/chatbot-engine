@@ -10,7 +10,7 @@
 # workspace root cannot depend on itself.
 name = "chatbot-engine-workspace"
 version = "0.1.0"
-description = "A domain-specialised RAG chatbot with advanced retrieval and tool calling."
+description = "Development workspace for the chatbot engine and its example application."
 readme = "README.md"
 license = "Apache-2.0"
 authors = [{ name = "Rouzbeh Abadi" }]
@@ -38,7 +38,12 @@ langgraph-agent = { workspace = true }
 [dependency-groups]
 # langgraph is an optional extra for consumers, but a dev dependency here so the
 # graph agent is exercised by the suite rather than skipped.
-dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "langgraph>=0.2"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "langgraph>=0.2",
+    "fakeredis[lua]>=2.20",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["engine/tests", "examples/backend/tests", "tests"]

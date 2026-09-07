@@ -263,8 +263,8 @@ all of it.
   authenticated.
 - **[docs/backend-integration.md](docs/backend-integration.md)** shows how to
   connect a backend to the engine.
-- **[docs/agents.md](docs/agents.md)** covers the two agents, when a graph is
-  worth its weight, and how to add a third.
+- **[docs/agents.md](docs/agents.md)** covers the agent contract, the bundled
+  LangGraph plugin, and how to install your own.
 - **[docs/memory.md](docs/memory.md)** covers long-term memory: what is stored,
   why reading is injected rather than a tool, and why the unauthenticated owner
   id partitions notes without protecting them.
@@ -280,10 +280,10 @@ all of it.
 
 Apache License 2.0. See [LICENSE](LICENSE).
 
-Chosen over MIT for the explicit patent grant in section 3: an adopter gets a
-licence to any patents covering this code, and loses it if they sue over them.
-That is the clause corporate legal teams look for before building on something,
-and it costs a permissive licence nothing.
+Chosen over MIT for the explicit patent grant in section 3: an adopter receives
+a licence to any patents covering this code, and loses it if they sue over
+them. Corporate legal review commonly requires that clause, and it costs a
+permissive licence nothing.
 
 The example backend and frontend are under the same licence. Take them, change
 them, ship them. Attribution and the notice in section 4 are all that is asked.

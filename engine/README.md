@@ -69,9 +69,11 @@ not normal use. Zero disables one.
 | `ENGINE_EVAL_RATE_LIMIT_PER_HOUR` | 20 | `POST /judge`, `POST /eval/rag` |
 | `ENGINE_INGEST_RATE_LIMIT_PER_MINUTE` | 20 | `PUT /documents` |
 
-Buckets live in the process's memory, so two replicas mean twice the effective
-limit. That is a real limitation and the limit is still worth having. For an
-exact global one, back `_Bucket` in `api/rate_limit.py` with Redis.
+Buckets live in the process's memory by default, so two replicas mean twice
+the effective limit. Set `ENGINE_REDIS_URL` and every replica charges one
+shared bucket per caller. The same applies to the vector store:
+`ENGINE_CHROMA_URL` moves it from embedded files to a shared Chroma server. See
+[DEPLOYMENT.md](../DEPLOYMENT.md#scaling-out).
 
 Set `ENGINE_ENV=production` and the engine refuses to start without a key at
 all, rather than serving openly. See [DEPLOYMENT.md](../DEPLOYMENT.md).

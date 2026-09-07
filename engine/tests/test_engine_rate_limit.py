@@ -20,10 +20,6 @@ def _spend(limiter: RateLimiter, caller: str, times: int) -> None:
         limiter.check(caller)
 
 
-def test_a_caller_may_spend_the_whole_allowance() -> None:
-    _spend(RateLimiter(name="chat", capacity=3, window_s=60.0), "web", 3)
-
-
 def test_the_next_call_is_refused_with_how_long_to_wait() -> None:
     limiter = RateLimiter(name="chat", capacity=3, window_s=60.0)
     _spend(limiter, "web", 3)
@@ -48,7 +44,7 @@ def test_the_bucket_refills_over_time() -> None:
 
     # Rewind this caller's clock by two seconds: one token per second, so two
     # are back. Reaching into the bucket beats sleeping in a test.
-    limiter._buckets["web"].updated -= 2.0
+    limiter.store._buckets["web"].updated -= 2.0
 
     _spend(limiter, "web", 2)
     with pytest.raises(Exception):
@@ -99,3 +95,64 @@ def test_listing_and_deleting_are_not_metered(metered_client: TestClient) -> Non
             ).status_code
             == 200
         )
+
+
+# --- shared buckets ------------------------------------------------------------
+#
+# The property a Redis store exists for: two replicas charging the same caller
+# see one allowance, not one each. `fakeredis` runs the real Lua script, so the
+# arithmetic under test is the one production runs.
+
+
+def _shared_redis():
+    import fakeredis
+
+    return fakeredis.FakeRedis()
+
+
+def _replica(redis, capacity: int = 3) -> RateLimiter:
+    from chatbot_engine.api.rate_limit import RedisBuckets
+
+    store = RedisBuckets("redis://unused", name="chat", client=redis)
+    return RateLimiter(name="chat", capacity=capacity, window_s=60.0, store=store)
+
+
+def test_two_replicas_share_one_allowance() -> None:
+    """The bug an in-memory store has: each replica grants the full capacity."""
+    redis = _shared_redis()
+    first, second = _replica(redis), _replica(redis)
+
+    first.check("web")
+    second.check("web")
+    first.check("web")
+
+    with pytest.raises(Exception) as caught:
+        second.check("web")
+    assert getattr(caught.value, "status_code", None) == 429
+    assert int(caught.value.headers["Retry-After"]) >= 1
+
+
+def test_callers_are_still_separate_in_redis() -> None:
+    redis = _shared_redis()
+    limiter = _replica(redis, capacity=1)
+
+    limiter.check("web")
+    limiter.check("batch")
+
+    with pytest.raises(Exception):
+        limiter.check("web")
+
+
+def test_the_redis_store_is_selected_by_the_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one switch between per-replica and shared limits."""
+    from chatbot_engine.api.rate_limit import MemoryBuckets, RedisBuckets, _store_for
+    from chatbot_engine.settings import Settings
+
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: _shared_redis())
+
+    assert isinstance(_store_for("chat", Settings(redis_url=None)), MemoryBuckets)
+    assert isinstance(
+        _store_for("chat", Settings(redis_url="redis://cache:6379/0")), RedisBuckets
+    )

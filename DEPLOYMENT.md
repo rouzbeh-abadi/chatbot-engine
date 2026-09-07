@@ -1,17 +1,14 @@
-# Deploying this
+# Deployment
 
-The defaults in this repository are tuned for `make up` on a laptop: every
-service is published to the host, the database password is in the compose file,
-and nothing is authenticated. That is the right shape for reading the code and
-the wrong shape for anything other people can reach.
+The defaults in this repository are for `make up` on a development machine:
+every service is published to the host, the database password is in the compose
+file, and nothing is authenticated. This document covers what changes for a
+deployment other people can reach.
 
-This document is the difference between the two.
-
-## Running the published images
+## Published images
 
 Every version tag publishes multi-architecture images (amd64 and arm64) to this
-repository's container registry, so a deployment does not have to build
-anything:
+repository's container registry:
 
 ```
 ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.0
@@ -19,11 +16,18 @@ ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.0
 ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.0
 ```
 
-Each is tagged `0.1.0`, `0.1`, `0` and `latest`, so you can pin as tightly as you
-want. Pin to a full version in production; `latest` moves under you.
+Each is also tagged `0.1`, `0` and `latest`. Pin to a full version in
+production.
 
-To run the published images instead of building locally, point the compose
-services at them with `image:` and drop their `build:` blocks.
+**The published engine image carries no agent plugins.** It runs the built-in
+`loop` agent only. The demo stack in `docker-compose.yml` does not use it; it
+builds `docker/engine-with-plugins.Dockerfile`, which installs
+`examples/langgraph-agent` on top of the engine, so that `agent: graph` is
+selectable. A deployment that needs a plugin builds its own image the same way;
+see [docs/agents.md](docs/agents.md).
+
+To run the published images, replace each service's `build:` block with the
+corresponding `image:`.
 
 ## Cutting a release
 
@@ -31,25 +35,24 @@ services at them with `image:` and drop their `build:` blocks.
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-That does three things: runs the full test suite, publishes the three images,
-and opens a GitHub release with generated notes. The suite runs again because a
-tag can point at any commit, including one that never went through a pull
-request.
+The Release workflow runs the full test suite, publishes the three images, and
+creates a GitHub release with generated notes. The suite runs again because a
+tag can point at any commit.
 
-To rehearse without moving a tag, run the *Release* workflow manually from the
-Actions tab. It builds everything and publishes nothing.
+Running the workflow manually from the Actions tab builds everything and
+publishes nothing.
 
-## The one thing to do first
+## Production mode
 
-Set both services to production. They will then refuse to start on a default
-that is only safe locally, instead of serving with one:
+Set both services to production:
 
 ```
 BACKEND_ENV=production
 ENGINE_ENV=production
 ```
 
-A refused start looks like this, and names every variable it wants:
+In this mode each service refuses to start on any default that is only safe
+locally, and names every variable it requires:
 
 ```
 RuntimeError: refusing to start with BACKEND_ENV=production:
@@ -57,33 +60,32 @@ RuntimeError: refusing to start with BACKEND_ENV=production:
   - BACKEND_DATABASE_URL still carries the demo credentials (support_agent:...
 ```
 
-This is deliberately a startup failure rather than a warning. A container that
-would leak on its first request should fail its health check and never enter the
-load balancer.
+A refused start fails the health check, so the container never enters a load
+balancer.
 
 ## Secrets
 
-Generate real values. `openssl rand -hex 32` is a fine source for all three.
+Generate real values; `openssl rand -hex 32` is sufficient for all three.
 
 | Variable | Guards |
 | --- | --- |
-| `ENGINE_API_KEY` | The engine. It holds your provider credentials and has no notion of end users, so only the backend may reach it. Set the same value as `BACKEND_ENGINE_API_KEY`. For more than one caller, use `ENGINE_API_KEYS` instead (see below). |
-| `BACKEND_ADMIN_KEY` | `/admin` and the document write routes: every booking, every ticket, the evaluation runs, and what the assistant knows. |
-| `POSTGRES_PASSWORD` | The database. The demo value is in this repository, so it is not a password. |
+| `ENGINE_API_KEY` | The engine, which holds the model provider credentials. Set the same value as `BACKEND_ENGINE_API_KEY`. For more than one caller use `ENGINE_API_KEYS`; see below. |
+| `BACKEND_ADMIN_KEY` | `/admin` and the document write routes: bookings, tickets, evaluation runs, and the knowledge base. |
+| `POSTGRES_PASSWORD` | The database. The demo value is committed to this repository. |
 
-Keep them out of the image and out of git. Pass them through your platform's
-secret mechanism. Nothing in this repo reads a secret at build time.
+Pass secrets through the platform's secret mechanism. Nothing in this
+repository reads a secret at build time.
 
-## The network shape
+## Network shape
 
-Only the frontend should be reachable. The engine, the MCP tool server and
-Postgres have no business being on the internet:
+Only the frontend is reachable. The engine, the tool server and Postgres are
+internal:
 
 ```
         internet
            │
            ▼
-   [ TLS terminator ]         you provide this
+   [ TLS terminator ]         provided by the deployment
            │
            ▼
    [ frontend :80 ]           nginx: static files + /api proxy
@@ -95,7 +97,7 @@ Postgres have no business being on the internet:
  [ engine ]  [ mcp-tools ]  [ postgres ]
 ```
 
-With Docker Compose, the production overlay does this for you:
+The production overlay applies this:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
@@ -103,78 +105,69 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 It unpublishes every port but the frontend's, binds that one to `127.0.0.1`,
 requires each secret from the environment with no fallback, and sets both
-services to production. Read it before you run it: it is short, and it is the
-executable version of this section.
+services to production.
 
 ## TLS
 
-Nothing here terminates TLS, on purpose: it is the one piece that depends
-entirely on where you run. Put Caddy, Traefik, nginx, or a cloud load balancer
-in front of the frontend port, and set `Strict-Transport-Security` there. The
-frontend container speaks plain HTTP to whatever is in front of it, so an HSTS
-header set inside it would be ignored.
+Nothing in this repository terminates TLS. Put Caddy, Traefik, nginx or a cloud
+load balancer in front of the frontend port and set `Strict-Transport-Security`
+there. The frontend container speaks plain HTTP to whatever is in front of it,
+so an HSTS header set inside it would be ignored.
 
-## What is authenticated, and what is not
+## Authentication
 
-Be clear-eyed about this before you put it in front of users.
+**Guarded by `BACKEND_ADMIN_KEY`:** `/admin/*` and the document write routes
+(`PUT /documents`, `DELETE /documents/{id}`). One shared operator secret,
+compared in constant time. It establishes that a caller is an operator, not
+which one, so there is no audit trail.
 
-**Guarded by `BACKEND_ADMIN_KEY`**: `/admin/*` (bookings, tickets, evaluation
-runs) and the document write routes (`PUT /documents`, `DELETE /documents/{id}`).
-One shared operator secret, compared in constant time. It tells you someone is
-an operator; it cannot tell you *which* operator, so there is no audit trail.
+**Open:** `GET /health`, `GET /models`, `GET /agents`, `GET /documents`,
+`GET /memory`, `DELETE /memory`, and the chat routes. Chat is rate limited but
+unauthenticated: anyone who reaches the frontend can spend model credits within
+that limit.
 
-**Open**: `GET /health`, `GET /models`, `GET /documents`, and the chat routes.
-Chat is rate limited but unauthenticated: anyone who reaches the frontend can
-spend model credits within that limit. If that is not acceptable for your
-deployment, chat is where to put your authentication.
+**User identity is not implemented.** `api/identity.py` is the seam. By default
+every caller is `anonymous`. With `BACKEND_TRUST_USER_HEADER=true` the backend
+uses the `X-User-Id` header instead, which is only safe when a proxy in front
+authenticates the user and sets the header itself. The bundled nginx clears
+`X-User-Id` on every request for this reason. To add accounts, replace
+`resolve_user_id`; every route that takes `UserIdDep` follows.
 
-**Not implemented: user accounts.** `api/identity.py` is the seam.
+**Long-term memory has its own identity rule.** Without authentication, memory
+is partitioned by `X-Client-Id`, an id the browser generates and keeps. It
+passes through the proxy untouched and is never treated as authentication.
+It is a partition, not a permission: any client can send another client's id.
+This is acceptable only while memory is the sole thing keyed on it. See
+[docs/memory.md](docs/memory.md) before serving real users.
 
-By default every caller is `anonymous`. Set `BACKEND_TRUST_USER_HEADER=true` and
-the backend believes the `X-User-Id` header instead. That is only safe when a
-proxy in front authenticates the user and *overwrites* the header, so a browser
-cannot set it itself. The bundled nginx config does exactly that.
+**Authorisation is not implemented.** Nothing checks that a user may use a
+project, or that a booking belongs to the person asking about it. That check
+belongs in the backend, next to identity.
 
-To add real accounts, replace `resolve_user_id`. Every route that takes
-`UserIdDep` follows automatically.
+## Engine keys
 
-**Not implemented: authorisation.** Nothing checks that a given user may use a
-given project, or that a booking belongs to the person asking about it. For a
-multi-tenant product that check belongs in the backend, next to identity; the
-engine only ever sees an opaque id.
-
-## The engine's keys
-
-`ENGINE_API_KEY` is the single-key shorthand. For anything with more than one
-caller, or that you intend to rotate, use named keys instead:
+`ENGINE_API_KEY` is the single-key form. For more than one caller, or for
+rotation, use named keys:
 
 ```
 ENGINE_API_KEYS=web:s3cret,batch:0ther
 ```
 
-Both forms combine; the single key is simply named `default`.
+Both forms combine; the single key is named `default`. Named keys provide:
 
-Naming buys two things a lone secret cannot give you:
+- **Rotation without downtime.** Issue a new name, let both work while callers
+  move across, then withdraw the old one.
+- **Attribution.** The name appears in logs and is what rate limits are counted
+  against, so one caller can be throttled without affecting the others.
 
-- **Rotation without downtime.** Issue `web-next`, let both work while callers
-  move across, then withdraw `web`. With one key every rotation is a
-  synchronised restart of everything that calls the engine, which is why
-  rotations quietly stop happening.
-- **Attribution.** The name is what appears in logs and what rate limits are
-  counted against, so one runaway caller can be found and throttled without
-  turning the engine off for everybody.
-
-Keys are matched in constant time against every configured value. A rejected key
-is logged with the path and the client address, and never with the key itself.
+Keys are compared in constant time. A rejected key is logged with the path and
+client address, never with the key itself.
 
 ## Rate limits
 
-Per caller, per process:
-
 Both services meter independently, per caller. The engine's limits are not
-redundant with the backend's: the engine is where provider credits are actually
-spent, and a caller's own limiter is a courtesy, not a control the engine can
-verify exists.
+redundant with the backend's: the engine is where provider credits are spent,
+and it cannot verify that a caller applies its own limit.
 
 | Variable | Default | Applies to |
 | --- | --- | --- |
@@ -182,57 +175,86 @@ verify exists.
 | `BACKEND_EVAL_RATE_LIMIT_PER_HOUR` | 20 | `POST /admin/eval/*` |
 | `ENGINE_CHAT_RATE_LIMIT_PER_MINUTE` | 60 | the engine's `POST /chat` |
 | `ENGINE_EVAL_RATE_LIMIT_PER_HOUR` | 20 | the engine's `POST /judge`, `POST /eval/rag` |
-| `ENGINE_INGEST_RATE_LIMIT_PER_MINUTE` | 20 | `PUT /documents`; listing and deleting are free, and unmetered |
+| `ENGINE_INGEST_RATE_LIMIT_PER_MINUTE` | 20 | `PUT /documents`; listing and deleting are unmetered |
 
-The backend buckets by user id or client address; the engine buckets by the name
-of the key that authenticated the call.
+Zero disables a limit. The backend buckets by authenticated user id when there
+is one and by client address otherwise; the engine buckets by the name of the
+key that authenticated the call.
 
-Zero disables a limit. Each caller gets its own bucket, keyed by user id when
-one is authenticated and by client address otherwise.
+Because the client address decides the bucket, the containers run uvicorn with
+`--proxy-headers`. If the backend port is reachable from anywhere other than
+the proxy, set `FORWARDED_ALLOW_IPS` to the proxy's address: `X-Forwarded-For`
+is trivially forged, and a client that can forge it chooses its own bucket.
 
-Because the address decides the bucket, the containers run uvicorn with
-`--proxy-headers` so it reads the real client address rather than the proxy's.
-If the backend port is reachable from anywhere but your proxy, also set
-`FORWARDED_ALLOW_IPS` to your proxy's address. `X-Forwarded-For` is trivially
-forged, and a client that can forge it can spread its usage across as many
-buckets as it likes.
+By default the buckets are held in process memory: exact for one replica, and
+multiplied by the replica count for several. Set `ENGINE_REDIS_URL` and every
+engine replica charges one shared bucket per caller, atomically. See
+[Scaling out](#scaling-out).
 
-The buckets live in the process's memory. Two replicas means twice the effective
-limit, and a restart forgets everything. That is a real limitation, and the
-limit is still worth having: it stops runaway clients and accidental loops. For
-an exact global limit, back `_Bucket` in `api/rate_limit.py` with Redis; nothing
-above `RateLimiter.check` changes.
+## Scaling out
+
+One engine process is the default shape, and two things in it belong to a
+single process: the embedded Chroma files under `ENGINE_CHROMA_DIR`, and the
+rate-limit buckets. Running several replicas requires moving both into shared
+services, each selected by one setting:
+
+| Setting | Moves | Service |
+| --- | --- | --- |
+| `ENGINE_CHROMA_URL` | the vector store | a Chroma server, `http://host:8000` |
+| `ENGINE_REDIS_URL` | the rate-limit buckets | Redis, `redis://host:6379/0` |
+
+Nothing above either seam changes: per-model collections, the deletion sweep
+and the limit arithmetic are identical embedded or shared. The published engine
+image includes the `redis` extra, so the setting works without a rebuild.
+
+The scale overlay applies both and runs two engine replicas:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  -f docker-compose.scale.yml up -d
+```
+
+Two components still belong to one writer after this: the document registry
+(SQLite) and the stored originals, both under the engine volume. They are
+written only by document uploads, which are an operator action, so a deployment
+that ingests from one place is unaffected. A deployment that uploads from
+several replicas at once must put both on shared storage or replace them;
+`DocumentRegistry` and `BlobStore` are the ports.
+
+Readiness reflects the shared store: `GET /health/ready` reports
+`vector_store: false`, and therefore `ready: false`, when the Chroma server
+does not answer.
 
 ## Database migrations
 
-Run them as a release step, before the new backend takes traffic:
+Run migrations as a release step, before the new backend takes traffic:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   run --rm backend alembic upgrade head
 ```
 
-Do not run `make seed-db` against a real database: it loads the demo bookings.
+Do not run `make seed-db` against a real database; it loads the demo bookings.
 
 ## Operational notes
 
-- **Both containers run as an unprivileged user** (uid 10001) and the overlay
-  sets `no-new-privileges`. This matters on upgrade: a named volume created by
-  an *older* image is owned by root, and Docker only takes ownership from the
-  image when it initialises an empty volume. An engine that starts and then
-  cannot write vectors is this. Fix it once, from the host:
+- **Unprivileged containers.** Both services run as uid 10001 and the overlay
+  sets `no-new-privileges`. A named volume created by an older image is owned
+  by root, and Docker only assigns ownership when it initialises an empty
+  volume. An engine that starts and then cannot write vectors is this case:
 
   ```bash
   docker compose run --rm --user root engine chown -R 10001:10001 /var/lib/chatbot-engine
   ```
 
-  A bind mount you provide yourself needs the same `chown 10001` treatment.
+  A bind mount needs the same `chown 10001`.
 - **Health checks.** `GET /health` on both services is a liveness check and
-  requires no authentication. The engine also has `GET /health/ready`, which
-  reports which capabilities are wired up.
+  needs no authentication. The engine's `GET /health/ready` reports `ready`,
+  `model_provider`, `vector_store` and the installed `agents`; `ready` is
+  false when no provider key is set or the vector store does not answer. A
+  readiness probe should gate on that field. The status code stays 200 so the
+  body is readable.
 - **Logs** go to stdout at `ENGINE_LOG_LEVEL` (default `INFO`). Anything the
-  startup check found but did not block on is logged as a warning at boot,
-  worth alerting on, since it means something is misconfigured.
-- **Streaming.** Chat is server-sent events. Any proxy you add must not buffer
-  `/api/chat`, or the answer arrives in one lump at the end. The bundled nginx
-  config shows the three settings involved.
+  startup check found but did not block on is logged as a warning at boot.
+- **Streaming.** Chat is server-sent events. A proxy in front must not buffer
+  `/api/chat`; the bundled nginx config shows the three settings involved.
