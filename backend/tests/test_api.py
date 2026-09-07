@@ -379,3 +379,31 @@ def test_chat_is_not_behind_the_admin_key(guarded_client: TestClient) -> None:
     """The guard is on the admin router only; the product must stay open."""
     assert guarded_client.post("/chat", json={"message": "hi"}).status_code == 200
     assert guarded_client.get("/health").status_code == 200
+
+
+# --- agent selection ----------------------------------------------------------
+
+
+def test_chat_forwards_the_agent_override(
+    client: TestClient, engine: FakeEngine
+) -> None:
+    """Picking an agent in the UI must reach the engine's config, not be dropped."""
+    client.post("/chat/sync", json={"message": "hi", "agent": "graph"})
+
+    assert engine.chat_requests[0].project.agent == "graph"
+
+
+def test_chat_without_an_override_keeps_the_projects_agent(
+    client: TestClient, engine: FakeEngine
+) -> None:
+    """The YAML decides until someone picks."""
+    client.post("/chat/sync", json={"message": "hi"})
+
+    assert engine.chat_requests[0].project.agent == "loop"
+
+
+def test_the_agent_list_comes_from_the_engine(
+    client: TestClient, engine: FakeEngine
+) -> None:
+    """Hardcoding it here would hide an agent installed in the engine."""
+    assert client.get("/agents").json() == engine.agents

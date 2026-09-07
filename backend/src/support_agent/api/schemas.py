@@ -37,6 +37,9 @@ class ChatRequest(BaseModel):
     # Model override, by name. Must be one of CHAT_MODELS; defaults to the
     # project's configured model.
     model: str | None = None
+    # Agent override, by name. Validated by the engine, which is the only place
+    # that knows which agents are installed; defaults to the project's `agent`.
+    agent: str | None = None
     # Prior turns, oldest first.
     history: list[Message] = Field(default_factory=list)
 

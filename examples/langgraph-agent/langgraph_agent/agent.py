@@ -1,4 +1,4 @@
-"""The same chat turn, expressed as a graph instead of a loop.
+"""A LangGraph agent for the chatbot engine, provided as a plugin.
 
 `ChatAgent` runs retrieval, the model, and the tool loop as straight-line code.
 This runs the identical turn as a LangGraph state machine: three nodes and one
@@ -7,10 +7,15 @@ the control flow is data you can inspect and extend rather than a `for` loop.
 
     retrieve -> model -> (tool calls?) -> tools -> model -> ... -> END
 
-Why offer both: a graph is worth having once a turn stops being a straight line
--- approvals in the middle, branching on the question, resuming a half-finished
-turn from a checkpointer. None of that is needed for a single question and
-answer, so the loop stays the default and this is opt-in.
+This lives outside the engine on purpose. The engine defines what an agent is
+and how one is found; picking LangGraph is an application decision, so it is
+made here. An adopter who wants a different framework writes their own package
+the same way and changes nothing in the engine.
+
+A graph earns its place once a turn stops being a straight line: approvals in
+the middle, branching on the question, resuming a half-finished turn from a
+checkpointer. For a single question and answer the engine's own loop is
+simpler, which is why it remains the default.
 
 Events are pushed onto a queue by the nodes rather than reconstructed from
 LangGraph's stream. The nodes know exactly what happened; a stream of graph
@@ -31,7 +36,7 @@ from chatbot_engine.agent.client import (
     to_messages,
 )
 from chatbot_engine.agent.retriever import retrieve, to_context, to_source_refs
-from chatbot_engine.errors import EngineError, NotConfiguredError
+from chatbot_engine.errors import EngineError
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import (
     DoneEvent,
@@ -42,27 +47,10 @@ from chatbot_engine.models.events import (
 )
 from chatbot_engine.ports.agent import ToolProvider
 from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
+from langgraph.graph import END, START, StateGraph
 
 #: Marks the end of the event stream, so `run` knows the graph has finished.
 _DONE = object()
-
-
-def _require_langgraph() -> Any:
-    """Import LangGraph, or explain how to get it.
-
-    It is an optional extra: the engine answers without it, and an adopter who
-    never selects this agent should not carry the dependency.
-    """
-    try:
-        from langgraph.graph import END, START, StateGraph
-    except ModuleNotFoundError as exc:  # pragma: no cover - depends on install
-        raise NotConfiguredError(
-            "the graph agent needs LangGraph, which is an optional extra -- "
-            "install it with `pip install 'chatbot-engine[graph]'`, or set the "
-            "assistant's `agent` back to `loop`"
-        ) from exc
-
-    return START, END, StateGraph
 
 
 def _merge_usage(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
@@ -132,8 +120,6 @@ class LangGraphAgent:
                 task.cancel()
 
     def _build(self, request: ChatRequest, events: asyncio.Queue[Any]) -> Any:
-        START, END, StateGraph = _require_langgraph()
-
         async def retrieve_node(state: _State) -> _State:
             hits = await retrieve(request)
             # Before the answer, so the UI can show what it was based on while
@@ -252,3 +238,8 @@ def _usage_event(totals: dict[str, int], model_name: str | None) -> UsageEvent:
         cost_usd=usage.cost_usd,
         model=usage.model,
     )
+
+
+def build(tools: ToolProvider) -> LangGraphAgent:
+    """The factory the entry point names. The engine calls this once."""
+    return LangGraphAgent(tools=tools)

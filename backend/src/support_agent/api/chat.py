@@ -40,6 +40,12 @@ def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:
         # A copy, not a mutation: `load_project` is cached and its result shared.
         project = project.model_copy(update={"model": body.model})
 
+    if body.agent is not None:
+        # Not checked here: which agents exist depends on what is installed in
+        # the engine, so it validates and answers 422 with the installed list,
+        # which passes straight back through.
+        project = project.model_copy(update={"agent": body.agent})
+
     # `user_id` has already been decided by `api/identity.py` -- it is either a
     # proxy-authenticated id or `anonymous`, never whatever the browser typed.
     # What is still missing for a multi-tenant product is authorisation: nothing

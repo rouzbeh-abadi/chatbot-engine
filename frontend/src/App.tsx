@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { AgentPicker } from "./components/AgentPicker";
 import { ModelPicker } from "./components/ModelPicker";
 import { ApiError, streamChat } from "./api/client";
 import { Composer } from "./components/Composer";
@@ -69,6 +70,8 @@ export default function App() {
   /** Null until someone picks -- the YAML's own model applies until then, and
       whatever is chosen applies to every following turn. */
   const [model, setModel] = useState<string | null>(null);
+  /** Null until someone picks -- the YAML's own agent applies until then. */
+  const [agent, setAgent] = useState<string | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
@@ -118,7 +121,12 @@ export default function App() {
 
       try {
         const stream = streamChat(
-          { message: text, history, model: model ?? undefined },
+          {
+            message: text,
+            history,
+            model: model ?? undefined,
+            agent: agent ?? undefined,
+          },
           controller.signal,
         );
 
@@ -190,7 +198,7 @@ export default function App() {
         abort.current = null;
       }
     },
-    [messages, patch, model],
+    [messages, patch, model, agent],
   );
 
   return (
@@ -247,6 +255,7 @@ export default function App() {
           busy={busy}
         >
           <ModelPicker value={model} onChange={setModel} disabled={busy} />
+          <AgentPicker value={agent} onChange={setAgent} disabled={busy} />
         </Composer>
       </footer>
 

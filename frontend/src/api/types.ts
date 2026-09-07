@@ -81,6 +81,8 @@ export interface ChatRequest {
   project?: string;
   /** Overrides the assistant's configured model. The backend allowlists it. */
   model?: string;
+  /** Overrides the assistant's configured agent. The engine validates it. */
+  agent?: string;
   history?: { role: "user" | "assistant" | "system"; content: string }[];
 }
 

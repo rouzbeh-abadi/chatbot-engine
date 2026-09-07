@@ -1,164 +1,153 @@
 # Agents
 
 An agent runs one chat turn: retrieve context, call the model, run any tools it
-asks for, and stream the result back as events. The engine ships two, and the
-assistant config picks per request. The set is open: you can install your own
-and select it by name without forking the engine, which is what
-[Installing your own agent](#installing-your-own-agent) covers.
+asks for, and stream the result back as events.
 
-Both produce the same events, in the same order, with the same token counts.
-Switching between them changes how the turn is *organised*, not what the caller
-receives.
+The engine ships exactly one, and it is not the interesting part. What matters is
+that an agent is a *plugin*: you install your own, name it in the assistant
+config, and the engine runs it without knowing anything about how it works.
 
-| Agent | What it is | Needs |
+| Agent | Where it comes from | Selected as |
 | --- | --- | --- |
-| `loop` | A `for` loop over model calls and tool rounds. The default. | nothing |
-| `graph` | The same turn as a LangGraph state machine. | the `graph` extra |
-| *yours* | Whatever you register under the entry-point group. | your package |
+| `loop` | the engine. A `for` loop over model calls and tool rounds | `agent: loop` |
+| `graph` | the `examples/langgraph-agent` package, installed as a plugin | `agent: graph` |
+| *yours* | your own package | `agent: your-name` |
+
+## Why the engine ships only one
+
+Choosing LangGraph, or any other framework, is an application decision. An
+engine that bundled one would be making that decision for every adopter and
+carrying the dependency whether or not they wanted it.
+
+So the engine defines two things and stops:
+
+- the **`Agent` port** in `ports/agent.py`: one method, `run(request)`, yielding events
+- the **registry** in `agent/registry.py`: how an agent is discovered and named
+
+Everything else lives outside it. `grep langgraph engine/src` returns nothing.
 
 ## Choosing one
 
 ```yaml
 # backend/src/support_agent/projects/support.yaml
-agent: loop     # loop | graph
+agent: loop     # or graph, or the name of a plugin you installed
 ```
 
-Omit it and the engine's own default applies (`ENGINE_AGENT`, itself `loop`).
-Because the choice travels with the request, one engine can serve both, which is
-what makes them comparable without redeploying.
+Omit it and the engine's default applies (`ENGINE_AGENT`, itself `loop`). The
+example UI also offers a dropdown, and a request may override the project's
+choice per turn, so two agents can be compared without redeploying.
 
-## `loop`, the default
+## What crosses the wire
 
-`agent/chat_agent.py` and `agent/client.py`. Retrieval, then a bounded loop: call
-the model, and if it asked for tools, run them, feed the results back, and go
-round again until it answers in prose. `max_tool_iterations` bounds it.
+Nothing but a name. A graph is code, and code does not travel over HTTP:
 
-It is the default because it is the smaller thing. A single question and answer
-is a straight line, and a straight line reads better as a loop than as a graph.
-
-## `graph`
-
-`agent/graph_agent.py`. The identical turn as three nodes and one conditional
-edge:
-
+```text
+backend  --POST /chat-->  {"project": {..., "agent": "graph"}, ...}
+                                              |
+engine   registry.build_agent("graph") -------+
+             |
+             +--> the entry point of an installed package
 ```
+
+The backend **selects** an agent; whoever deploys the engine **provides** it, by
+installing the package. That is the same division as a database and its
+extensions: the application picks, the deployment installs.
+
+## Installing your own
+
+**1. Write it.** Anything with a `run` method that yields the engine's events:
+
+```python
+# my_package/agent.py
+class MyAgent:
+    def __init__(self, tools):        # the engine's MCP tool provider
+        self._tools = tools
+
+    def run(self, request):
+        async def events():
+            yield TokenEvent(text="...")
+            yield DoneEvent(finish_reason="stop")
+        return events()
+
+def build(tools) -> MyAgent:          # the factory the entry point names
+    return MyAgent(tools)
+```
+
+**2. Register it** in your own `pyproject.toml`:
+
+```toml
+[project.entry-points."chatbot_engine.agents"]
+my-agent = "my_package.agent:build"
+```
+
+**3. Install it into the environment the engine runs in.** For a container, that
+means building your own engine image:
+
+```dockerfile
+FROM your-engine-image
+COPY my-agent /opt/my-agent
+RUN pip install /opt/my-agent
+```
+
+This repository does exactly that for its own plugin, in
+[`docker/engine-with-plugins.Dockerfile`](../docker/engine-with-plugins.Dockerfile).
+`engine/Dockerfile` stays framework-free and still builds on its own.
+
+**4. Select it** with `agent: my-agent`. It appears in `GET /agents` and the
+example UI's dropdown automatically, because both read the installed set rather
+than a hardcoded list.
+
+A plugin may register a name a built-in already uses, which replaces it.
+Swapping out `loop` for your own implementation needs no permission from the
+engine.
+
+## What your agent owes the caller
+
+The engine does not police this, but the example backend and UI both assume it:
+emit the same events in the same order.
+
+| Event | When |
+| --- | --- |
+| `retrieval` | once, before the answer, if you retrieved anything |
+| `token` | repeatedly, as the answer streams |
+| `tool_call_started` / `tool_call_finished` | around each tool call |
+| `usage` | once, after the answer |
+| `done` | last |
+
+`engine/tests/test_agent_parity.py` asserts that the engine's `loop` and the
+plugin's `graph` are indistinguishable on all of it. An agent written outside
+the engine is not a second-class citizen, and that test is what keeps it true.
+
+## The bundled example
+
+[`examples/langgraph-agent/`](../examples/langgraph-agent) is a complete, working
+plugin: its own `pyproject.toml`, its own LangGraph dependency, and a graph of
+four nodes with one conditional edge.
+
+```text
 START -> retrieve -> model -+-(tool calls)-> tools -+
                             |                       | (back to model)
                             +-(none)-> finish -> END
 ```
 
-State carries the messages, the running token usage, and the model's name. The
-one branch in a turn, "did the model ask for a tool?", becomes a conditional
-edge rather than an `if` inside a loop.
+Copy it as the starting point for your own. It is installed by the demo stack
+and exercised by the test suite, so it cannot quietly rot.
 
-## When the graph is worth it
+**A graph is worth the machinery** once a turn stops being a straight line:
+pausing for human approval mid-turn, resuming a half-finished turn from a
+checkpointer, or branching on the kind of question. For a single question and
+answer, the engine's plain loop is simpler and does the same job, which is why
+it stays the default.
 
-Today it is a faithful re-expression of the loop: same inputs, same events, same
-answer, more machinery. On that comparison alone the loop wins.
+## When the name is not installed
 
-The graph earns its place when a turn stops being a straight line:
-
-- **Interrupts and human-in-the-loop.** Pause before a tool runs, wait for
-  approval, resume. A loop has nowhere to pause.
-- **Persistence and resumption.** A LangGraph checkpointer can save the turn's
-  state and resume it after a crash, or let a conversation be reloaded later.
-- **Branching.** Route a question to different paths, or run a sub-agent, without
-  the loop growing conditionals.
-
-If none of that is on your roadmap, stay on `loop`.
-
-## Installing the extra
-
-LangGraph is optional, so the base install does not carry it:
-
-```bash
-pip install "chatbot-engine[graph]"
-```
-
-Selecting `agent: graph` without it fails with a message naming the extra rather
-than an import traceback. LangGraph is imported only when a request actually
-selects the graph agent, so the base install pays nothing for its existence.
-
-## Keeping the two honest
-
-Two agents are only useful if a caller cannot tell them apart. Three things keep
-them aligned, and the suite checks it:
-
-- **Tools run through the same code.** The graph's tool node calls the same
-  `run_tool_calls` the loop uses, rather than reimplementing it.
-- **Cost is priced by the same helper**, so the two can never disagree about
-  what a turn cost.
-- **Events are emitted by the nodes themselves**, onto a queue, rather than
-  reconstructed from LangGraph's stream. The nodes know what happened; a stream
-  of graph updates has to be interpreted, and the interpretation shifts between
-  LangGraph versions.
-
-`engine/tests/test_agent_parity.py` runs the same scripted conversation through
-both and asserts the event sequences, answer text, tool calls and usage match.
-`engine/tests/test_agent_selection_api.py` does it again over HTTP.
-
-## Installing your own agent
-
-The two built-ins are not special. An agent is anything with one method, and the
-engine discovers third-party ones through a Python entry point, so you can add
-yours without forking the engine or editing its code.
-
-**1. Write it.** Anything satisfying the `Agent` port in `ports/agent.py`:
-
-```python
-# my_package/agent.py
-from collections.abc import AsyncIterator
-
-class MyGraphAgent:
-    def __init__(self, tools):        # the engine's MCP tool provider
-        self._tools = tools
-
-    def run(self, request) -> AsyncIterator[Event]:
-        ...                            # yield the same events the built-ins do
-
-def build(tools) -> MyGraphAgent:
-    return MyGraphAgent(tools)
-```
-
-**2. Register the factory** in your own package:
-
-```toml
-[project.entry-points."chatbot_engine.agents"]
-my-graph = "my_package.agent:build"
-```
-
-**3. Install it alongside the engine**, and name it:
-
-```yaml
-agent: my-graph
-```
-
-The factory receives the `ToolProvider` because that is the one thing an agent
-cannot construct for itself: it is how the engine reaches your application's
-tools over MCP. Everything else about a turn arrives with the request.
-
-A plugin may register a name a built-in already uses, which replaces it.
-Swapping out the default `loop` for your own implementation should not require
-the engine's permission.
-
-### What your agent owes the caller
-
-The engine does not police this, but the frontend and the backend both assume
-it: emit the same events the built-ins emit, in the same order. `retrieval`
-first if you retrieved, `token` as the answer streams, `tool_call_started` and
-`tool_call_finished` around each tool, `usage`, then `done` last.
-`engine/tests/test_agent_parity.py` shows what that looks like asserted.
-
-### When the name is not installed
-
-Selecting an agent this engine does not have is a `422`, and the message lists
+Selecting an agent the engine does not have is a `422`, and the message lists
 what it does have:
 
 ```json
 {
-  "detail": "unknown agent 'my-graph'; this engine has ['graph', 'loop']. Register your own under the 'chatbot_engine.agents' entry-point group, or pick one of the above."
+  "detail": "unknown agent 'my-agent'; this engine has ['graph', 'loop']. Register your own under the 'chatbot_engine.agents' entry-point group, or pick one of the above."
 }
 ```
 
-The list is the real installed set rather than a hardcoded one, so it stays true
-as plugins come and go.
+The list is the real installed set, so it stays true as plugins come and go.

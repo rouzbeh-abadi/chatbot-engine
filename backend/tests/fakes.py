@@ -66,6 +66,12 @@ class FakeEngine:
 
         return events()
 
+    #: What `GET /agents` reports, standing in for the engine's registry.
+    agents: list[str] = ["graph", "loop"]
+
+    async def list_agents(self) -> list[str]:
+        return self.agents
+
     async def ingest_document(self, **kwargs: object) -> DocumentRecord:
         if self.raises is not None:
             raise self.raises

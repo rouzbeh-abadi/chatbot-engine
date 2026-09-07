@@ -67,9 +67,9 @@ def _ask(client: TestClient, project: dict, agent: str | None) -> list[dict]:
     model = OneWordModel()
     with (
         patch("chatbot_engine.agent.client.build_chat_model", return_value=model),
-        patch("chatbot_engine.agent.graph_agent.build_chat_model", return_value=model),
+        patch("langgraph_agent.agent.build_chat_model", return_value=model),
         patch("chatbot_engine.agent.chat_agent.retrieve", new=_no_retrieval),
-        patch("chatbot_engine.agent.graph_agent.retrieve", new=_no_retrieval),
+        patch("langgraph_agent.agent.retrieve", new=_no_retrieval),
     ):
         response = client.post("/chat", json={"project": config, "message": "hello"})
 

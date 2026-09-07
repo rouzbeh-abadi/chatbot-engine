@@ -53,10 +53,12 @@ class UnknownAgentError(EngineError):
 
 
 def _builtin() -> dict[str, AgentFactory]:
-    """The two agents the engine ships with.
+    """The one agent the engine ships with.
 
-    Imported lazily: `graph` pulls in LangGraph, which is an optional extra, and
-    listing the available agents must not require it.
+    Deliberately one. The engine defines what an agent is; it does not decide
+    which framework you build yours on. Anything beyond this plain loop --
+    LangGraph, or whatever else -- arrives as a plugin, so the engine carries no
+    dependency on it.
     """
 
     def loop(tools: "ToolProvider") -> "Agent":
@@ -64,12 +66,7 @@ def _builtin() -> dict[str, AgentFactory]:
 
         return ChatAgent(tools=tools)
 
-    def graph(tools: "ToolProvider") -> "Agent":
-        from chatbot_engine.agent.graph_agent import LangGraphAgent
-
-        return LangGraphAgent(tools=tools)
-
-    return {"loop": loop, "graph": graph}
+    return {"loop": loop}
 
 
 def available_agents() -> dict[str, AgentFactory]:

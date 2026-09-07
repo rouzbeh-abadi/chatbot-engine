@@ -1,4 +1,10 @@
-"""The two agents must be interchangeable.
+"""The engine's agent and a plugin agent must be interchangeable.
+
+`loop` ships with the engine; `graph` is installed as a plugin from
+`examples/langgraph-agent`. That they are indistinguishable here is what makes
+the plugin contract real: an agent written outside the engine is not a
+second-class citizen.
+
 
 The loop agent and the graph agent run the same turn by different means. That
 is only useful if a caller cannot tell them apart: same events, in the same
@@ -18,7 +24,7 @@ from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
 
 from chatbot_engine.agent.chat_agent import ChatAgent
-from chatbot_engine.agent.graph_agent import LangGraphAgent
+from langgraph_agent.agent import LangGraphAgent
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import (
     DoneEvent,
@@ -125,10 +131,10 @@ async def _run(which: str, rounds: list, tools: FakeTools) -> list:
         agent = LangGraphAgent(tools=tools)
         targets = [
             patch(
-                "chatbot_engine.agent.graph_agent.build_chat_model",
+                "langgraph_agent.agent.build_chat_model",
                 return_value=model,
             ),
-            patch("chatbot_engine.agent.graph_agent.retrieve", new=_no_retrieval),
+            patch("langgraph_agent.agent.retrieve", new=_no_retrieval),
         ]
 
     with targets[0], targets[1]:

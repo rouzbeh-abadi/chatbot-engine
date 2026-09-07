@@ -18,17 +18,22 @@ requires-python = ">=3.13"
 dependencies = [
     "support-agent",
     "chatbot-engine",
+    # The LangGraph agent, installed the way an adopter installs one. A
+    # dependency of the workspace, never of the engine: that is what keeps the
+    # engine free of any agent framework.
+    "langgraph-agent",
 ]
 
 [tool.uv]
 package = false
 
 [tool.uv.workspace]
-members = ["engine", "backend"]
+members = ["engine", "backend", "examples/langgraph-agent"]
 
 [tool.uv.sources]
 support-agent = { workspace = true }
 chatbot-engine = { workspace = true }
+langgraph-agent = { workspace = true }
 
 [dependency-groups]
 # langgraph is an optional extra for consumers, but a dev dependency here so the

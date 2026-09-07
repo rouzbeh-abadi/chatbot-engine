@@ -15,9 +15,11 @@ documents) is supplied by a backend you own, and arrives with **every request**.
 So the engine holds no state to migrate, a prompt change takes effect on the next
 request, and one engine can power many different assistants at once.
 
-The repository includes a **complete example**, a travel-support assistant, to
-show the engine working end to end: a React UI, a backend with its own database
-and tools, and a knowledge base of support documents.
+`engine/` is the product. Everything else in this repository lives under
+`examples/` and exists to show it working: a travel-support assistant with a
+React UI, a backend with its own database and tools, a knowledge base, and an
+agent plugin. None of it is a dependency of the engine, and you are meant to
+replace all of it.
 
 ## What it does
 
@@ -35,10 +37,10 @@ and tools, and a knowledge base of support documents.
   the backend owns the prompt.
 - **Document ingestion.** Upload a file and the engine extracts, chunks, embeds,
   and stores it; re-uploading identical bytes is skipped by content hash.
-- **Pluggable agents.** The chat turn runs as a built-in tool loop, as a
-  LangGraph state machine, or as an agent you install yourself: register a
-  factory under an entry point and name it in the project config, no fork
-  required. See [docs/agents.md](docs/agents.md).
+- **Pluggable agents.** The engine ships one plain tool loop and no agent
+  framework. Anything else, including the bundled LangGraph agent, is a package
+  you install: register a factory under an entry point and name it in the
+  project config, no fork required. See [docs/agents.md](docs/agents.md).
 - **Chunking strategies.** Cut documents by fixed size, by Markdown heading, or
   by page. Chosen per project, so PDFs can carry page numbers into their
   citations. See [docs/chunking.md](docs/chunking.md).
@@ -207,12 +209,16 @@ make eval-rag ARGS="--only follow_up"
 ## Project layout
 
 ```text
-engine/     the standalone AI engine, the reusable part    -- see engine/README.md
-backend/    the example product backend                    -- see backend/README.md
-frontend/   the chat UI                                     -- see frontend/README.md
-docs/       guides and diagrams
-tests/      the contract-parity test, where the two services meet
+engine/     the reusable AI engine. This is the product   -- see engine/README.md
+backend/    an example product backend                    -- see backend/README.md
+frontend/   an example chat UI                            -- see frontend/README.md
+examples/   things built with the engine: an agent plugin you can copy
+docs/       guides
+tests/      the contract-parity test, where engine and backend meet
 ```
+
+The split is the point. `engine/` depends on none of the rest, and carries no
+opinion about your product, your users, or even which agent framework you use.
 
 ## Documentation
 
@@ -228,8 +234,11 @@ tests/      the contract-parity test, where the two services meet
   worth its weight, and how to add a third.
 - **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies:
   what each cuts at, when to use it, and why changing one means re-indexing.
-- **[engine/README.md](engine/README.md)**, **[backend/README.md](backend/README.md)**,
-  and **[frontend/README.md](frontend/README.md)** cover each service in detail.
+- **[engine/README.md](engine/README.md)** covers the engine itself.
+- **[backend/README.md](backend/README.md)** and
+  **[frontend/README.md](frontend/README.md)** cover the example
+  application, and **[examples/langgraph-agent/](examples/langgraph-agent)** is a
+  working agent plugin to copy.
 
 ## Licence
 

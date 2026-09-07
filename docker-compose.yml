@@ -40,7 +40,11 @@ services:
 
   engine:
     build:
-      context: ./engine
+      # The repository root, because the demo image is the engine plus this
+      # repo's agent plugin -- the same thing an adopter builds. The engine's
+      # own Dockerfile still builds a plain, framework-free image on its own.
+      context: .
+      dockerfile: docker/engine-with-plugins.Dockerfile
     ports:
       # Published for /docs and curl. In a real deployment only the backend needs
       # to reach the engine.

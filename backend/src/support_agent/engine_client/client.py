@@ -158,6 +158,16 @@ class EngineClient:
             )
             return DocumentRecord.model_validate(response.json())
 
+    async def list_agents(self) -> list[str]:
+        """Which agents the engine can run.
+
+        Asked rather than hardcoded: the set is the engine's built-ins plus any
+        plugin installed there, which this backend cannot know.
+        """
+        async with self._client() as client:
+            response = await self._request(client, "GET", "/agents")
+            return list(response.json())
+
     async def list_documents(self, *, project_id: str) -> list[DocumentRecord]:
         """List the documents indexed for a project."""
         async with self._client() as client:

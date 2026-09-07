@@ -39,12 +39,6 @@ eval = [
     "ragas>=0.4,<0.5",
     "langchain-community>=0.4",
 ]
-# The graph agent: the same chat turn expressed as nodes and edges instead of
-# the built-in loop. Optional, because the engine answers perfectly well
-# without it and not every adopter wants the dependency.
-graph = [
-    "langgraph>=0.2",
-]
 
 [dependency-groups]
 dev = [

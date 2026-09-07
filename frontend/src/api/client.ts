@@ -180,6 +180,16 @@ export async function listModels(): Promise<string[]> {
   return getJson<string[]>("/models");
 }
 
+/**
+ * The agents the engine can run.
+ *
+ * Comes from the engine via the backend, not a list held here: which agents
+ * exist depends on what is installed there.
+ */
+export async function listAgents(): Promise<string[]> {
+  return getJson<string[]>("/agents");
+}
+
 /** GET a JSON endpoint, turning a non-2xx into an `ApiError`. */
 async function getJson<T>(
   path: string,
