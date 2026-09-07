@@ -33,8 +33,11 @@ def main() -> int:
 
     settings = get_settings()
     if settings.openrouter_api_key is None:
-        print("ENGINE_OPENROUTER_API_KEY is not set -- the question cannot be "
-              "embedded, so there is nothing to compare against", file=sys.stderr)
+        print(
+            "ENGINE_OPENROUTER_API_KEY is not set -- the question cannot be "
+            "embedded, so there is nothing to compare against",
+            file=sys.stderr,
+        )
         return 1
 
     try:
@@ -61,8 +64,10 @@ def main() -> int:
         print(f"  {rank}. {source}  (distance {distance:.3f}, at character {offset})")
         print(f"     {excerpt}...\n")
 
-    print("Lower distance is closer. The first hit is what the model would be "
-          "shown first.\n")
+    print(
+        "Lower distance is closer. The first hit is what the model would be "
+        "shown first.\n"
+    )
 
     return 0
 

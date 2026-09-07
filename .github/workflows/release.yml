@@ -69,7 +69,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [engine, backend, frontend]
+        include:
+          # The Python images build from the repository root so they install
+          # from uv.lock; the frontend builds from its own directory.
+          - service: engine
+            context: .
+            dockerfile: engine/Dockerfile
+          - service: backend
+            context: .
+            dockerfile: examples/backend/Dockerfile
+          - service: frontend
+            context: ./examples/frontend
+            dockerfile: examples/frontend/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -100,7 +111,8 @@ jobs:
 
       - uses: docker/build-push-action@v6
         with:
-          context: ./${{ matrix.service }}
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           # A manual run builds everything but publishes nothing, so the
           # workflow can be rehearsed without moving any tag.

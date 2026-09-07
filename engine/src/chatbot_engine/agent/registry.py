@@ -61,7 +61,7 @@ def _builtin() -> dict[str, AgentFactory]:
     dependency on it.
     """
 
-    def loop(tools: "ToolProvider") -> "Agent":
+    def loop(tools: ToolProvider) -> Agent:
         from chatbot_engine.agent.chat_agent import ChatAgent
 
         return ChatAgent(tools=tools)
@@ -84,7 +84,7 @@ def available_agents() -> dict[str, AgentFactory]:
     return factories
 
 
-def build_agent(name: str, tools: "ToolProvider") -> "Agent":
+def build_agent(name: str, tools: ToolProvider) -> Agent:
     """Construct the named agent, or say which names this engine knows.
 
     The list in the message is the installed set, not a hardcoded one, so it

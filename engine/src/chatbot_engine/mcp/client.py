@@ -172,9 +172,7 @@ class McpToolProvider:
                 f"Tool {name!r} is not allowed on MCP server {server!r}."
             )
 
-        async with _session(
-            target, user_id=user_id, session_id=session_id
-        ) as session:
+        async with _session(target, user_id=user_id, session_id=session_id) as session:
             result = await session.call_tool(
                 name,
                 dict(arguments),
@@ -214,9 +212,8 @@ class McpToolProvider:
             if target.name == server:
                 return target
 
-        raise McpServerNotFoundError(
-            f"MCP server {server!r} is not configured."
-        )
+        raise McpServerNotFoundError(f"MCP server {server!r} is not configured.")
+
 
 def _text_of(result: Any) -> str:
     """One string for the model: structured content as JSON, else the text blocks."""

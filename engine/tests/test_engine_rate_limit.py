@@ -9,6 +9,7 @@ importantly, which are not.
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from chatbot_engine.api.dependencies import reset_dependency_cache
@@ -47,7 +48,7 @@ def test_the_bucket_refills_over_time() -> None:
     limiter.store._buckets["web"].updated -= 2.0
 
     _spend(limiter, "web", 2)
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         limiter.check("web")
 
 
@@ -86,7 +87,9 @@ def test_listing_and_deleting_are_not_metered(metered_client: TestClient) -> Non
     """Neither calls a provider, so neither may be throttled with the upload."""
     for _ in range(10):
         assert (
-            metered_client.get("/documents", params={"project_id": "support"}).status_code
+            metered_client.get(
+                "/documents", params={"project_id": "support"}
+            ).status_code
             == 200
         )
         assert (
@@ -139,7 +142,7 @@ def test_callers_are_still_separate_in_redis() -> None:
     limiter.check("web")
     limiter.check("batch")
 
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         limiter.check("web")
 
 

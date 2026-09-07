@@ -132,4 +132,4 @@ async def forget(
         )
         await session.commit()
 
-    return {"deleted": result.rowcount or 0}
+    return {"deleted": getattr(result, "rowcount", 0) or 0}

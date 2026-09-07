@@ -33,6 +33,7 @@ from datetime import UTC, date, datetime, time, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from support_agent.database.connection import dispose_engine, get_session_factory
 from support_agent.database.models import Booking, Flight
 
@@ -232,7 +233,7 @@ async def main() -> int:
                 session, Booking, BOOKINGS, "booking_reference"
             )
             await session.commit()
-    except Exception as exc:  # noqa: BLE001 - a CLI should explain, not traceback
+    except Exception as exc:
         print(f"seeding failed: {type(exc).__name__}: {exc}")
         print("is the database up and migrated?  'make up' then 'make migrate'")
         return 1
@@ -241,7 +242,9 @@ async def main() -> int:
 
     print(f"flights:  {f_new} created, {f_old} updated")
     print(f"bookings: {b_new} created, {b_old} updated")
-    print(f"\ncheck-in window demo: {BOOKINGS[0]['booking_reference']} departs {TOMORROW}")
+    print(
+        f"\ncheck-in window demo: {BOOKINGS[0]['booking_reference']} departs {TOMORROW}"
+    )
     return 0
 
 

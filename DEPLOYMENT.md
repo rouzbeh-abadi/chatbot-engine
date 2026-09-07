@@ -19,6 +19,14 @@ ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.0
 Each is also tagged `0.1`, `0` and `latest`. Pin to a full version in
 production.
 
+The Python images install from `uv.lock`, so two builds of one commit produce
+the same image. Both are built with the repository root as context:
+
+```bash
+docker build -f engine/Dockerfile .
+docker build -f examples/backend/Dockerfile .
+```
+
 **The published engine image carries no agent plugins.** It runs the built-in
 `loop` agent only. The demo stack in `docker-compose.yml` does not use it; it
 builds `docker/engine-with-plugins.Dockerfile`, which installs

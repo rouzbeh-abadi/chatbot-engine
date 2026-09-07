@@ -7,6 +7,7 @@ machine with no database -- fails before it can do anything useful.
 
 from __future__ import annotations
 
+import contextlib
 from collections.abc import AsyncIterator
 from functools import lru_cache
 
@@ -51,9 +52,7 @@ async def dispose_engine() -> None:
     whatever actually went wrong.
     """
     if get_engine.cache_info().currsize:
-        try:
+        with contextlib.suppress(Exception):
             await get_engine().dispose()
-        except Exception:  # noqa: BLE001 - cleanup must not shadow the real error
-            pass
     get_engine.cache_clear()
     get_session_factory.cache_clear()

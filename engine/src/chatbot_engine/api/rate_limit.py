@@ -23,12 +23,15 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Protocol
+from typing import TYPE_CHECKING, Annotated, Protocol
 
 from fastapi import Depends, HTTPException, status
 
 from chatbot_engine.api.auth import CallerDep
 from chatbot_engine.settings import Settings, get_settings
+
+if TYPE_CHECKING:  # pragma: no cover - only for the annotation below
+    import redis
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -135,12 +138,14 @@ return tostring(wait)
 class RedisBuckets:
     """Buckets in Redis, shared by every replica that points at the same URL."""
 
-    def __init__(self, url: str, *, name: str, client: object | None = None) -> None:
+    def __init__(
+        self, url: str, *, name: str, client: redis.Redis | None = None
+    ) -> None:
         # Imported here: `redis` is an optional extra, needed only when the
         # setting that selects this store is present.
-        import redis
+        import redis as redis_client
 
-        self._redis = client or redis.Redis.from_url(url)
+        self._redis = client if client is not None else redis_client.Redis.from_url(url)
         self._take = self._redis.register_script(_TAKE)
         self._prefix = f"chatbot-engine:ratelimit:{name}:"
 
@@ -206,7 +211,9 @@ def _store_for(name: str, settings: Settings) -> BucketStore:
     return MemoryBuckets()
 
 
-def _limiter(name: str, capacity: int, window_s: float, settings: Settings) -> RateLimiter:
+def _limiter(
+    name: str, capacity: int, window_s: float, settings: Settings
+) -> RateLimiter:
     """The named limiter, built on first use and kept until its capacity changes."""
     existing = _LIMITERS.get(name)
     if existing is None or existing.capacity != capacity:
@@ -229,9 +236,9 @@ async def limit_chat(caller: CallerDep, settings: SettingsDep) -> None:
 
 async def limit_eval(caller: CallerDep, settings: SettingsDep) -> None:
     """The expensive one: a full run is several model calls per case."""
-    _limiter(
-        "evaluation", settings.eval_rate_limit_per_hour, 3600.0, settings
-    ).check(caller.name)
+    _limiter("evaluation", settings.eval_rate_limit_per_hour, 3600.0, settings).check(
+        caller.name
+    )
 
 
 async def limit_ingest(caller: CallerDep, settings: SettingsDep) -> None:

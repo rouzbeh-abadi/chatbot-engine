@@ -50,7 +50,9 @@ async def test_chat_parses_the_ndjson_stream_into_events() -> None:
         '{"type":"usage","total_tokens":7}\n'
         '{"type":"done","finish_reason":"stop"}\n'
     )
-    engine = _client(lambda r: httpx.Response(200, text=body, headers={"content-type": NDJSON}))
+    engine = _client(
+        lambda r: httpx.Response(200, text=body, headers={"content-type": NDJSON})
+    )
 
     events = [e async for e in await engine.start_chat(_request())]
 
@@ -190,7 +192,7 @@ async def test_abandoning_a_stream_early_closes_the_connection() -> None:
     seen: list[httpx.Response] = []
     original = httpx.AsyncClient.send
 
-    async def spy(self, request, **kwargs):  # noqa: ANN001, ANN202
+    async def spy(self, request, **kwargs):
         response = await original(self, request, **kwargs)
         seen.append(response)
         return response

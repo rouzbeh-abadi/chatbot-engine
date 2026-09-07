@@ -108,7 +108,9 @@ async def test_memory_survives_a_new_conversation(client: TestClient, store) -> 
     assert "prefers the aisle" in block
 
 
-async def test_a_new_conversation_is_not_a_new_person(client: TestClient, store) -> None:
+async def test_a_new_conversation_is_not_a_new_person(
+    client: TestClient, store
+) -> None:
     """The panel reads the same notes regardless of which thread is open."""
     await store(ALICE, "meal", "vegetarian", session_id="thread-1")
 

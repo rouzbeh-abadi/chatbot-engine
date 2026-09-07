@@ -7,8 +7,9 @@ offering the choice to a user has to ask rather than assume.
 
 from __future__ import annotations
 
-from chatbot_engine.agent.registry import available_agents
 from fastapi import APIRouter
+
+from chatbot_engine.agent.registry import available_agents
 
 router = APIRouter(tags=["agents"])
 

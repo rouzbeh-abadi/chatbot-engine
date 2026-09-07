@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from fakes import FakeEngine
 from fastapi.testclient import TestClient
 
 from support_agent.engine import get_engine_client
@@ -18,8 +19,6 @@ from support_agent.engine_client import (
     EngineRejected,
     EngineUnavailable,
 )
-
-from fakes import FakeEngine
 
 
 def _events(body: str) -> list[dict[str, object]]:
@@ -90,9 +89,7 @@ def test_chat_passes_on_the_browsers_client_id(
     see `test_chat_uses_the_user_id_a_trusted_proxy_set` for the version that
     cannot be forged.
     """
-    client.post(
-        "/chat/sync", json={"message": "hi"}, headers={"X-Client-Id": "alice"}
-    )
+    client.post("/chat/sync", json={"message": "hi"}, headers={"X-Client-Id": "alice"})
 
     assert engine.chat_requests[0].user_id == "alice"
 
@@ -313,7 +310,13 @@ def test_oversized_upload_is_413_and_never_reaches_the_engine(
     response = client.put(
         "/documents",
         data={"external_id": "big"},
-        files={"file": ("big.bin", b"x" * (MAX_UPLOAD_BYTES + 1), "application/octet-stream")},
+        files={
+            "file": (
+                "big.bin",
+                b"x" * (MAX_UPLOAD_BYTES + 1),
+                "application/octet-stream",
+            )
+        },
     )
 
     assert response.status_code == 413

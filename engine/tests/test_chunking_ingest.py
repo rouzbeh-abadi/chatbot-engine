@@ -19,8 +19,6 @@ MARKDOWN = (
 )
 
 
-
-
 def _upload(client: TestClient, content: bytes, external_id: str, **form: object):
     mimetype = "application/pdf" if content[:4] == b"%PDF" else "text/markdown"
     return client.put(
@@ -77,5 +75,3 @@ def test_an_unknown_strategy_is_rejected(client: TestClient) -> None:
     response = _upload(client, MARKDOWN, "bad.md", chunking_strategy="banana")
 
     assert response.status_code == 422
-
-

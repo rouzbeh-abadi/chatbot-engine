@@ -53,7 +53,9 @@ class FakeEntryPoint:
 def _with_plugin():
     """Pretend `my-graph` is installed under the entry-point group."""
     return patch.object(
-        registry, "entry_points", lambda group: [FakeEntryPoint()] if group == ENTRY_POINT_GROUP else []
+        registry,
+        "entry_points",
+        lambda group: [FakeEntryPoint()] if group == ENTRY_POINT_GROUP else [],
     )
 
 
@@ -128,7 +130,9 @@ def test_a_plugin_agent_serves_a_real_request(
     with patch.object(
         registry,
         "entry_points",
-        lambda group: [type("EP", (), {"name": "my-graph", "load": lambda s: Streaming})()],
+        lambda group: [
+            type("EP", (), {"name": "my-graph", "load": lambda s: Streaming})()
+        ],
     ):
         response = client.post(
             "/chat",

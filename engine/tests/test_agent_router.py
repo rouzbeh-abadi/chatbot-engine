@@ -42,7 +42,7 @@ def _named(*names: str):
 
 async def _ran(agent: str | None) -> str:
     router = AgentRouter(tools=object())
-    return [item async for item in router.run(_request(agent))][0]
+    return await anext(router.run(_request(agent)))
 
 
 async def test_the_config_chooses_the_agent() -> None:

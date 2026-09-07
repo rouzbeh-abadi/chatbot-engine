@@ -70,9 +70,7 @@ def test_a_document_with_no_text_keeps_its_blob(client: TestClient) -> None:
     listed = client.get("/documents", params={"project_id": "support"}).json()
     assert listed[0]["status"] == "failed"
 
-    client.delete(
-        f"/documents/{listed[0]['doc_id']}", params={"project_id": "support"}
-    )
+    client.delete(f"/documents/{listed[0]['doc_id']}", params={"project_id": "support"})
     assert _blob_files() == []
 
 

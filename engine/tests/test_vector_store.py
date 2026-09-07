@@ -209,7 +209,9 @@ def test_an_empty_new_collection_does_not_block_adoption() -> None:
 # --- embedded or server ---------------------------------------------------------
 
 
-def test_a_chroma_url_selects_the_server_client(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_chroma_url_selects_the_server_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Embedded Chroma belongs to one process; a URL is how replicas share one."""
     import chromadb
 

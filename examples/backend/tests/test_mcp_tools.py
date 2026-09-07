@@ -56,9 +56,7 @@ async def test_a_booking_hands_over_the_flight_number_for_the_next_call() -> Non
     booking = await get_booking_status("AB12CD")
 
     assert booking["flight_number"] == "SD204"
-    flight = await get_flight_status(
-        booking["flight_number"], booking["travel_date"]
-    )
+    flight = await get_flight_status(booking["flight_number"], booking["travel_date"])
     assert flight["status"] == "on_time"
 
 
@@ -76,7 +74,9 @@ async def test_an_unknown_booking_is_data_not_an_exception() -> None:
 
 async def test_a_cabin_only_fare_says_so_in_words() -> None:
     """`None` would invite the model to invent an explanation."""
-    assert "cabin baggage only" in (await get_booking_status("BG88QP"))["checked_baggage"]
+    assert (
+        "cabin baggage only" in (await get_booking_status("BG88QP"))["checked_baggage"]
+    )
 
 
 async def test_a_connecting_itinerary_reports_both_legs() -> None:

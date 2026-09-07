@@ -23,8 +23,6 @@ import json
 import sys
 from pathlib import Path
 
-import httpx
-
 from support_agent.assistant import load_project
 from support_agent.engine import get_engine_client
 from support_agent.engine_client import EngineError
@@ -44,9 +42,7 @@ def to_rows(judged: JudgeReport) -> list[dict[str, object]]:
 
 
 def save(rows: list[dict[str, object]], model: str | None) -> None:
-    LAST_RUN.write_text(
-        json.dumps({"model": model, "rows": rows}, indent=2) + "\n"
-    )
+    LAST_RUN.write_text(json.dumps({"model": model, "rows": rows}, indent=2) + "\n")
 
 
 def render(rows: list[dict[str, object]], model: str | None) -> int:
@@ -81,13 +77,16 @@ def render(rows: list[dict[str, object]], model: str | None) -> int:
 
     print("\nby category")
     for category, scores in sorted(categories.items()):
-        print(f"  {category:<15} {sum(scores) / len(scores):.1f}/10   "
-              f"({len(scores)} cases)")
+        print(
+            f"  {category:<15} {sum(scores) / len(scores):.1f}/10   "
+            f"({len(scores)} cases)"
+        )
 
     scored = [s for scores in categories.values() for s in scores]
     overall = sum(scored) / len(scored) if scored else 0.0
-    print(f"\noverall {overall:.2f}/10 -- {failures} of {len(rows)} below "
-          f"{PASS_MARK}/10")
+    print(
+        f"\noverall {overall:.2f}/10 -- {failures} of {len(rows)} below {PASS_MARK}/10"
+    )
     if model:
         print(f"judged by {model}")
 
@@ -138,8 +137,10 @@ async def main() -> int:
 
     if args.dry_run:
         for case in cases:
-            print(f"\n  {case['id']} ({case['category']})\n    Q: {case['question']}"
-                  f"\n    expected: {case['expected']}")
+            print(
+                f"\n  {case['id']} ({case['category']})\n    Q: {case['question']}"
+                f"\n    expected: {case['expected']}"
+            )
         return 0
 
     print("asking and grading -- this makes one model call per case\n")

@@ -12,9 +12,9 @@ import pytest
 from fakes import FakeEngine
 from fastapi.testclient import TestClient
 
+from support_agent.api.rate_limit import reset_rate_limits
 from support_agent.app import app
 from support_agent.engine import get_engine_client
-from support_agent.api.rate_limit import reset_rate_limits
 from support_agent.settings import get_settings
 
 

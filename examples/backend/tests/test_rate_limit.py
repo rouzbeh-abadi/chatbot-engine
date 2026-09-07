@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 from fakes import FakeEngine
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from support_agent.api.rate_limit import RateLimiter
@@ -62,7 +63,7 @@ def test_the_bucket_refills_over_time() -> None:
     limiter._buckets["ip:1.2.3.4"].updated -= 2.0
 
     _spend(limiter, "ip:1.2.3.4", 2)
-    with pytest.raises(Exception):
+    with pytest.raises(HTTPException):
         limiter.check("ip:1.2.3.4")
 
 
@@ -72,7 +73,9 @@ def test_the_bucket_refills_over_time() -> None:
 def test_chat_is_metered(limited_client: TestClient, engine: FakeEngine) -> None:
     """Two chat turns allowed, the third refused -- and it never reaches the engine."""
     for _ in range(2):
-        assert limited_client.post("/chat/sync", json={"message": "hi"}).status_code == 200
+        assert (
+            limited_client.post("/chat/sync", json={"message": "hi"}).status_code == 200
+        )
 
     response = limited_client.post("/chat/sync", json={"message": "hi"})
 
@@ -96,6 +99,4 @@ def test_the_eval_route_is_metered(limited_client: TestClient) -> None:
 def test_listing_is_not_metered(limited_client: TestClient) -> None:
     """Only the routes that call a model are limited; browsing the cases is free."""
     for _ in range(10):
-        assert (
-            limited_client.get("/admin/eval/system-prompt/cases").status_code == 200
-        )
+        assert limited_client.get("/admin/eval/system-prompt/cases").status_code == 200

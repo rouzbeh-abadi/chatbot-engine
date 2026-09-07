@@ -1,0 +1,16 @@
+# Builds use the repository root as context, so the lockfile is available.
+# Keep the context to what an image needs.
+.git/
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
+**/*.egg-info/
+**/node_modules/
+examples/frontend/dist/
+var/
+docs/
+.env
+.env.*
+!.env.example

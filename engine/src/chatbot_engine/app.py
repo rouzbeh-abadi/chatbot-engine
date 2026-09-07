@@ -26,7 +26,6 @@ from chatbot_engine.errors import (
 )
 from chatbot_engine.settings import get_settings
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -86,9 +85,7 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 
     @app.exception_handler(DocumentRejectedError)
-    async def document_rejected(
-        _: Request, exc: DocumentRejectedError
-    ) -> JSONResponse:
+    async def document_rejected(_: Request, exc: DocumentRejectedError) -> JSONResponse:
         """422: the document was readable but had nothing to index."""
         return JSONResponse(status_code=422, content={"detail": str(exc)})
 

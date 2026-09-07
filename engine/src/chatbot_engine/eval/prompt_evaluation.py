@@ -7,8 +7,8 @@ report that preserves the assistant's original answers.
 
 from __future__ import annotations
 
-from chatbot_engine.agent.judge_chain import create_judge_chain
 from chatbot_engine.agent.client import build_chat_model
+from chatbot_engine.agent.judge_chain import create_judge_chain
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.evals import (
     EvalCase,
@@ -28,7 +28,7 @@ def serialize_questions_for_judge(
     """Lay the whole run out as one block of text for the judge."""
     blocks: list[str] = []
 
-    for index, (case, answer) in enumerate(zip(cases, answers), start=1):
+    for index, (case, answer) in enumerate(zip(cases, answers, strict=True), start=1):
         blocks.append(
             f"### Case {index} (id: {case.id}, category: {case.category})\n"
             f"Question: {case.question}\n"
@@ -90,7 +90,7 @@ def build_judge_report(
     `not judged` rather than vanishing. `overall` is the mean of the scores that
     came back.
     """
-    said = dict(zip([case.id for case in cases], answers))
+    said = dict(zip([case.id for case in cases], answers, strict=True))
     by_id = {verdict.id: verdict for verdict in graded.verdicts}
 
     verdicts: list[Verdict] = []

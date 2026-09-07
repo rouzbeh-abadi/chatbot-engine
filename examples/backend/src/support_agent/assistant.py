@@ -56,9 +56,7 @@ def _read_prompt_file(raw: dict[str, object]) -> dict[str, object]:
         return raw
 
     if raw.get("system_prompt"):
-        raise ProjectNotFoundError(
-            "set system_prompt or system_prompt_file, not both"
-        )
+        raise ProjectNotFoundError("set system_prompt or system_prompt_file, not both")
 
     path = (PROMPTS_DIR / str(filename)).resolve()
     if not path.is_relative_to(PROMPTS_DIR.resolve()):

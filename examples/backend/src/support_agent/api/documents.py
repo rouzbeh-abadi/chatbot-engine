@@ -87,6 +87,4 @@ async def delete_document(
     doc_id: str, engine: EngineDep, project: str | None = None
 ) -> DeleteResult:
     """Remove a document."""
-    return await engine.delete_document(
-        project_id=_project_id(project), doc_id=doc_id
-    )
+    return await engine.delete_document(project_id=_project_id(project), doc_id=doc_id)

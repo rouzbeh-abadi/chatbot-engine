@@ -9,8 +9,8 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.agent.client import build_chat_model
+from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.errors import NotConfiguredError
 from chatbot_engine.models.chat import AssistantConfig
 from chatbot_engine.rag.splitter import DocumentChunker
@@ -54,9 +54,14 @@ def test_a_blank_key_counts_as_missing() -> None:
 def test_the_assistant_model_wins_and_the_engine_default_fills_in() -> None:
     settings = Settings(openrouter_api_key="k")
 
-    assert build_chat_model(_config(model=None), settings).model_name == settings.chat_model
     assert (
-        build_chat_model(_config(model="anthropic/claude-sonnet-4.5"), settings).model_name
+        build_chat_model(_config(model=None), settings).model_name
+        == settings.chat_model
+    )
+    assert (
+        build_chat_model(
+            _config(model="anthropic/claude-sonnet-4.5"), settings
+        ).model_name
         == "anthropic/claude-sonnet-4.5"
     )
 
@@ -104,7 +109,3 @@ def test_documents_still_work_without_a_provider_key(client: TestClient) -> None
 def test_a_zero_overlap_is_honoured() -> None:
     """`if x is None` rather than `or`: 0 is a real value, not "unset"."""
     assert DocumentChunker(chunk_overlap=0)._splitter._chunk_overlap == 0
-
-
-
-

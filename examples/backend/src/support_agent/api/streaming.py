@@ -39,7 +39,7 @@ async def to_sse(events: AsyncIterable[ChatEvent]) -> AsyncIterator[str]:
     try:
         async for event in events:
             yield sse_frame(event)
-    except Exception as exc:  # noqa: BLE001 - last line of defence for the stream
+    except Exception as exc:
         yield sse_frame(ErrorEvent(code="engine_error", message=str(exc)))
         yield sse_frame(DoneEvent(finish_reason="error"))
 

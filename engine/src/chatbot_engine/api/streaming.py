@@ -44,8 +44,9 @@ async def to_ndjson(events: AsyncIterable[Event]) -> AsyncIterator[str]:
     try:
         async for event in events:
             yield event.model_dump_json() + "\n"
-    except Exception as exc:  # noqa: BLE001 - last line of defence for the stream
-        yield ErrorEvent(
-            code="engine_error", message=describe(exc)
-        ).model_dump_json() + "\n"
+    except Exception as exc:
+        yield (
+            ErrorEvent(code="engine_error", message=describe(exc)).model_dump_json()
+            + "\n"
+        )
         yield DoneEvent(finish_reason="error").model_dump_json() + "\n"

@@ -25,7 +25,7 @@ if _VERTEX_MODULE not in sys.modules:
     _stub.ChatVertexAI = type("ChatVertexAI", (), {})  # ty: ignore[unresolved-attribute]
     sys.modules[_VERTEX_MODULE] = _stub
 
-import langchain_community.llms as _llms
+import langchain_community.llms as _llms  # noqa: E402  the stub above must be registered first
 
 if not hasattr(_llms, "VertexAI"):
     _llms.VertexAI = type("VertexAI", (), {})

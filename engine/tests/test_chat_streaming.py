@@ -28,7 +28,7 @@ from chatbot_engine.services.chat import ChatService
 class _EchoAgent:
     """Emits one of each event type. No model, no retrieval."""
 
-    async def run(self, request):  # noqa: ANN001, ANN202
+    async def run(self, request):
         yield RetrievalEvent(
             query=request.message,
             sources=[SourceRef(doc_id="d1", source="baggage.md", score=0.9)],
@@ -51,14 +51,14 @@ class _EchoAgent:
 class _FailingAgent:
     """Fails after the response has already started."""
 
-    async def run(self, request):  # noqa: ANN001, ANN202
+    async def run(self, request):
         yield TokenEvent(text="partial")
         raise RuntimeError("retriever died")
 
 
 def _with_agent(client: TestClient, agent: object) -> None:
-    client.app.dependency_overrides[dependencies.get_chat_service] = lambda: ChatService(
-        agent=agent
+    client.app.dependency_overrides[dependencies.get_chat_service] = lambda: (
+        ChatService(agent=agent)
     )
 
 
@@ -124,7 +124,7 @@ def test_a_mid_stream_failure_ends_with_error_then_done(
 class _TaskGroupAgent:
     """Fails the way anything built on anyio task groups fails."""
 
-    async def run(self, request):  # noqa: ANN001, ANN202
+    async def run(self, request):
         yield TokenEvent(text="partial")
         raise ExceptionGroup(
             "unhandled errors in a TaskGroup",

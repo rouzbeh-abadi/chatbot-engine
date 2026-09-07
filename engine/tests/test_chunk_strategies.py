@@ -27,9 +27,9 @@ PAGED = ExtractedDocument(
 
 
 def _chunk(extracted: ExtractedDocument, strategy: str, size: int = 200):
-    return DocumentChunker(
-        chunk_size=size, chunk_overlap=0, strategy=strategy
-    ).chunk(extracted, METADATA)
+    return DocumentChunker(chunk_size=size, chunk_overlap=0, strategy=strategy).chunk(
+        extracted, METADATA
+    )
 
 
 # --- every strategy -----------------------------------------------------------
@@ -55,7 +55,8 @@ def test_headings_splits_at_markdown_headings() -> None:
 def test_headings_records_the_heading_trail() -> None:
     """A chunk should know which section it came from, not just which file."""
     trails = [
-        (c.metadata.get("h1"), c.metadata.get("h2")) for c in _chunk(MARKDOWN, "headings")
+        (c.metadata.get("h1"), c.metadata.get("h2"))
+        for c in _chunk(MARKDOWN, "headings")
     ]
 
     assert trails == [("Baggage", None), ("Baggage", "Checked"), ("Refunds", None)]
@@ -80,9 +81,7 @@ def test_page_never_lets_a_chunk_span_two_pages() -> None:
 
 def test_a_long_page_is_still_split_but_stays_on_its_page() -> None:
     """The page bound is the promise; the size cap still applies inside it."""
-    long_page = ExtractedDocument(
-        text="x", pages=("word " * 200, "short second page")
-    )
+    long_page = ExtractedDocument(text="x", pages=("word " * 200, "short second page"))
 
     chunks = _chunk(long_page, "page", size=100)
 
@@ -115,8 +114,9 @@ def test_size_ignores_structure_and_just_fills_windows() -> None:
 def test_source_refs_carry_the_page_and_the_heading_trail() -> None:
     """The chunker records these so a citation can name a page or a section.
     Dropping them on the way to the UI would make that promise false."""
-    from chatbot_engine.agent.retriever import to_source_refs
     from langchain_core.documents import Document
+
+    from chatbot_engine.agent.retriever import to_source_refs
 
     paged = Document(page_content="p", metadata={"source": "a.pdf", "page": 12})
     sectioned = Document(

@@ -8,6 +8,7 @@ and converts network or engine failures into `EngineError` exceptions.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -245,11 +246,11 @@ class EngineClient:
     # plumbing
 
     async def _request(
-        self, client: httpx.AsyncClient, method: str, url: str, **kwargs: object
+        self, client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
     ) -> httpx.Response:
         """Send a non-streaming request and convert HTTP failures to engine errors."""
         try:
-            response = await client.request(method, url, **kwargs)  # type: ignore[arg-type]
+            response = await client.request(method, url, **kwargs)
         except httpx.TimeoutException as exc:
             # str() on an httpx timeout is empty, so build a message ourselves.
             raise EngineUnavailable(

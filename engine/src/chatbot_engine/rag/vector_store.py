@@ -18,10 +18,11 @@ import threading
 from urllib.parse import urlparse
 
 import chromadb
-from chatbot_engine.rag.embeddings import get_embeddings, resolve_embedding_model
-from chatbot_engine.settings import get_settings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
+
+from chatbot_engine.rag.embeddings import get_embeddings, resolve_embedding_model
+from chatbot_engine.settings import get_settings
 
 
 class EmptyVectorStoreError(RuntimeError):
@@ -213,7 +214,6 @@ def count_chunks(store: Chroma | None = None) -> int:
     store = store or open_vector_store()
 
     return len(store.get(include=[])["ids"])
-
 
 
 class ChromaChunkStore:

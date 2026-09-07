@@ -17,9 +17,7 @@ from support_agent.engine_client.models import EngineChatRequest
 
 # Every turn here is a model call on the provider key, so both routes are
 # metered. On the router, not the endpoints, so a third one cannot forget.
-router = APIRouter(
-    prefix="/chat", tags=["chat"], dependencies=[Depends(limit_chat)]
-)
+router = APIRouter(prefix="/chat", tags=["chat"], dependencies=[Depends(limit_chat)])
 
 
 def _project(body: ChatRequest):

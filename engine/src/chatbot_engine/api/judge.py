@@ -16,7 +16,9 @@ from chatbot_engine.models.evals import JudgeReport, JudgeRequest
 router = APIRouter(prefix="/judge", tags=["evaluation"])
 
 
-@router.post("", responses={501: {"description": "No model provider key is configured."}})
+@router.post(
+    "", responses={501: {"description": "No model provider key is configured."}}
+)
 async def score_run(
     request: JudgeRequest, judge: JudgeDep, settings: SettingsDep
 ) -> JudgeReport:

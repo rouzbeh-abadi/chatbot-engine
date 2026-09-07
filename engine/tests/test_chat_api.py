@@ -79,11 +79,11 @@ def test_a_deliberate_engine_error_is_500_not_501(client: TestClient) -> None:
     from chatbot_engine.services.chat import ChatService
 
     class Exploding:
-        def run(self, request):  # noqa: ANN001, ANN202
+        def run(self, request):
             raise EngineError("retriever exploded")
 
-    client.app.dependency_overrides[dependencies.get_chat_service] = lambda: ChatService(
-        agent=Exploding()
+    client.app.dependency_overrides[dependencies.get_chat_service] = lambda: (
+        ChatService(agent=Exploding())
     )
     try:
         response = client.post(

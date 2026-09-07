@@ -7,8 +7,9 @@ types into plain text and reject MIME types that cannot be indexed.
 from io import BytesIO
 from typing import Protocol
 
-from chatbot_engine.documents.models import ExtractedDocument
 from pypdf import PdfReader
+
+from chatbot_engine.documents.models import ExtractedDocument
 
 
 class DocumentExtractor(Protocol):
@@ -73,9 +74,7 @@ class PdfDocumentExtractor(DocumentExtractor):
         # Kept per page as well as joined: the page chunking strategy needs the
         # boundaries, and joining first would destroy them irrecoverably.
         pages = tuple(
-            page_text
-            for page in reader.pages
-            if (page_text := page.extract_text())
+            page_text for page in reader.pages if (page_text := page.extract_text())
         )
 
         return ExtractedDocument(text="\n\n".join(pages), pages=pages)
@@ -101,6 +100,4 @@ def select_extractor(
     if mimetype == "application/pdf":
         return PdfDocumentExtractor()
 
-    raise UnsupportedDocumentTypeError(
-        f"Unsupported document type: {mimetype}"
-    )
+    raise UnsupportedDocumentTypeError(f"Unsupported document type: {mimetype}")

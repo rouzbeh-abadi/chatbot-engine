@@ -65,8 +65,6 @@ def test_a_blank_api_key_env_var_leaves_the_engine_open(
     reset_dependency_cache()
 
 
-
-
 def test_readiness_is_false_when_the_vector_store_does_not_answer(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

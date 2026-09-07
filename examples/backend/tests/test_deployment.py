@@ -78,9 +78,11 @@ def test_production_refuses_to_start_on_an_unsafe_default(
     """A container that would leak on its first request must fail its health check."""
     env.setenv("BACKEND_ENV", "production")
 
-    with pytest.raises(InsecureConfiguration, match="BACKEND_ADMIN_KEY"):
-        with TestClient(app):
-            pass
+    with (
+        pytest.raises(InsecureConfiguration, match="BACKEND_ADMIN_KEY"),
+        TestClient(app),
+    ):
+        pass
 
 
 def test_local_serves_the_same_configuration_with_a_warning(
@@ -89,8 +91,7 @@ def test_local_serves_the_same_configuration_with_a_warning(
     """`make dev` must still need no configuration at all -- but not quietly."""
     env.setenv("BACKEND_ENV", "local")
 
-    with caplog.at_level("WARNING"):
-        with TestClient(app) as client:
-            assert client.get("/health").status_code == 200
+    with caplog.at_level("WARNING"), TestClient(app) as client:
+        assert client.get("/health").status_code == 200
 
     assert "BACKEND_ADMIN_KEY" in caplog.text

@@ -4,7 +4,7 @@
 # calls the engine over HTTP, so the engine has to be up first.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke smoke-docs search eval eval-rag up down logs clean
+.PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui lint seed smoke smoke-docs search eval eval-rag up down logs clean
 
 help:
 	@echo ""
@@ -26,6 +26,7 @@ help:
 	@echo ""
 	@echo "  Check"
 	@echo "    make test      run all tests (python + frontend)"
+	@echo "    make lint      ruff, formatting, and ty, as CI runs them"
 	@echo "    make smoke     probe both services (needs them running)"
 	@echo "    make smoke-docs  exercise the whole document path for real"
 	@echo "    make seed      load examples/backend/knowledge/ through the backend"
@@ -41,7 +42,7 @@ help:
 	@echo ""
 
 setup:
-	uv sync
+	uv sync --all-packages --all-extras
 	@test -f .env || (cp .env.example .env && echo "created .env")
 	@echo "done. next: 'make dev', then 'make smoke' in another terminal."
 
@@ -91,6 +92,12 @@ test-py:
 
 test-ui:
 	cd examples/frontend && npm run test
+
+# What CI runs before the tests. `ruff format` rewrites; CI only checks.
+lint:
+	uv run ruff check .
+	uv run ruff format .
+	uv run ty check engine/src examples/backend/src examples/langgraph-agent
 
 seed:
 	uv run python examples/backend/scripts/seed_knowledge.py

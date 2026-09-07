@@ -30,7 +30,17 @@ jobs:
         with:
           enable-cache: true
 
-      - run: uv sync
+      # Every extra, so the type checker sees the optional dependencies too.
+      - run: uv sync --all-packages --all-extras
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run ty check engine/src examples/backend/src examples/langgraph-agent
 
       # No .env is created, on purpose: the suite must pass on a machine with no
       # configuration at all, which is the same promise `make dev` makes.
@@ -69,14 +79,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [examples/backend, engine, examples/frontend]
+        include:
+          # The Python images build from the repository root so they install
+          # from uv.lock; the frontend builds from its own directory.
+          - name: engine
+            context: .
+            dockerfile: engine/Dockerfile
+          - name: backend
+            context: .
+            dockerfile: examples/backend/Dockerfile
+          - name: frontend
+            context: ./examples/frontend
+            dockerfile: examples/frontend/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
       # Built but not pushed: a Dockerfile that stopped building is a broken
       # deployment, and it is worth catching here rather than at deploy time.
-      - name: Build the ${{ matrix.service }} image
-        run: docker build ./${{ matrix.service }}
+      - name: Build the ${{ matrix.name }} image
+        run: docker build -f ${{ matrix.dockerfile }} ${{ matrix.context }}
 
   compose:
     name: Compose files

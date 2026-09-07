@@ -62,7 +62,9 @@ def _serving(*, result: CallToolResult | None = None, tools: list[str] = ()):
 
 
 def _result(text: str, *, is_error: bool) -> CallToolResult:
-    return CallToolResult(content=[TextContent(type="text", text=text)], isError=is_error)
+    return CallToolResult(
+        content=[TextContent(type="text", text=text)], isError=is_error
+    )
 
 
 # --- the allowlist ------------------------------------------------------------
@@ -107,7 +109,10 @@ async def test_a_result_flagged_as_an_error_is_reported_as_a_failed_call() -> No
         finished = [
             event
             async for event in run_tool_calls(
-                calls, request, McpToolProvider(timeout_s=1), {"get_booking_status": "s"}
+                calls,
+                request,
+                McpToolProvider(timeout_s=1),
+                {"get_booking_status": "s"},
             )
             if isinstance(event, ToolCallFinishedEvent)
         ]

@@ -141,5 +141,3 @@ def test_rate_limits_are_counted_per_caller_not_globally() -> None:
     with pytest.raises(Exception) as caught:
         limiter.check(Caller(name="web").name)
     assert getattr(caught.value, "status_code", None) == 429
-
-

@@ -8,3 +8,8 @@
 
 [environment]
 root = ["examples/backend/src", "engine/src"]
+
+[rules]
+# Optional extras the checker cannot always see are reported, not fatal; the
+# checks that matter are the ones on our own code.
+unresolved-import = "warn"

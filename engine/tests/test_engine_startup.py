@@ -28,9 +28,8 @@ def env(monkeypatch: pytest.MonkeyPatch) -> Iterator[pytest.MonkeyPatch]:
 def test_production_refuses_to_start_without_a_key(env: pytest.MonkeyPatch) -> None:
     env.setenv("ENGINE_ENV", "production")
 
-    with pytest.raises(InsecureConfiguration, match="ENGINE_API_KEY"):
-        with TestClient(app):
-            pass
+    with pytest.raises(InsecureConfiguration, match="ENGINE_API_KEY"), TestClient(app):
+        pass
 
 
 def test_local_still_starts_without_any_configuration(
@@ -38,8 +37,7 @@ def test_local_still_starts_without_any_configuration(
 ) -> None:
     env.setenv("ENGINE_ENV", "local")
 
-    with caplog.at_level("WARNING"):
-        with TestClient(app) as client:
-            assert client.get("/health").status_code == 200
+    with caplog.at_level("WARNING"), TestClient(app) as client:
+        assert client.get("/health").status_code == 200
 
     assert "ENGINE_API_KEY" in caplog.text

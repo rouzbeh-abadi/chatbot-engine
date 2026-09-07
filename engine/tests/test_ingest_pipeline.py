@@ -11,8 +11,8 @@ from collections.abc import Sequence
 from langchain_core.documents import Document
 
 from chatbot_engine.documents.models import ExtractedDocument
-from chatbot_engine.rag.pipeline import DocumentIngestPipeline, doc_id_for
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
+from chatbot_engine.rag.pipeline import DocumentIngestPipeline, doc_id_for
 from chatbot_engine.rag.splitter import DocumentChunker
 from chatbot_engine.settings import get_settings
 
@@ -115,7 +115,7 @@ async def test_unchanged_is_reported_without_being_stored() -> None:
 
 
 async def test_a_changed_document_keeps_its_original_created_at() -> None:
-    pipeline, _, registry = _pipeline()
+    pipeline, _, _ = _pipeline()
 
     first = await _ingest(pipeline)
     second = await _ingest(pipeline, data=TEXT + b" Flexible fares allow two.")

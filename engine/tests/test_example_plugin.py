@@ -9,6 +9,8 @@ If these fail, the plugin path has broken for everyone, not just this example.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -33,7 +35,7 @@ def test_the_engine_never_imports_the_plugin() -> None:
     """
     import chatbot_engine.agent.registry as registry
 
-    assert "langgraph_agent" not in open(registry.__file__).read()
+    assert "langgraph_agent" not in Path(registry.__file__).read_text()
 
 
 def test_it_builds_and_gets_the_tool_provider() -> None:

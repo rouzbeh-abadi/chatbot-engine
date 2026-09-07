@@ -105,7 +105,9 @@ class DoneEvent(_Event):
     """Always last. `finish_reason` says why the turn ended."""
 
     type: Literal["done"] = "done"
-    finish_reason: Literal["stop", "length", "tool_limit", "error", "cancelled"] = "stop"
+    finish_reason: Literal["stop", "length", "tool_limit", "error", "cancelled"] = (
+        "stop"
+    )
 
 
 Event = Annotated[

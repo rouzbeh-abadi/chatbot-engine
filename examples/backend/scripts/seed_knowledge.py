@@ -18,6 +18,7 @@ import mimetypes
 import sys
 
 import httpx
+
 from support_agent.assistant import KNOWLEDGE_DIR
 
 BASE_URL = "http://localhost:8000"
@@ -45,8 +46,10 @@ def main() -> int:
         try:
             client.get("/health").raise_for_status()
         except httpx.HTTPError:
-            print(f"app is not running at {BASE_URL} -- start it with 'make dev'",
-                  file=sys.stderr)
+            print(
+                f"app is not running at {BASE_URL} -- start it with 'make dev'",
+                file=sys.stderr,
+            )
             return 1
 
         for path in files:
@@ -77,12 +80,16 @@ def main() -> int:
                 )
                 return 1
             if response.is_error:
-                print(f"{path.name}: FAILED {response.status_code} {response.text}",
-                      file=sys.stderr)
+                print(
+                    f"{path.name}: FAILED {response.status_code} {response.text}",
+                    file=sys.stderr,
+                )
                 return 1
 
             body = response.json()
-            print(f"{body['external_id']}: {body['status']} ({body['size_bytes']} bytes)")
+            print(
+                f"{body['external_id']}: {body['status']} ({body['size_bytes']} bytes)"
+            )
 
     return 0
 
