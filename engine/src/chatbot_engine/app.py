@@ -1,7 +1,7 @@
 """The engine's FastAPI application: routing, auth, and error mapping.
 
-The AI logic sits behind `services/` and `ports/`, so it does
-not depend on being served over HTTP.
+The AI logic sits behind `services/` and `ports/`, so it does not depend on
+being served over HTTP.
 """
 
 from __future__ import annotations
@@ -14,11 +14,11 @@ from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from chatbot_engine import __version__
+from chatbot_engine.agent.registry import UnknownAgentError
 from chatbot_engine.api import agents, chat, documents, eval_rag, health, judge
 from chatbot_engine.api.auth import require_api_key
 from chatbot_engine.api.rate_limit import limit_chat, limit_eval
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
-from chatbot_engine.agent.registry import UnknownAgentError
 from chatbot_engine.errors import (
     DocumentRejectedError,
     EngineError,
@@ -77,12 +77,7 @@ def create_app() -> FastAPI:
     # EngineError handler below it.
     @app.exception_handler(NotConfiguredError)
     async def not_configured(_: Request, exc: NotConfiguredError) -> JSONResponse:
-        """501: a capability has no implementation yet."""
-        return JSONResponse(status_code=501, content={"detail": str(exc)})
-
-    @app.exception_handler(NotImplementedError)
-    async def not_implemented(_: Request, exc: NotImplementedError) -> JSONResponse:
-        """501: a bare `raise NotImplementedError` from half-written code."""
+        """501: the engine is missing configuration it needs for this route."""
         return JSONResponse(status_code=501, content={"detail": str(exc)})
 
     @app.exception_handler(UnknownAgentError)

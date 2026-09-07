@@ -1,7 +1,7 @@
 # One command per thing. Run `make` to see this list.
 #
-# Two services now: the engine (:8100) and the backend (:8000). The backend calls
-# the engine over HTTP, so the engine has to be up first.
+# Two services: the engine (:8100) and the example backend (:8000). The backend
+# calls the engine over HTTP, so the engine has to be up first.
 
 .DEFAULT_GOAL := help
 .PHONY: help setup dev engine backend tools frontend db db-stop migrate seed-db test test-py test-ui seed smoke smoke-docs search eval eval-rag up down logs clean
@@ -103,7 +103,7 @@ smoke:
 	@printf '\nbackend  : '
 	@curl -sf localhost:8000/health || (echo "DOWN -- start it with 'make backend'"; exit 1)
 	@printf '\nchat     : '
-	@curl -s -o /dev/null -w 'HTTP %{http_code} (501 until the engine has an Agent)\n' \
+	@curl -s -o /dev/null -w 'HTTP %{http_code} (501 means the engine has no provider key)\n' \
 		-X POST localhost:8000/chat/sync \
 		-H 'Content-Type: application/json' \
 		-d '{"message":"what is the baggage allowance?"}'
@@ -123,7 +123,7 @@ eval:
 eval-rag:
 	uv run python examples/backend/scripts/evaluate_rag.py $(ARGS)
 
-# What retrieval would find, without an agent to use it yet.
+# What retrieval would find for a question, without running a turn.
 search:
 	@uv run python engine/scripts/search.py $(Q)
 

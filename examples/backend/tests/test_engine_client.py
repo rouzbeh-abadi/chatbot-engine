@@ -79,10 +79,12 @@ async def test_a_501_raises_before_the_stream_is_consumed() -> None:
     """The route must be able to return 501 instead of an empty 200, so the
     failure has to happen while awaiting `start_chat`, not on first iteration."""
     engine = _client(
-        lambda r: httpx.Response(501, json={"detail": "no Agent -- get_agent()"})
+        lambda r: httpx.Response(
+            501, json={"detail": "no ENGINE_OPENROUTER_API_KEY is set"}
+        )
     )
 
-    with pytest.raises(EngineNotImplemented, match="get_agent"):
+    with pytest.raises(EngineNotImplemented, match="ENGINE_OPENROUTER_API_KEY"):
         await engine.start_chat(_request())
 
 

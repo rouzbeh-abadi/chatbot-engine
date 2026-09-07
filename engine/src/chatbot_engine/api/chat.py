@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
-from chatbot_engine.api.dependencies import ChatServiceDep
+from chatbot_engine.api.dependencies import ChatServiceDep, SettingsDep
 from chatbot_engine.api.streaming import MEDIA_TYPE, to_ndjson
 from chatbot_engine.models.chat import ChatRequest
 
@@ -23,15 +23,21 @@ router = APIRouter(tags=["chat"])
                 "usage, error, done."
             ),
         },
-        501: {"description": "No Agent implementation is registered yet."},
+        422: {"description": "The assistant named an agent this engine does not have."},
+        501: {"description": "No model provider key is configured."},
     },
 )
-async def chat(request: ChatRequest, service: ChatServiceDep) -> StreamingResponse:
-    """Receive a chat request from the backend and stream engine events as NDJSON.
-    The request is passed to the chat service, which runs the agent. Streaming
-    starts only after setup succeeds, so errors can still return the correct
-    HTTP status before any response body is sent.
+async def chat(
+    request: ChatRequest, service: ChatServiceDep, settings: SettingsDep
+) -> StreamingResponse:
+    """Run one turn and stream its events as NDJSON.
+
+    Both preconditions are checked before the response starts, so an unknown
+    agent name (422) or a missing provider key (501) arrives as a status code.
+    Left to surface lazily, the key would first be needed during retrieval,
+    inside a stream that has already committed to 200.
     """
+    settings.require_openrouter_key()
     events = service.stream(request)
 
     return StreamingResponse(

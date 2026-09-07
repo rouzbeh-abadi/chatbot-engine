@@ -1,10 +1,12 @@
-"""Create and connect the dependencies used by the chatbot engine.
+"""Construct and connect the engine's components.
 
-This module builds the engine's main components, such as the chat agent,
-document pipeline, vector store, registry, and MCP tool provider. FastAPI uses
-these dependencies when handling API requests.
+This is the one place a concrete class is chosen for each port: the agent, the
+ingest pipeline, the vector store, the registry, the blob store, and the MCP
+tool provider. Every route reaches its collaborators through the `*Dep`
+aliases at the bottom, and tests replace any of them with
+`app.dependency_overrides`.
 
-Dependencies are cached and reused instead of being created for every request.
+Each factory is cached, so a component is built once per process.
 """
 
 from __future__ import annotations
@@ -42,29 +44,24 @@ SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
 @lru_cache
-def get_agent() -> Agent | None:
-    """Create the agent responsible for processing chat turns.
-
-    The agent retrieves relevant context, calls the model with access to MCP
-    tools, and streams the resulting chat events.
+def get_agent() -> Agent:
+    """The agent that runs chat turns.
 
     Which agent runs is decided per request from the assistant config, across
-    the built-ins and any installed plugin (see `agent/registry.py`). Agents are
-    constructed on first use, so an optional dependency is only imported when a
-    request actually asks for the agent that needs it.
+    the built-in loop and any installed plugin (see `agent/registry.py`). Each
+    is constructed on first use, so a plugin's dependencies are imported only
+    when a request asks for it.
     """
     return AgentRouter(tools=get_tool_provider())
 
 
 @lru_cache
-def get_judge() -> Judge | None:
+def get_judge() -> Judge:
     """Scores an eval run against a rubric the caller supplies.
 
     Needs the agent, since it answers every case before grading it.
     """
     agent = get_agent()
-    if agent is None:
-        return None
 
     async def judge(request: JudgeRequest) -> JudgeReport:
         return await evaluate_dataset(request, agent=agent)
@@ -73,10 +70,8 @@ def get_judge() -> Judge | None:
 
 
 @lru_cache
-def get_rag_evaluator() -> RagEvaluator | None:
+def get_rag_evaluator() -> RagEvaluator:
     """Scores retrieval with RAGAS: retrieve, answer from those chunks, grade."""
-    if get_agent() is None:
-        return None
 
     async def evaluate(request: RagEvalRequest) -> RagReport:
         # Imported here so the heavy, eval-only RAGAS dependency is not pulled
@@ -89,8 +84,8 @@ def get_rag_evaluator() -> RagEvaluator | None:
 
 
 @lru_cache
-def get_ingest_pipeline() -> IngestPipeline | None:
-    """Document ingestion: extract, chunk, embed, store. Fully wired."""
+def get_ingest_pipeline() -> IngestPipeline:
+    """Document ingestion: extract, chunk, embed, store."""
     return DocumentIngestPipeline(
         registry=get_registry(),
         chunker=DocumentChunker(),
@@ -103,9 +98,8 @@ def get_ingest_pipeline() -> IngestPipeline | None:
 def get_registry() -> DocumentRegistry:
     """Document bookkeeping: what is indexed, is it current, delete it.
 
-    On disk, because the vectors are: an in-memory registry plus a persistent
-    Chroma leaves chunks after a restart that nothing lists and nothing can
-    delete. `InMemoryDocumentRegistry` is still there for tests.
+    On disk, because the vectors are: a registry that did not survive a restart
+    would leave chunks that nothing lists and nothing can delete.
     """
     return SqliteDocumentRegistry(get_settings().registry_db)
 
@@ -137,7 +131,7 @@ def get_chunk_store() -> ChromaChunkStore | None:
 
 @lru_cache
 def get_tool_provider() -> ToolProvider:
-    """MCP connectivity. Constructed, but its calls are not implemented yet."""
+    """The MCP client the agent discovers and calls tools through."""
     return McpToolProvider(timeout_s=get_settings().mcp_timeout_s)
 
 
@@ -160,8 +154,8 @@ def get_document_service() -> DocumentService:
 
 
 ChatServiceDep = Annotated[ChatService, Depends(get_chat_service)]
-JudgeDep = Annotated[Judge | None, Depends(get_judge)]
-RagEvaluatorDep = Annotated[RagEvaluator | None, Depends(get_rag_evaluator)]
+JudgeDep = Annotated[Judge, Depends(get_judge)]
+RagEvaluatorDep = Annotated[RagEvaluator, Depends(get_rag_evaluator)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 
@@ -184,6 +178,7 @@ def reset_dependency_cache() -> None:
         get_chat_service,
         get_document_service,
         get_judge,
+        get_rag_evaluator,
     ):
         cached.cache_clear()
 

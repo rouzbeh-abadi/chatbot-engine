@@ -1,45 +1,42 @@
 # Agents
 
-An agent runs one chat turn: retrieve context, call the model, run any tools it
-asks for, and stream the result back as events.
+An agent runs one chat turn: it retrieves context, calls the model, runs the
+tools the model asks for, and streams the result back as events.
 
-The engine ships exactly one, and it is not the interesting part. What matters is
-that an agent is a *plugin*: you install your own, name it in the assistant
-config, and the engine runs it without knowing anything about how it works.
+The engine ships one agent and defines the contract for others. Any agent is a
+plugin: a package installed into the engine's environment, registered under a
+Python entry point, and selected by name in the assistant configuration.
 
-| Agent | Where it comes from | Selected as |
+| Agent | Provided by | Selected as |
 | --- | --- | --- |
-| `loop` | the engine. A `for` loop over model calls and tool rounds | `agent: loop` |
-| `graph` | the `examples/langgraph-agent` package, installed as a plugin | `agent: graph` |
-| *yours* | your own package | `agent: your-name` |
+| `loop` | the engine: a loop over model calls and tool rounds | `agent: loop` |
+| `graph` | `examples/langgraph-agent`, installed as a plugin | `agent: graph` |
+| any other | your own package | `agent: <name>` |
 
-## Why the engine ships only one
+## Scope of the engine
 
-Choosing LangGraph, or any other framework, is an application decision. An
-engine that bundled one would be making that decision for every adopter and
-carrying the dependency whether or not they wanted it.
+The engine defines two things:
 
-So the engine defines two things and stops:
+- the `Agent` protocol in `ports/agent.py`: one method, `run(request)`, that
+  returns an async iterator of events
+- the registry in `agent/registry.py`: how agents are discovered and named
 
-- the **`Agent` port** in `ports/agent.py`: one method, `run(request)`, yielding events
-- the **registry** in `agent/registry.py`: how an agent is discovered and named
+It depends on no agent framework. `grep langgraph engine/src` returns nothing.
+The choice of framework is made by whoever writes an agent, not by the engine.
 
-Everything else lives outside it. `grep langgraph engine/src` returns nothing.
-
-## Choosing one
+## Selection
 
 ```yaml
 # examples/backend/src/support_agent/projects/support.yaml
-agent: loop     # or graph, or the name of a plugin you installed
+agent: loop
 ```
 
-Omit it and the engine's default applies (`ENGINE_AGENT`, itself `loop`). The
-example UI also offers a dropdown, and a request may override the project's
-choice per turn, so two agents can be compared without redeploying.
+When the field is omitted, `ENGINE_AGENT` applies, which defaults to `loop`. A
+request may override the project's choice per turn; the example UI exposes this
+as a dropdown populated from `GET /agents`.
 
-## What crosses the wire
-
-Nothing but a name. A graph is code, and code does not travel over HTTP:
+Only the name crosses the wire. The backend selects an agent; the deployment
+provides it by installing the package:
 
 ```text
 backend  --POST /chat-->  {"project": {..., "agent": "graph"}, ...}
@@ -49,18 +46,15 @@ engine   registry.build_agent("graph") -------+
              +--> the entry point of an installed package
 ```
 
-The backend **selects** an agent; whoever deploys the engine **provides** it, by
-installing the package. That is the same division as a database and its
-extensions: the application picks, the deployment installs.
+## Writing an agent
 
-## Installing your own
-
-**1. Write it.** Anything with a `run` method that yields the engine's events:
+**1. Implement the protocol.** Any object with a `run` method that yields the
+engine's events:
 
 ```python
 # my_package/agent.py
 class MyAgent:
-    def __init__(self, tools):        # the engine's MCP tool provider
+    def __init__(self, tools):        # the engine's ToolProvider
         self._tools = tools
 
     def run(self, request):
@@ -73,78 +67,90 @@ def build(tools) -> MyAgent:          # the factory the entry point names
     return MyAgent(tools)
 ```
 
-**2. Register it** in your own `pyproject.toml`:
+`tools` is the engine's MCP tool provider, the one dependency an agent cannot
+construct for itself. Everything else about a turn arrives in `request`.
+
+**2. Register the factory** in the package's `pyproject.toml`:
 
 ```toml
 [project.entry-points."chatbot_engine.agents"]
 my-agent = "my_package.agent:build"
 ```
 
-**3. Install it into the environment the engine runs in.** For a container, that
-means building your own engine image:
+**3. Install the package into the engine's environment.** For a container, build
+an image on top of the engine image:
 
 ```dockerfile
-FROM your-engine-image
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.0
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
 
-This repository does exactly that for its own plugin, in
-[`docker/engine-with-plugins.Dockerfile`](../docker/engine-with-plugins.Dockerfile).
-`engine/Dockerfile` stays framework-free and still builds on its own.
+The published engine image carries no plugins. This repository builds its demo
+engine the same way, in
+[`docker/engine-with-plugins.Dockerfile`](../docker/engine-with-plugins.Dockerfile),
+which is why `agent: graph` is available under `docker compose` and not from
+the published image alone.
 
-**4. Select it** with `agent: my-agent`. It appears in `GET /agents` and the
-example UI's dropdown automatically, because both read the installed set rather
-than a hardcoded list.
+**4. Select it** with `agent: my-agent`. It appears in `GET /agents` and in the
+example UI without further configuration, because both read the installed set.
 
-A plugin may register a name a built-in already uses, which replaces it.
-Swapping out `loop` for your own implementation needs no permission from the
-engine.
+A plugin may register a name the engine already uses. The plugin wins, so
+`loop` itself can be replaced without modifying the engine.
 
-## What your agent owes the caller
+## The agent contract
 
-The engine does not police this, but the example backend and UI both assume it:
-emit the same events in the same order.
+The engine does not enforce the following, but the example backend and UI
+depend on it.
+
+**Events.** Emit the same events in the same order as `loop`:
 
 | Event | When |
 | --- | --- |
-| `retrieval` | once, before the answer, if you retrieved anything |
+| `retrieval` | once, before the answer, when anything was retrieved |
 | `token` | repeatedly, as the answer streams |
-| `tool_call_started` / `tool_call_finished` | around each tool call |
+| `tool_call_started`, `tool_call_finished` | around each tool call |
 | `usage` | once, after the answer |
 | `done` | last |
 
-`engine/tests/test_agent_parity.py` asserts that the engine's `loop` and the
-plugin's `graph` are indistinguishable on all of it. An agent written outside
-the engine is not a second-class citizen, and that test is what keeps it true.
+**System prompt.** Send `request.project.system_prompt` to the model ahead of
+the conversation. This is not visible in the event stream: an agent that omits
+it still emits a well-formed stream, and only the content of the answer
+changes. The persona, the grounding rules and any notes the backend appended
+to the prompt are all lost.
 
-An agent must also send `project.system_prompt` to the model, ahead of the
-conversation. This is not visible in the event stream: an agent that omits it
-still emits a well-formed one, and only the content of the answer changes. The
-same test file asserts it separately.
+**Tool execution.** Use `chatbot_engine.agent.client.run_tool_calls`. It
+forwards the caller's `user_id` and `session_id` to the tool server, reports a
+failed tool as `ok=false` rather than ending the turn, and feeds the result back
+as a `ToolMessage`. Two agents that ran tools differently would report them
+differently.
 
-## A worked example you can copy
+**Cost.** Use `chatbot_engine.agent.client.price_usage` for the `usage` event,
+so both agents price a turn identically.
 
-[`examples/langgraph-agent/`](../examples/langgraph-agent) is a complete, working
-plugin. Three files, and none of them are in the engine:
+`engine/tests/test_agent_parity.py` asserts all four points for `loop` and
+`graph`.
+
+## The bundled plugin
+
+[`examples/langgraph-agent/`](../examples/langgraph-agent) is a complete plugin:
 
 ```text
 examples/langgraph-agent/
-├── pyproject.toml                    the entry point that makes it discoverable
+├── pyproject.toml                    the entry point
 └── langgraph_agent/
     ├── __init__.py
-    └── agent.py                      the graph: nodes, edges, LangGraph import
+    └── agent.py                      the graph
 ```
 
-**The entry point** is the whole integration. This is the only thing that
-connects the package to the engine:
+The entry point is the only connection to the engine:
 
 ```toml
 [project.entry-points."chatbot_engine.agents"]
 graph = "langgraph_agent.agent:build"
 ```
 
-**The graph** it builds, from `agent.py`:
+The graph it builds:
 
 ```python
 graph = StateGraph(_State)
@@ -157,7 +163,7 @@ graph.add_edge(START, "retrieve")
 graph.add_edge("retrieve", "model")
 graph.add_conditional_edges("model", next_step,
                             {"tools": "tools", "finish": "finish"})
-graph.add_edge("tools", "model")      # the loop back
+graph.add_edge("tools", "model")
 graph.add_edge("finish", END)
 
 return graph.compile()
@@ -169,7 +175,7 @@ START -> retrieve -> model -+-(tool calls)-> tools -+
                             +-(none)-> finish -> END
 ```
 
-**Watch it appear.** Nothing about the engine changes; only what is installed:
+Installation is what makes it appear:
 
 ```console
 $ python -c "from chatbot_engine.agent.registry import available_agents; print(sorted(available_agents()))"
@@ -181,20 +187,15 @@ $ python -c "from chatbot_engine.agent.registry import available_agents; print(s
 ['graph', 'loop']
 ```
 
-From there it is selectable (`agent: graph`), it shows up in `GET /agents`, and
-the example UI lists it in the dropdown, because both read the installed set
-rather than a hardcoded one.
+A graph is the appropriate structure when a turn stops being a straight line:
+pausing for approval mid-turn, resuming a partial turn from a checkpointer, or
+branching on the kind of question. For a single question and answer the
+engine's loop does the same work with less, which is why it is the default.
 
-**A graph is worth the machinery** once a turn stops being a straight line:
-pausing for human approval mid-turn, resuming a half-finished turn from a
-checkpointer, or branching on the kind of question. For a single question and
-answer the engine's plain loop does the same job with less, which is why it
-stays the default.
+## Errors
 
-## When the name is not installed
-
-Selecting an agent the engine does not have is a `422`, and the message lists
-what it does have:
+Selecting an agent the engine does not have is a `422` whose message lists the
+installed set:
 
 ```json
 {
@@ -202,4 +203,4 @@ what it does have:
 }
 ```
 
-The list is the real installed set, so it stays true as plugins come and go.
+The list is read from the installed packages at request time.

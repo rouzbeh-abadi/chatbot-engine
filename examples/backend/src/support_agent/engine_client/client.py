@@ -34,7 +34,8 @@ class EngineUnavailable(EngineError):
 
 
 class EngineNotImplemented(EngineError):
-    """The engine answered 501: that capability has no implementation yet."""
+    """The engine answered 501: it is missing configuration, such as its
+    model provider key. The detail names the variable to set."""
 
 
 class EngineRejected(EngineError):
@@ -87,14 +88,12 @@ class EngineClient:
     # chat
 
     async def start_chat(self, request: EngineChatRequest) -> AsyncIterator[ChatEvent]:
-        """Send a chat request from the backend to the engine and return its event stream.
+        """Send a chat turn to `POST /chat` and return its event stream.
 
-        The request is sent to the engine's `POST /chat` endpoint. If successful,
-
-        the response stays open and is read as streamed `ChatEvent`s until the turn
-
-        finishes or the caller stops reading."""
-      
+        Awaited up to the status line, so a 4xx or 5xx raises here rather than
+        surfacing as an empty stream. On success the response stays open and is
+        read as `ChatEvent`s until the turn finishes or the caller stops.
+        """
         client = self._client()
         payload = request.model_dump(mode="json", exclude_none=True)
 

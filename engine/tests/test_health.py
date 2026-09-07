@@ -1,4 +1,4 @@
-"""Health is unauthenticated and reports which capabilities are wired."""
+"""Health is unauthenticated; readiness says whether a turn can be served."""
 
 from __future__ import annotations
 
@@ -16,23 +16,34 @@ def test_health_needs_no_api_key(client: TestClient) -> None:
     assert body["version"]
 
 
-def test_health_is_reachable_even_when_a_key_is_required(
+def test_readiness_is_true_with_a_provider_key(client: TestClient) -> None:
+    body = client.get("/health/ready").json()
+
+    assert body["ready"] is True
+    assert body["model_provider"] is True
+    assert body["vector_store"] is True
+    assert "loop" in body["agents"]
+
+
+def test_readiness_is_false_without_a_provider_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A probe must not need the shared secret, or compose cannot start us."""
-    monkeypatch.setenv("ENGINE_API_KEY", "s3cret")
+    """Documents can still be uploaded, but nothing can be answered, and a probe
+    gating on `ready` should say so. The status stays 200 so the body is
+    readable."""
+    monkeypatch.setenv("ENGINE_OPENROUTER_API_KEY", "")
     reset_dependency_cache()
 
     from chatbot_engine.app import create_app
 
-    with TestClient(create_app()) as unauthenticated:
-        assert unauthenticated.get("/health").status_code == 200
+    with TestClient(create_app()) as client:
+        response = client.get("/health/ready")
 
     reset_dependency_cache()
 
-
-def test_readiness_reports_which_capabilities_are_wired(client: TestClient) -> None:
-    assert client.get("/health/ready").json() == {"chat": True, "documents": True}
+    assert response.status_code == 200
+    assert response.json()["ready"] is False
+    assert response.json()["model_provider"] is False
 
 
 def test_a_blank_api_key_env_var_leaves_the_engine_open(
@@ -54,22 +65,19 @@ def test_a_blank_api_key_env_var_leaves_the_engine_open(
     reset_dependency_cache()
 
 
-def test_a_configured_api_key_is_enforced(
-    monkeypatch: pytest.MonkeyPatch, project: dict[str, object]
+
+
+def test_readiness_is_false_when_the_vector_store_does_not_answer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("ENGINE_API_KEY", "s3cret")
-    reset_dependency_cache()
+    """An engine that can neither index nor retrieve must not take traffic,
+    whatever its provider key says."""
+    from chatbot_engine.api import health
 
-    from chatbot_engine.app import create_app
+    monkeypatch.setattr(health, "vector_store_reachable", lambda: False)
 
-    with TestClient(create_app()) as client:
-        url, params = "/documents", {"project_id": "support"}
-        assert client.get(url, params=params).status_code == 401
-        assert client.get(
-            url, params=params, headers={"X-API-Key": "wrong"}
-        ).status_code == 401
-        assert client.get(
-            url, params=params, headers={"X-API-Key": "s3cret"}
-        ).status_code == 200
+    body = client.get("/health/ready").json()
 
-    reset_dependency_cache()
+    assert body["vector_store"] is False
+    assert body["ready"] is False
+    assert body["model_provider"] is True

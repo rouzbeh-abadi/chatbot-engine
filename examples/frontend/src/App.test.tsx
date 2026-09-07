@@ -161,7 +161,11 @@ describe("a successful turn", () => {
     expect(chip).toHaveClass("cite");
     // The marker itself is consumed, not left in the prose.
     expect(screen.getByText(/is on time\./)).not.toHaveTextContent("[1]");
-    expect(chip).toHaveAttribute("title", "One cabin bag up to 8 kg.");
+    // The heading trail leads the tooltip, so a reader sees the section too.
+    expect(chip).toHaveAttribute(
+      "title",
+      "Baggage Policy > Cabin Baggage — One cabin bag up to 8 kg.",
+    );
   });
 
   it("marks a failed tool without losing the answer", async () => {
@@ -196,12 +200,11 @@ describe("a successful turn", () => {
 });
 
 describe("when the engine is not ready", () => {
-  it("explains a 501 and names the function to implement", async () => {
+  it("explains a 501 and names the variable to set", async () => {
     routes(async () =>
       new Response(
         JSON.stringify({
-          detail:
-            "no Agent is registered -- return it from chatbot_engine.api.deps.get_agent()",
+          detail: "no ENGINE_OPENROUTER_API_KEY is set -- put your OpenRouter key in .env",
         }),
         { status: 501, headers: { "Content-Type": "application/json" } },
       ),
@@ -211,9 +214,9 @@ describe("when the engine is not ready", () => {
     await ask();
 
     await waitFor(() =>
-      expect(screen.getByText("The engine has no agent yet")).toBeInTheDocument(),
+      expect(screen.getByText("The engine is not configured")).toBeInTheDocument(),
     );
-    expect(screen.getByText(/get_agent\(\)/)).toBeInTheDocument();
+    expect(screen.getByText(/ENGINE_OPENROUTER_API_KEY/)).toBeInTheDocument();
   });
 
   it("distinguishes the engine being down, and says how to start it", async () => {

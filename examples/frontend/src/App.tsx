@@ -44,7 +44,7 @@ function describe(error: unknown): { title: string; detail: string } {
   if (error instanceof ApiError) {
     if (error.isNotImplemented) {
       return {
-        title: "The engine has no agent yet",
+        title: "The engine is not configured",
         detail: error.message,
       };
     }
@@ -75,8 +75,8 @@ export default function App() {
   const [agent, setAgent] = useState<string | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
-  /** This conversation. A new chat is a new id, and the assistant's notes are
-   *  scoped to it, so starting one really does start from nothing. */
+  /** This conversation. A new chat is a new id; memory is keyed on the
+   *  browser's client id instead, so it carries over. */
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
   /** Bumped after each answer so the memory panel re-reads what the turn stored. */
   const [turn, setTurn] = useState(0);

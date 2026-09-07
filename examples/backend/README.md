@@ -35,7 +35,7 @@ It owns no prompts, no retrieval, no chunking and no model calls.
 | `engine_client/models.py` | The wire contract, mirrored deliberately |
 | `engine.py` | The `EngineClient` FastAPI dependency |
 | `assistant.py` | Loads and validates `projects/*.yaml` |
-| `mcp_tools.py` | The three domain tools, served over MCP |
+| `mcp_tools.py` | The domain tools and the memory tool, served over MCP |
 | `settings.py` | `BACKEND_*` environment variables |
 
 ## Run it
@@ -56,8 +56,8 @@ message rather than as a 422 from the engine.
 
 ## The tools
 
-`mcp_tools.py` exposes three working tools over MCP, all reading the application
-database:
+`mcp_tools.py` exposes four tools over MCP, all reading or writing the
+application database:
 
 | Tool | Returns |
 | --- | --- |
@@ -66,9 +66,9 @@ database:
 | `create_support_ticket` | a ticket row, after checking the booking exists |
 | `remember` | stores one note about the customer, kept for later conversations |
 
-`get_booking_status` returns the flight number on purpose: it is what lets the
-model chain a second call ("my booking is AB12CD, is my flight delayed?"), which
-is the conversation worth demonstrating.
+`get_booking_status` returns the flight number so the model can chain a second
+call ("my booking is AB12CD, is my flight delayed?"), which is the conversation
+the demo is built around.
 
 They run *here*, not in the engine: they read this application's data and must
 execute with the calling user's permissions, which the engine cannot evaluate.
@@ -85,8 +85,8 @@ and it stops trying.
 
 ## The database
 
-The backend owns bookings, flights and support tickets. The engine never touches
-them; it reaches them only by calling the tools above.
+The backend owns bookings, flights, support tickets and the assistant's memory.
+The engine never touches them; it reaches them only by calling the tools above.
 
 ```bash
 make up          # postgres, engine, backend, mcp-tools

@@ -38,11 +38,11 @@ export function withCitations(
       parts.push(
         ...cited.map((source) => (
           <span
-            key={`${position}-${run.index}-${source.source}`}
+            key={`${position}-${run.index}-${label(source)}`}
             className="cite"
-            title={source.excerpt ?? undefined}
+            title={tooltip(source)}
           >
-            {source.source}
+            {label(source)}
           </span>
         )),
       );
@@ -55,13 +55,28 @@ export function withCitations(
   });
 }
 
-/** Two passages from one file are one citation to a reader. */
+/**
+ * What the chip says: the file, plus the page when the document was chunked by
+ * page. That is the whole point of page chunking for a PDF.
+ */
+export function label(source: SourceRef): string {
+  return source.page != null ? `${source.source}, p. ${source.page}` : source.source;
+}
+
+/** The heading trail when there is one, then the excerpt. */
+function tooltip(source: SourceRef): string | undefined {
+  const parts = [source.heading, source.excerpt].filter(Boolean);
+  return parts.length ? parts.join(" — ") : undefined;
+}
+
+/** Two passages from one place are one citation to a reader. */
 function unique(sources: SourceRef[]): SourceRef[] {
-  const byFile = new Map<string, SourceRef>();
+  const byLabel = new Map<string, SourceRef>();
 
   for (const source of sources) {
-    if (!byFile.has(source.source)) byFile.set(source.source, source);
+    const key = label(source);
+    if (!byLabel.has(key)) byLabel.set(key, source);
   }
 
-  return [...byFile.values()];
+  return [...byLabel.values()];
 }

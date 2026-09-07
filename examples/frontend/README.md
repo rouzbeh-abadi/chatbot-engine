@@ -13,7 +13,7 @@ make frontend        # installs and starts Vite on http://localhost:5173
 Or directly:
 
 ```bash
-cd frontend && npm install && npm run dev
+cd examples/frontend && npm install && npm run dev
 ```
 
 You need the backend running (`make backend`) and, for real answers, the engine
@@ -48,7 +48,7 @@ Each event maps to something on screen:
 
 | Event | Rendered as |
 | --- | --- |
-| `retrieval` | A collapsible source list with scores, headings and excerpts |
+| `retrieval` | The sources the answer may cite; each `[n]` in the text becomes a chip naming the file, and the page when the document was chunked by page |
 | `token` | Appended to the answer, with a blinking caret while streaming |
 | `tool_call_started` | An amber pulsing chip, the progress indicator |
 | `tool_call_finished` | The chip turns teal with its duration, or red on failure |
@@ -66,7 +66,7 @@ instead of showing a generic error:
 
 | Situation | What you see |
 | --- | --- |
-| `501` from the engine | "The engine has no agent yet", with the function to implement |
+| `501` from the engine | "The engine is not configured", with the variable to set |
 | `503`, engine not running | "The engine service is not running. Start it with `make engine`." |
 | Backend unreachable | "Could not reach the backend… start it with `make backend`." |
 | You pressed Stop | "Stopped" |
@@ -83,14 +83,17 @@ src/
 ├── App.tsx               layout, conversation state, the event loop
 ├── api/
 │   ├── types.ts          the wire contract, mirrored from the backend
-│   └── client.ts         streaming, SSE parsing, error taxonomy
+│   ├── client.ts         streaming, SSE parsing, error taxonomy
+│   └── identity.ts       the browser's client id, for long-term memory
 ├── components/
-│   ├── Message.tsx       one turn: tools, answer, sources, usage
+│   ├── Message.tsx       one turn: tools, answer, usage
 │   ├── Answer.tsx        the assistant's markdown, rendered safely
-│   ├── Citations.tsx     collapsible sources under an answer
+│   ├── Citations.tsx     `[n]` markers turned into chips naming the source
 │   ├── ToolCalls.tsx     the tool chips
 │   ├── Composer.tsx      the input; Enter sends, Shift+Enter newlines
 │   ├── ModelPicker.tsx   the model dropdown
+│   ├── AgentPicker.tsx   the agent dropdown, from what the engine has installed
+│   ├── MemoryPanel.tsx   what the assistant has stored about this browser
 │   ├── ExportMenu.tsx    download the transcript as JSON, CSV or PDF
 │   ├── Knowledge.tsx     what the assistant knows
 │   └── Admin.tsx         the admin dashboard overlay

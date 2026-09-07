@@ -157,9 +157,9 @@ describe("robustness", () => {
 });
 
 describe("errors", () => {
-  it("reports 501 as not-implemented, with the backend's detail", async () => {
+  it("reports 501 as not-configured, with the backend's detail", async () => {
     mockFetch(
-      new Response(JSON.stringify({ detail: "no Agent -- get_agent()" }), {
+      new Response(JSON.stringify({ detail: "no ENGINE_OPENROUTER_API_KEY is set" }), {
         status: 501,
         headers: { "Content-Type": "application/json" },
       }),
@@ -168,7 +168,7 @@ describe("errors", () => {
     const error = await collect().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(ApiError);
     expect((error as ApiError).isNotImplemented).toBe(true);
-    expect((error as ApiError).message).toContain("get_agent");
+    expect((error as ApiError).message).toContain("ENGINE_OPENROUTER_API_KEY");
   });
 
   it("reports 503 as the engine being down", async () => {

@@ -9,10 +9,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
+from support_agent.api.admin import router as admin_router
 from support_agent.api.chat import router as chat_router
 from support_agent.api.documents import router as documents_router
 from support_agent.api.memory import router as memory_router
-from support_agent.api.admin import router as admin_router
 from support_agent.api.options import router as options_router
 from support_agent.engine_client import (
     EngineError,
@@ -66,7 +66,7 @@ app = FastAPI(
 
 @app.exception_handler(EngineNotImplemented)
 async def engine_not_implemented(_: Request, exc: EngineNotImplemented) -> JSONResponse:
-    """The engine is up but that capability is unwritten. Pass the 501 through."""
+    """The engine is up but not configured for this. Pass the 501 through."""
     return JSONResponse(status_code=501, content={"detail": str(exc)})
 
 

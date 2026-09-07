@@ -21,7 +21,6 @@ class ChatAgent:
     """Run one chat turn through retrieval, model generation, and streaming.
 
     The agent retrieves relevant context, emits the sources, streams the model's
-
     answer as token events, and finishes with a done event.
     """
 
@@ -32,10 +31,9 @@ class ChatAgent:
         """Process one chat request and yield events as the answer is produced."""
         hits = await retrieve(request)
 
-        # Before the answer, so the UI can show what it was based on while the model is still thinking.
-        yield RetrievalEvent(
-            query=request.message, sources=to_source_refs(hits)
-        )
+        # Before the answer, so the UI can show what it was based on while the
+        # model is still thinking.
+        yield RetrievalEvent(query=request.message, sources=to_source_refs(hits))
 
         # stream_completion yields answer text as it is generated, tool
         # started/finished events around any tool call, and one Usage value at

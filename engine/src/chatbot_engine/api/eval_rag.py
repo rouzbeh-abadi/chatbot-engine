@@ -9,24 +9,18 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from chatbot_engine.api.dependencies import RagEvaluatorDep
-from chatbot_engine.errors import NotConfiguredError
+from chatbot_engine.api.dependencies import RagEvaluatorDep, SettingsDep
 from chatbot_engine.models.evals import RagEvalRequest, RagReport
 
 router = APIRouter(prefix="/eval/rag", tags=["evaluation"])
 
 
 @router.post(
-    "", responses={501: {"description": "No RagEvaluator is registered yet."}}
+    "", responses={501: {"description": "No model provider key is configured."}}
 )
 async def score_retrieval(
-    request: RagEvalRequest, evaluator: RagEvaluatorDep
+    request: RagEvalRequest, evaluator: RagEvaluatorDep, settings: SettingsDep
 ) -> RagReport:
     """Answer and score every retrieval case."""
-    if evaluator is None:
-        raise NotConfiguredError(
-            "no RagEvaluator is registered -- return one from "
-            "chatbot_engine.api.dependencies.get_rag_evaluator()"
-        )
-
+    settings.require_openrouter_key()
     return await evaluator(request)

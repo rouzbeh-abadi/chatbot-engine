@@ -84,6 +84,34 @@ describe("withCitations", () => {
     expect(screen.getByText("cancellations.md")).toBeInTheDocument();
   });
 
+  it("names the page when the document was chunked by page", () => {
+    renderBlock(["See the fare rules. [1]"], [source({ source: "fares.pdf", page: 12 })]);
+
+    expect(screen.getByText("fares.pdf, p. 12")).toHaveClass("cite");
+  });
+
+  it("keeps two pages of one file as two chips", () => {
+    renderBlock(
+      ["Both pages say so. [1][2]"],
+      [source({ source: "fares.pdf", page: 3 }), source({ source: "fares.pdf", page: 9 })],
+    );
+
+    expect(screen.getByText("fares.pdf, p. 3")).toBeInTheDocument();
+    expect(screen.getByText("fares.pdf, p. 9")).toBeInTheDocument();
+  });
+
+  it("puts the heading trail in the tooltip", () => {
+    renderBlock(
+      ["Cited. [1]"],
+      [source({ heading: "Refunds > Basic fares", excerpt: "Basic fares are..." })],
+    );
+
+    expect(screen.getByText("cancellations.md")).toHaveAttribute(
+      "title",
+      "Refunds > Basic fares — Basic fares are...",
+    );
+  });
+
   it("adds the excerpt as the chip's tooltip", () => {
     renderBlock(["Cited. [1]"], [source({ excerpt: "Refunds are processed..." })]);
 

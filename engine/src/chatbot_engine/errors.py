@@ -1,9 +1,7 @@
 """Engine errors.
 
-`EngineError` is the base so a caller can catch one thing. `NotConfiguredError`
-means "this capability has no implementation yet" and the API maps it to 501; a
-bare `raise NotImplementedError` from half-written code gets the same treatment
-through its own handler.
+`EngineError` is the base so a caller can catch one thing. Subclasses exist for
+the cases the API maps to a status code other than 500.
 """
 
 from __future__ import annotations
@@ -14,10 +12,11 @@ class EngineError(Exception):
 
 
 class NotConfiguredError(EngineError):
-    """A capability was requested before an implementation was wired in.
+    """The engine lacks configuration this route needs.
 
-    Surfaced as 501 with the name of the thing to implement and where to
-    register it.
+    Today that is the model provider key: an engine without one can record and
+    chunk documents but cannot embed, retrieve or answer. Mapped to 501, and the
+    message names the variable to set.
     """
 
 

@@ -33,7 +33,6 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 @router.put(
     "",
     status_code=status.HTTP_201_CREATED,
-    responses={501: {"description": "No IngestPipeline is registered yet."}},
     # Indexing embeds every chunk, which is billed per token. Listing and
     # deleting call no provider, so neither is metered.
     dependencies=[Depends(limit_ingest)],
@@ -50,9 +49,8 @@ async def upsert_document(
 ) -> DocumentRecord:
     """Upsert one document, keyed by the caller's `external_id`.
 
-    Idempotent by contract: the same `external_id` replaces the previous version,
-    and an implementation should skip the work entirely when the content hash is
-    unchanged.
+    Idempotent: the same `external_id` replaces the previous version, and
+    identical bytes skip the work entirely and answer `unchanged`.
     """
     data = await file.read()
     if not data:
@@ -76,7 +74,7 @@ async def upsert_document(
     )
 
 
-@router.get("", responses={501: {"description": "No DocumentRegistry registered yet."}})
+@router.get("")
 async def list_documents(
     service: DocumentServiceDep,
     project_id: str = Query(...),
@@ -85,9 +83,7 @@ async def list_documents(
     return list(await service.list(project_id=project_id))
 
 
-@router.delete(
-    "/{doc_id}", responses={501: {"description": "No DocumentRegistry registered yet."}}
-)
+@router.delete("/{doc_id}")
 async def delete_document(
     doc_id: str,
     service: DocumentServiceDep,
@@ -95,9 +91,8 @@ async def delete_document(
 ) -> DeleteResult:
     """Remove a document.
 
-    An implementation must remove the blob, the chunks and the registry row
-    together -- a partial delete leaves orphaned vectors that still surface in
-    retrieval.
+    Removes the chunks, the stored file and the registry row together: a partial
+    delete would leave orphaned vectors that still surface in retrieval.
     """
     deleted = await service.delete(project_id=project_id, doc_id=doc_id)
     return DeleteResult(doc_id=doc_id, deleted=deleted)

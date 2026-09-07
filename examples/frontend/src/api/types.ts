@@ -13,7 +13,10 @@ export interface SourceRef {
   doc_id: string;
   source: string;
   score: number;
+  /** The heading trail, when the document was chunked by headings. */
   heading?: string | null;
+  /** The page number, when the document was chunked by page. */
+  page?: number | null;
   excerpt?: string | null;
 }
 

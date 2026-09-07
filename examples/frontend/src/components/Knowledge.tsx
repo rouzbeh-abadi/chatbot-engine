@@ -13,9 +13,8 @@ export interface SessionUsage {
 /**
  * What the assistant knows, plus this session's token usage.
  *
- * This calls the same ingestion path the engine owns, so it reports 501 the same
- * way the chat does -- showing the state honestly is more useful than an empty
- * list that looks like a working but empty knowledge base.
+ * A failure to list is shown as such rather than as an empty knowledge base,
+ * which would look like a working assistant that knows nothing.
  */
 export function Knowledge({ usage }: { usage: SessionUsage }) {
   const [docs, setDocs] = useState<DocumentRecord[] | null>(null);
@@ -30,7 +29,7 @@ export function Knowledge({ usage }: { usage: SessionUsage }) {
         setProblem(
           error instanceof ApiError
             ? error.isNotImplemented
-              ? "The engine has no document registry registered yet."
+              ? "The engine is not configured."
               : error.isEngineDown
                 ? "The engine service is not running."
                 : error.message

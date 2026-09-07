@@ -4,9 +4,10 @@ Uploaded files are extracted, split into chunks, optionally embedded into the
 vector store, and recorded in the document registry.
 
 When a `ChromaChunkStore` is configured, chunks are persisted for retrieval and
-the document is marked `indexed`. Without a vector store, the document is still
-validated, chunked, and counted, but remains non-searchable and is marked
-`received`; `/health/ready` and the UI surface that status.
+the document is marked `indexed`. Without one, which is the case when no model
+provider key is set, the document is still validated, chunked and counted, but
+is not searchable and is marked `received`; `GET /documents` and the UI show
+that status.
 
 `DocumentBlobs` preserves the original upload bytes so `reindex` can rebuild the
 document after changes to chunking or embedding configuration without requiring

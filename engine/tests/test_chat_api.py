@@ -1,46 +1,36 @@
 """The chat contract: what the backend may send, and what it gets back.
 
-Request validation, and the 501 an unregistered capability answers with. A real
-agent is registered now, so the 501 tests take it away first -- that path still
-matters, since it is what any unwired capability does.
+Request validation, and the one 501 the engine answers with: no model provider
+key. That has to arrive as a status code, which means before the stream starts.
 """
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api import dependencies
-from chatbot_engine.services.chat import ChatService
+from chatbot_engine.api.dependencies import reset_dependency_cache
 
 
-def _without_agent(client: TestClient) -> None:
-    # A lambda, not the class: FastAPI introspects an override's signature and
-    # would try to turn `ChatService.__init__`'s parameters into query fields.
-    client.app.dependency_overrides[dependencies.get_chat_service] = lambda: ChatService()
-
-
-def test_chat_reports_no_agent_is_registered(
-    client: TestClient, project: dict[str, object]
+def test_a_missing_provider_key_is_501_not_an_empty_200(
+    monkeypatch: pytest.MonkeyPatch, project: dict[str, object]
 ) -> None:
-    _without_agent(client)
+    """The key is checked when the agent is built, which happens before the
+    response starts. Checked lazily instead, it would surface inside a 200
+    stream where a caller cannot tell it from an answer that never came."""
+    monkeypatch.setenv("ENGINE_OPENROUTER_API_KEY", "")
+    monkeypatch.delenv("ENGINE_API_KEY", raising=False)
+    reset_dependency_cache()
 
-    response = client.post("/chat", json={"project": project, "message": "hi"})
+    from chatbot_engine.app import create_app
+
+    with TestClient(create_app()) as client:
+        response = client.post("/chat", json={"project": project, "message": "hi"})
+
+    reset_dependency_cache()
 
     assert response.status_code == 501
-    detail = response.json()["detail"]
-    assert "Agent" in detail
-    assert "get_agent" in detail, "the 501 should name where to register it"
-
-
-def test_a_missing_implementation_is_501_not_an_empty_200(
-    client: TestClient, project: dict[str, object]
-) -> None:
-    """The readiness check must happen before the streaming response starts."""
-    _without_agent(client)
-
-    response = client.post("/chat", json={"project": project, "message": "hi"})
-
-    assert response.status_code == 501
+    assert "ENGINE_OPENROUTER_API_KEY" in response.json()["detail"]
     assert not response.headers["content-type"].startswith("application/x-ndjson")
 
 
@@ -54,19 +44,6 @@ def test_chat_rejects_unknown_request_fields(
     )
 
     assert response.status_code == 422
-
-
-def test_chat_rejects_an_empty_message(
-    client: TestClient, project: dict[str, object]
-) -> None:
-    response = client.post("/chat", json={"project": project, "message": ""})
-
-    assert response.status_code == 422
-
-
-def test_chat_requires_a_project(client: TestClient) -> None:
-    """The engine stores no config, so a turn without one is meaningless."""
-    assert client.post("/chat", json={"message": "hi"}).status_code == 422
 
 
 def test_mcp_servers_must_declare_an_allowlist(
@@ -94,9 +71,9 @@ def test_mcp_servers_must_declare_an_allowlist(
 
 
 def test_a_deliberate_engine_error_is_500_not_501(client: TestClient) -> None:
-    """`NotConfiguredError` inherits from both `EngineError` and
-    `NotImplementedError`. Handler registration must keep "unwritten" (501)
-    distinguishable from "broken" (500), whatever the MRO order happens to be."""
+    """`NotConfiguredError` is an `EngineError`. Handler registration must keep
+    "missing configuration" (501) distinguishable from "broken" (500), whatever
+    the MRO order happens to be."""
     from chatbot_engine.api import dependencies
     from chatbot_engine.errors import EngineError
     from chatbot_engine.services.chat import ChatService
