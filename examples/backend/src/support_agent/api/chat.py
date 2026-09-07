@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from support_agent.api.identity import MemoryOwnerDep
-from support_agent.api.memory import recall_for_prompt
+from support_agent.api.memory import RecallDep
 from support_agent.api.options import CHAT_MODELS
 from support_agent.api.rate_limit import limit_chat
 from support_agent.api.schemas import ChatRequest, ChatResult
@@ -90,13 +90,14 @@ async def chat(
     body: ChatRequest,
     engine: EngineDep,
     user_id: MemoryOwnerDep,
+    recall: RecallDep,
 ) -> StreamingResponse:
     """Receive a chat request from the client and stream the engine response back.
 
     The client request is converted to an engine request, sent to the chatbot engine,
     and the returned events are streamed back to the client using SSE.
     """
-    notes = await recall_for_prompt(user_id, _project(body).project_id)
+    notes = await recall(user_id, _project(body).project_id)
     request = _build_request(body, user_id, notes)
 
     # Awaited, so an unreachable engine or a 501 becomes a proper status code
@@ -115,8 +116,9 @@ async def chat_sync(
     body: ChatRequest,
     engine: EngineDep,
     user_id: MemoryOwnerDep,
+    recall: RecallDep,
 ) -> ChatResult:
     """Non-streaming variant, for smoke tests and simple clients."""
-    notes = await recall_for_prompt(user_id, _project(body).project_id)
+    notes = await recall(user_id, _project(body).project_id)
     request = _build_request(body, user_id, notes)
     return await collect(await engine.start_chat(request))

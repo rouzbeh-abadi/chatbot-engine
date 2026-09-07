@@ -12,6 +12,7 @@ import pytest
 from fakes import FakeEngine
 from fastapi.testclient import TestClient
 
+from support_agent.api.memory import get_recall
 from support_agent.api.rate_limit import reset_rate_limits
 from support_agent.app import app
 from support_agent.engine import get_engine_client
@@ -24,6 +25,10 @@ def _fresh_rate_limits() -> Iterator[None]:
     reset_rate_limits()
     yield
     reset_rate_limits()
+
+
+async def _no_notes(user_id: str, project_id: str) -> str:
+    return ""
 
 
 @pytest.fixture
@@ -40,6 +45,9 @@ def client(engine: FakeEngine) -> Iterator[TestClient]:
     """
     settings = get_settings().model_copy(update={"admin_key": None})
     app.dependency_overrides[get_engine_client] = lambda: engine
+    # No database in these tests: memory recalls nothing unless a test says
+    # otherwise. The memory routes themselves are tested against a real one.
+    app.dependency_overrides[get_recall] = lambda: _no_notes
     app.dependency_overrides[get_settings] = lambda: settings
     with TestClient(app) as test_client:
         yield test_client
@@ -53,6 +61,9 @@ def proxied_client(engine: FakeEngine) -> Iterator[TestClient]:
         update={"admin_key": None, "trust_user_header": True}
     )
     app.dependency_overrides[get_engine_client] = lambda: engine
+    # No database in these tests: memory recalls nothing unless a test says
+    # otherwise. The memory routes themselves are tested against a real one.
+    app.dependency_overrides[get_recall] = lambda: _no_notes
     app.dependency_overrides[get_settings] = lambda: settings
     with TestClient(app) as test_client:
         yield test_client
@@ -74,6 +85,9 @@ def guarded_client(engine: FakeEngine, admin_key: str) -> Iterator[TestClient]:
     """
     settings = get_settings().model_copy(update={"admin_key": admin_key})
     app.dependency_overrides[get_engine_client] = lambda: engine
+    # No database in these tests: memory recalls nothing unless a test says
+    # otherwise. The memory routes themselves are tested against a real one.
+    app.dependency_overrides[get_recall] = lambda: _no_notes
     app.dependency_overrides[get_settings] = lambda: settings
     with TestClient(app) as test_client:
         yield test_client
@@ -91,6 +105,9 @@ def limited_client(engine: FakeEngine) -> Iterator[TestClient]:
         }
     )
     app.dependency_overrides[get_engine_client] = lambda: engine
+    # No database in these tests: memory recalls nothing unless a test says
+    # otherwise. The memory routes themselves are tested against a real one.
+    app.dependency_overrides[get_recall] = lambda: _no_notes
     app.dependency_overrides[get_settings] = lambda: settings
     reset_rate_limits()
     with TestClient(app) as test_client:

@@ -12,6 +12,7 @@ import pytest
 from fakes import FakeEngine
 from fastapi.testclient import TestClient
 
+from support_agent.api.memory import get_recall
 from support_agent.engine import get_engine_client
 from support_agent.engine_client import (
     EngineFailed,
@@ -30,6 +31,10 @@ def _events(body: str) -> list[dict[str, object]]:
 
 
 # --- health -----------------------------------------------------------------
+
+
+async def _no_notes(user_id: str, project_id: str) -> str:
+    return ""
 
 
 def test_health_does_not_depend_on_the_engine(client: TestClient) -> None:
@@ -68,6 +73,24 @@ def test_chat_sends_the_project_config_the_engine_needs(
     assert request.project.project_id == "support"
     assert request.project.system_prompt.strip()
     assert request.user_id == "anonymous"
+
+
+def test_recalled_notes_are_appended_to_the_system_prompt(
+    client: TestClient, engine: FakeEngine
+) -> None:
+    """Memory reaches the model through the prompt, not through a tool: the
+    backend loads it and appends it before the request leaves for the engine."""
+
+    async def notes(user_id: str, project_id: str) -> str:
+        return f"## Notes for {user_id} in {project_id}\n- seat: aisle"
+
+    client.app.dependency_overrides[get_recall] = lambda: notes
+
+    client.post("/chat/sync", json={"message": "which seat?"})
+
+    prompt = engine.chat_requests[0].project.system_prompt
+    assert prompt.endswith("## Notes for anonymous in support\n- seat: aisle")
+    assert "You are SkyDesk" in prompt, "appended to the real prompt, not replacing it"
 
 
 # --- who the caller is -------------------------------------------------------
@@ -292,6 +315,7 @@ def test_engine_failures_map_to_distinct_statuses(
     from support_agent.app import app
 
     app.dependency_overrides[get_engine_client] = lambda: FakeEngine(raises=error)
+    app.dependency_overrides[get_recall] = lambda: _no_notes
     try:
         with TestClient(app, raise_server_exceptions=False) as client:
             response = client.post("/chat", json={"message": "hi"})
