@@ -127,8 +127,8 @@ async def run_tool_calls(
 
     Args:
         calls: The tool calls the model emitted in its last reply.
-        request: The current turn; supplies the assistant config and user_id,
-            which are forwarded to the tool server.
+        request: The current turn; supplies the assistant config, and the
+            `user_id` and `session_id` forwarded to the tool server.
         tools_provider: Runs a named tool on a named server over MCP.
         server_for: Maps each tool name to the server that provides it.
 
@@ -251,14 +251,14 @@ async def stream_completion(
         if reply is None:
             # The model produced nothing at all. An empty answer, which is what
             # a single non-streaming call would have returned too.
-            yield _usage(totals, model.model_name)
+            yield price_usage(totals, model.model_name)
             return
 
         _add_usage(totals, reply)
         messages.append(reply)
 
         if not reply.tool_calls:
-            yield _usage(totals, model.model_name)
+            yield price_usage(totals, model.model_name)
             return
 
         async for item in run_tool_calls(
@@ -290,8 +290,12 @@ def _add_usage(totals: dict[str, int], reply: AIMessageChunk) -> None:
         totals[key] += metadata.get(key, 0)
 
 
-def _usage(totals: dict[str, int], model_name: str | None) -> Usage:
-    """Package the running totals as a `Usage`, pricing the tokens if we can."""
+def price_usage(totals: dict[str, int], model_name: str | None) -> Usage:
+    """Package token totals as a `Usage`, priced when the model is in `PRICING`.
+
+    Public because an agent plugin reports cost too, and two agents that priced
+    a turn differently would be a bug. This is the one place a cost is computed.
+    """
     prices = PRICING.get(model_name or "")
     cost = (
         (totals["input_tokens"] * prices[0] + totals["output_tokens"] * prices[1])

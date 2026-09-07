@@ -74,21 +74,30 @@ def _read_prompt_file(raw: dict[str, object]) -> dict[str, object]:
 def _apply_deployment_overrides(config: AssistantConfig) -> AssistantConfig:
     """Override the MCP server URL for the current deployment, if configured.
 
-    Only the address changes per environment (e.g. `mcp-tools` under Docker
-    Compose instead of localhost). The tool allowlist stays in the YAML, where
-    it is reviewable.
+    Only the address changes per environment (`mcp-tools` under Docker Compose
+    instead of localhost). The tool allowlist stays in the YAML, where it is
+    reviewable.
+
+    One setting can only address one server. A project with several would have
+    every one of them pointed at the same address, silently; that is refused
+    here so the mistake is a startup error rather than a wrong tool answering.
     """
     override = get_settings().mcp_tools_url
     if override is None or not config.mcp_servers:
         return config
 
+    if len(config.mcp_servers) > 1:
+        names = ", ".join(server.name for server in config.mcp_servers)
+        raise ProjectNotFoundError(
+            f"BACKEND_MCP_TOOLS_URL can override one MCP server, and project "
+            f"{config.project_id!r} declares several ({names}); put the "
+            "per-environment addresses in the project config instead"
+        )
+
+    (server,) = config.mcp_servers
+
     return config.model_copy(
-        update={
-            "mcp_servers": [
-                server.model_copy(update={"url": override})
-                for server in config.mcp_servers
-            ]
-        }
+        update={"mcp_servers": [server.model_copy(update={"url": override})]}
     )
 
 

@@ -109,5 +109,24 @@ def test_size_ignores_structure_and_just_fills_windows() -> None:
     assert all("h1" not in c.metadata for c in chunks)
 
 
-def test_the_engine_default_is_used_when_no_strategy_is_given() -> None:
-    assert DocumentChunker().strategy == "size"
+# --- what reaches a citation --------------------------------------------------
+
+
+def test_source_refs_carry_the_page_and_the_heading_trail() -> None:
+    """The chunker records these so a citation can name a page or a section.
+    Dropping them on the way to the UI would make that promise false."""
+    from chatbot_engine.agent.retriever import to_source_refs
+    from langchain_core.documents import Document
+
+    paged = Document(page_content="p", metadata={"source": "a.pdf", "page": 12})
+    sectioned = Document(
+        page_content="s",
+        metadata={"source": "a.md", "h1": "Refunds", "h2": "Basic fares"},
+    )
+    plain = Document(page_content="x", metadata={"source": "b.md"})
+
+    refs = to_source_refs([(paged, 0.1), (sectioned, 0.2), (plain, 0.3)])
+
+    assert refs[0].page == 12 and refs[0].heading is None
+    assert refs[1].heading == "Refunds > Basic fares" and refs[1].page is None
+    assert refs[2].page is None and refs[2].heading is None

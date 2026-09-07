@@ -20,7 +20,12 @@ class _Event(BaseModel):
 
 
 class SourceRef(BaseModel):
-    """One retrieved chunk, reduced to what a UI needs in order to cite it."""
+    """One retrieved chunk, reduced to what a UI needs in order to cite it.
+
+    `heading` and `page` are present when the chunking strategy recorded them:
+    the heading trail under `headings`, the page number under `page`. Either is
+    what lets a citation name a section or a page rather than only a file.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -28,6 +33,7 @@ class SourceRef(BaseModel):
     source: str
     score: float
     heading: str | None = None
+    page: int | None = None
     excerpt: str | None = None
 
 

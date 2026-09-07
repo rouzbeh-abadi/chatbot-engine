@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     eval_rate_limit_per_hour: int = 20
     ingest_rate_limit_per_minute: int = 20
 
+    #: Where the rate-limit buckets live. Unset, they are in this process's
+    #: memory, and every replica counts on its own. Set to a Redis URL
+    #: (`redis://host:6379/0`) and all replicas share one exact bucket per
+    #: caller. Needs the `redis` extra.
+    redis_url: str | None = None
+
     # --- the model provider -------------------------------------------------
 
     #: Checked where the client is built, so an engine that only ingests
@@ -80,9 +86,16 @@ class Settings(BaseSettings):
 
     # --- the vector store ---------------------------------------------------
 
-    #: Where Chroma keeps its files. Relative paths resolve against the working
-    #: directory; `var/` is already gitignored for exactly this.
+    #: Where Chroma keeps its files, when it runs embedded in this process.
+    #: Relative paths resolve against the working directory; `var/` is already
+    #: gitignored for exactly this.
     chroma_dir: Path = Path("var/chroma")
+
+    #: A Chroma server to use instead of the embedded one, as
+    #: `http://host:8000`. Embedded Chroma is a set of files owned by one
+    #: process, so two engine replicas cannot share it; a server can be shared
+    #: by any number. Unset, the engine runs embedded.
+    chroma_url: str | None = None
 
     #: One collection for every project. Chunks carry `project_id` in their
     #: metadata, so scoping a query is a filter, not a second collection.
@@ -103,13 +116,16 @@ class Settings(BaseSettings):
     chunk_size: int = 1000
     chunk_overlap: int = 200
 
-    #: Which agent runs a turn when the assistant config names none. `graph`
-    #: additionally needs the `graph` extra installed.
-    agent: str = "loop"
-
     #: Default chunking strategy when the assistant config names none:
     #: `size`, `headings`, or `page`. See rag/splitter.py.
     chunk_strategy: Literal["size", "headings", "page"] = "size"
+
+    # --- agents -------------------------------------------------------------
+
+    #: Which agent runs a turn when the assistant config names none. `loop` is
+    #: the one the engine ships; any other name must be an installed plugin.
+    #: See agent/registry.py.
+    agent: str = "loop"
 
     # --- everything else ----------------------------------------------------
 
@@ -118,7 +134,10 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
 
-    @field_validator("api_key", "api_keys", "openrouter_api_key", mode="after")
+    @field_validator(
+        "api_key", "api_keys", "openrouter_api_key", "redis_url", "chroma_url",
+        mode="after",
+    )
     @classmethod
     def _blank_means_unset(cls, value: str | None) -> str | None:
         """`ENGINE_API_KEY=` in a .env file arrives as "", not as None.

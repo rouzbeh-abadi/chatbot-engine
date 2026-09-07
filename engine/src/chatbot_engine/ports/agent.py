@@ -32,7 +32,9 @@ class Agent(Protocol):
 
     An implementation does retrieval, builds the prompt, calls the model, runs
     any tools the model requests, and streams the result back as events.
-    `ChatAgent` in `agent/chat_agent.py` is the one used today.
+    `ChatAgent` in `agent/chat_agent.py` is the one the engine ships; plugins
+    registered under the `chatbot_engine.agents` entry point satisfy the same
+    protocol.
     """
 
     def run(
@@ -88,13 +90,16 @@ class ToolProvider(Protocol):
             server: Name of the configured MCP server exposing the tool.
             name: Name of the tool to invoke.
             arguments: Arguments passed to the tool.
-            user_id: Opaque user identifier forwarded for authorization when
-                supported by the tool transport.
+            user_id: Opaque user identifier, forwarded to the tool server as
+                `X-User-Id`.
+            session_id: Opaque conversation identifier, forwarded as
+                `X-Session-Id`.
 
         Returns:
             Tool result serialized as text.
         """
         ...
+
 
 class Judge(Protocol):
     """Answers a dataset and grades the answers.

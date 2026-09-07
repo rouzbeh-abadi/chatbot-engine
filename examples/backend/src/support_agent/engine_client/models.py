@@ -100,6 +100,7 @@ class SourceRef(BaseModel):
     source: str
     score: float
     heading: str | None = None
+    page: int | None = None
     excerpt: str | None = None
 
 

@@ -47,13 +47,14 @@ class AssistantConfig(BaseModel):
     name: str
     system_prompt: str
     model: str | None = None
+    #: Which agent runs the turn: `loop`, the engine's built-in tool loop, or
+    #: the name of an installed plugin. None uses the engine default. An
+    #: unknown name is a 422 listing the installed set.
+    agent: str | None = None
     #: The embedding model for this project's knowledge base. Like `model`, the
     #: backend supplies it and the engine falls back to its own default. It keys
-    #: the vector collection, so retrieval only ever compares like with like.
-    #: Which agent runs the turn: `loop` (the built-in tool loop) or `graph`
-    #: (the same turn as a LangGraph state machine). None uses the engine
-    #: default. Both produce the same events; `graph` needs the `graph` extra.
-    agent: str | None = None
+    #: the vector collection, so a query only ever meets vectors produced by
+    #: the same model.
     embedding_model: str | None = None
     #: How the knowledge base is cut into chunks, and the size cap every
     #: strategy ends with. None uses the engine's defaults. Applied when a

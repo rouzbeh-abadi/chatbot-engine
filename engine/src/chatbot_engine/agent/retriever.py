@@ -96,16 +96,37 @@ async def retrieve(request: ChatRequest) -> list[Hit]:
 
 
 def to_source_refs(hits: list[Hit]) -> list[SourceRef]:
-    """Describe each hit for the UI to cite."""
+    """Describe each hit for the UI to cite.
+
+    Carries whatever the chunking strategy recorded: the heading trail or the
+    page number. Dropping them here would leave a citation able to name only
+    the file, whichever strategy indexed it.
+    """
     return [
         SourceRef(
             doc_id=chunk.metadata.get("doc_id", ""),
             source=chunk.metadata.get("source", "unknown"),
             score=_similarity(distance),
+            heading=_heading_trail(chunk.metadata),
+            page=_page(chunk.metadata),
             excerpt=" ".join(chunk.page_content.split())[:240],
         )
         for chunk, distance in hits
     ]
+
+
+def _heading_trail(metadata: dict) -> str | None:
+    """`h1 > h2 > h3`, from whichever levels the chunk carries."""
+    levels = [metadata.get(key) for key in ("h1", "h2", "h3")]
+    trail = [str(level) for level in levels if level]
+
+    return " > ".join(trail) or None
+
+
+def _page(metadata: dict) -> int | None:
+    page = metadata.get("page")
+
+    return int(page) if isinstance(page, int) else None
 
 
 def to_context(hits: list[Hit]) -> str:

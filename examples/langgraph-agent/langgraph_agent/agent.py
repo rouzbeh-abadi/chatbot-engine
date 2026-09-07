@@ -30,8 +30,8 @@ from collections.abc import AsyncIterator
 from typing import Annotated, Any, TypedDict
 
 from chatbot_engine.agent.client import (
-    _usage,
     build_chat_model,
+    price_usage,
     run_tool_calls,
     to_messages,
 )
@@ -237,7 +237,7 @@ def _usage_event(totals: dict[str, int], model_name: str | None) -> UsageEvent:
     Shared on purpose: two agents that disagree about what a turn cost would be
     worse than one agent.
     """
-    usage = _usage(
+    usage = price_usage(
         {
             "input_tokens": totals.get("input_tokens", 0),
             "output_tokens": totals.get("output_tokens", 0),

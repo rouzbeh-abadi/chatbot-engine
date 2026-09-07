@@ -37,15 +37,16 @@ async def _session(
     """Open one MCP session to a target, with the configured timeout.
 
     The timeout matters: without it a tool server that accepts a connection but
-    never answers would hang the whole turn. `user_id`, when present, is
-    forwarded as an `X-User-Id` header so the tool server can authorise the call.
+    never answers would hang the whole turn.
+
+    `user_id` and `session_id` are forwarded as `X-User-Id` and `X-Session-Id`.
+    Both are the caller's own identifiers and the engine attaches no meaning to
+    either; a tool server needs them to scope what it reads and writes, and the
+    model must never be the one supplying them.
 
     A caller-provided http client is not lifecycle-managed by the transport, so
     it is opened here and closed when the session ends.
     """
-    # Who is asking, and which conversation this is. Both are the caller's own
-    # identifiers, forwarded untouched: the engine attaches no meaning to either,
-    # but a tool server needs them to scope what it reads and writes.
     headers = {
         key: value
         for key, value in (("X-User-Id", user_id), ("X-Session-Id", session_id))
@@ -71,6 +72,16 @@ class McpServerNotFoundError(ValueError):
 
 class McpToolNotAllowedError(ValueError):
     """Raised when the requested MCP tool is not allowlisted."""
+
+
+class McpToolError(RuntimeError):
+    """The tool ran and reported failure.
+
+    MCP carries a tool's own error as a result flagged `isError`, not as a
+    protocol failure. Raising here is what lets the tool loop report it as
+    `ok=false`; returning the text would present a failed call to the model and
+    the UI as a successful one.
+    """
 
 
 class McpToolProvider:
@@ -139,8 +150,9 @@ class McpToolProvider:
             server: Name of the MCP server exposing the tool.
             name: Name of the tool to invoke.
             arguments: Arguments passed to the tool.
-            user_id: Opaque user identifier, forwarded to the tool server as an
-                `X-User-Id` header so it can authorise the call.
+            user_id: Opaque user identifier, forwarded as `X-User-Id`.
+            session_id: Opaque conversation identifier, forwarded as
+                `X-Session-Id`.
 
         Returns:
             Tool result serialized as text.
@@ -148,6 +160,7 @@ class McpToolProvider:
         Raises:
             McpServerNotFoundError: If the requested server is not configured.
             McpToolNotAllowedError: If the tool is not allowlisted.
+            McpToolError: If the tool ran and reported failure.
         """
         target = self._find_target(
             config=config,
@@ -167,19 +180,12 @@ class McpToolProvider:
                 dict(arguments),
             )
 
-        if result.structured_content is not None:
-            return json.dumps(
-                result.structured_content,
-                ensure_ascii=False,
-            )
+        text = _text_of(result)
 
-        text_parts = [
-            block.text
-            for block in result.content
-            if isinstance(block, TextContent)
-        ]
+        if result.is_error:
+            raise McpToolError(text or f"tool {name!r} reported an error")
 
-        return "\n".join(text_parts)
+        return text
 
     def _find_target(
         self,
@@ -211,3 +217,12 @@ class McpToolProvider:
         raise McpServerNotFoundError(
             f"MCP server {server!r} is not configured."
         )
+
+def _text_of(result: Any) -> str:
+    """One string for the model: structured content as JSON, else the text blocks."""
+    if result.structured_content is not None:
+        return json.dumps(result.structured_content, ensure_ascii=False)
+
+    return "\n".join(
+        block.text for block in result.content if isinstance(block, TextContent)
+    )
