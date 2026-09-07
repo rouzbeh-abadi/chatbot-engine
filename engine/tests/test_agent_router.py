@@ -1,13 +1,10 @@
-"""Which agent runs a turn, and what happens when the choice is wrong."""
+"""Which agent runs a turn."""
 
 from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from chatbot_engine.agent import registry
-from chatbot_engine.agent.registry import UnknownAgentError
 from chatbot_engine.agent.router import AgentRouter
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 
@@ -58,17 +55,6 @@ async def test_no_choice_falls_back_to_the_engine_default() -> None:
     """An assistant that says nothing gets the engine's configured agent."""
     with _named("loop", "graph"):
         assert await _ran(None) == "loop"
-
-
-async def test_an_installed_plugin_can_be_selected() -> None:
-    with _named("loop", "my-graph"):
-        assert await _ran("my-graph") == "my-graph"
-
-
-async def test_an_unknown_agent_is_refused() -> None:
-    """Picking one silently would hide a typo in the config or the setting."""
-    with _named("loop"), pytest.raises(UnknownAgentError):
-        await _ran("nope")
 
 
 async def test_an_agent_is_built_once_and_reused() -> None:

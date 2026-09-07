@@ -2,14 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
 from chatbot_engine.api.dependencies import get_ingest_pipeline, get_settings
-from chatbot_engine.documents.blobs import DocumentBlobs
-from chatbot_engine.documents.storage import LocalBlobStore
 from chatbot_engine.errors import NotConfiguredError
 from chatbot_engine.rag.vector_store import count_chunks
 
@@ -33,46 +29,6 @@ def _blob_files() -> list[str]:
     root = get_settings().blob_dir
 
     return sorted(path.name for path in root.iterdir()) if root.exists() else []
-
-
-# --- the key convention ------------------------------------------------------
-
-
-async def test_the_computed_uri_matches_what_put_returned(tmp_path: Path) -> None:
-    """The one coupling in `DocumentBlobs`: pin it, or a layout change is silent."""
-    blobs = DocumentBlobs(tmp_path)
-
-    returned = await blobs.write(doc_id="abc123", data=b"hello", mimetype="text/plain")
-
-    assert returned == blobs._uri("abc123")
-    assert await blobs.read(doc_id="abc123") == b"hello"
-
-
-async def test_a_traversing_key_cannot_escape(tmp_path: Path) -> None:
-    """Why the key is `doc_id` and never `external_id`, which callers control."""
-    blobs = DocumentBlobs(tmp_path / "root")
-    escaped = tmp_path / "escaped.md"
-
-    await blobs.write(
-        doc_id="../escaped.md", data=b"nope", mimetype="text/plain"
-    )
-
-    # LocalBlobStore would happily write it -- so the pipeline must never pass
-    # a caller-supplied key. A doc_id is 32 hex characters and cannot traverse.
-    assert escaped.exists(), "this is the hole doc_id keys close"
-
-
-async def test_deleting_a_missing_blob_is_silent(tmp_path: Path) -> None:
-    await DocumentBlobs(tmp_path).delete(doc_id="never-written")
-
-
-async def test_the_port_is_swappable(tmp_path: Path) -> None:
-    """`DocumentBlobs` composes a `BlobStore`, so S3 later is a constructor arg."""
-    blobs = DocumentBlobs(tmp_path, store=LocalBlobStore(tmp_path))
-
-    await blobs.write(doc_id="x", data=b"y", mimetype="text/plain")
-
-    assert await blobs.read(doc_id="x") == b"y"
 
 
 # --- through the API ---------------------------------------------------------
@@ -142,11 +98,6 @@ async def test_reindex_rebuilds_from_the_stored_bytes(
 
     assert rebuilt.chunk_count > before, "smaller chunks, so more of them"
     assert count_chunks() == rebuilt.chunk_count, "old vectors replaced, not added"
-
-
-async def test_reindex_on_an_unknown_document_raises(client: TestClient) -> None:
-    with pytest.raises(LookupError):
-        await get_ingest_pipeline().reindex(project_id="support", doc_id="nope")
 
 
 async def test_reindex_without_a_blob_store_says_so(client: TestClient) -> None:

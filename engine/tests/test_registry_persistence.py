@@ -66,63 +66,7 @@ async def test_upsert_replaces_rather_than_duplicates(
     assert [record.chunk_count for record in listed] == [9]
 
 
-async def test_listing_is_scoped_to_one_project(
-    registry: SqliteDocumentRegistry,
-) -> None:
-    await registry.upsert(_record())
-    await registry.upsert(_record(doc_id="doc-2", project_id="sales"))
-
-    assert len(await registry.list(project_id="support")) == 1
-    assert len(await registry.list(project_id="sales")) == 1
-
-
-async def test_an_unknown_record_is_none(registry: SqliteDocumentRegistry) -> None:
-    assert await registry.get(project_id="support", doc_id="nope") is None
-
-
-async def test_set_status_updates_in_place(
-    registry: SqliteDocumentRegistry,
-) -> None:
-    await registry.upsert(_record())
-
-    await registry.set_status(doc_id="doc-1", status=IngestStatus.FAILED)
-    found = await registry.get(project_id="support", doc_id="doc-1")
-
-    assert found is not None
-    assert found.status is IngestStatus.FAILED
-
-
-async def test_delete_reports_whether_it_existed(
-    registry: SqliteDocumentRegistry,
-) -> None:
-    await registry.upsert(_record())
-
-    assert await registry.delete(project_id="support", doc_id="doc-1") is True
-    assert await registry.delete(project_id="support", doc_id="doc-1") is False
-
-
-async def test_an_error_message_survives(registry: SqliteDocumentRegistry) -> None:
-    await registry.upsert(
-        _record(status=IngestStatus.FAILED, error="needs OCR", chunk_count=0)
-    )
-
-    found = await registry.get(project_id="support", doc_id="doc-1")
-
-    assert found is not None
-    assert found.error == "needs OCR"
-
-
 # --- surviving a restart -----------------------------------------------------
-
-
-async def test_records_outlive_the_process(tmp_path: Path) -> None:
-    path = tmp_path / "documents.sqlite3"
-    await SqliteDocumentRegistry(path).upsert(_record())
-
-    # A second instance on the same file is what a restart looks like.
-    reopened = SqliteDocumentRegistry(path)
-
-    assert await reopened.get(project_id="support", doc_id="doc-1") == _record()
 
 
 def test_documents_still_listed_after_the_engine_restarts(

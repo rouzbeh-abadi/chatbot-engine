@@ -140,16 +140,6 @@ class SqliteDocumentRegistry(DocumentRegistry):
 
         return await asyncio.to_thread(read)
 
-    async def set_status(self, *, doc_id: str, status: IngestStatus) -> None:
-        def write() -> None:
-            with self._connect() as connection:
-                connection.execute(
-                    "UPDATE documents SET status = ? WHERE doc_id = ?",
-                    (status.value, doc_id),
-                )
-
-        await asyncio.to_thread(write)
-
     async def delete(self, *, project_id: str, doc_id: str) -> bool:
         def write() -> bool:
             with self._connect() as connection:

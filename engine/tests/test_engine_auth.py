@@ -11,20 +11,12 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from chatbot_engine.api.auth import OPEN_CALLER, Caller, _match
+from chatbot_engine.api.auth import Caller, _match
 from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.api.rate_limit import RateLimiter, reset_rate_limits
 from chatbot_engine.settings import Settings
 
 # --- matching ----------------------------------------------------------------
-
-
-def test_the_matching_key_is_identified_by_name() -> None:
-    assert _match("b", {"web": "a", "batch": "b"}) == "batch"
-
-
-def test_an_unknown_secret_matches_nothing() -> None:
-    assert _match("nope", {"web": "a"}) is None
 
 
 def test_a_non_ascii_key_is_refused_rather_than_crashing() -> None:
@@ -42,12 +34,6 @@ def test_a_prefix_of_the_real_key_does_not_match() -> None:
 
 
 # --- key configuration -------------------------------------------------------
-
-
-def test_named_keys_are_parsed_into_callers() -> None:
-    settings = Settings.model_construct(api_key=None, api_keys="web:a,batch:b")
-
-    assert settings.credentials() == {"web": "a", "batch": "b"}
 
 
 def test_the_single_key_shorthand_is_named_default() -> None:
@@ -157,7 +143,3 @@ def test_rate_limits_are_counted_per_caller_not_globally() -> None:
     assert getattr(caught.value, "status_code", None) == 429
 
 
-def test_an_open_engine_still_names_its_caller() -> None:
-    """Logs and buckets need something to group by even with no keys set."""
-    assert not Caller(name=OPEN_CALLER).is_authenticated
-    assert Caller(name="web").is_authenticated

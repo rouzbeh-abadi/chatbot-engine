@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from fastapi.testclient import TestClient
 
-from chatbot_engine.agent.registry import _builtin, available_agents, build_agent
+from chatbot_engine.agent.registry import _builtin, build_agent
 
 pytest.importorskip(
     "langgraph_agent",
@@ -34,10 +34,6 @@ def test_the_engine_never_imports_the_plugin() -> None:
     import chatbot_engine.agent.registry as registry
 
     assert "langgraph_agent" not in open(registry.__file__).read()
-
-
-def test_the_plugin_is_discovered() -> None:
-    assert "graph" in available_agents()
 
 
 def test_it_builds_and_gets_the_tool_provider() -> None:

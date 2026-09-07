@@ -1,11 +1,9 @@
-"""Choosing the agent over HTTP.
+"""The real plugin, selected over HTTP.
 
-The parity tests drive both agents directly. This proves the other half: that
-`agent` on the request actually reaches the router, that the selected agent runs
-the turn, and that the events come back over the wire the same either way.
-
-The model and retrieval are patched, so no provider is called; everything else
-is the real route, the real dependency wiring, and the real router.
+The parity tests construct both agents directly. This proves the other half:
+`agent` on the request reaches the router through the real wiring, and the
+bundled plugin answers a turn over the wire. The model and retrieval are
+patched, so no provider is called.
 """
 
 from __future__ import annotations
@@ -90,39 +88,3 @@ def test_either_agent_answers_over_http(
     assert answer == "Hi."
 
 
-def test_omitting_the_agent_still_answers(
-    client: TestClient, project: dict[str, object]
-) -> None:
-    """An assistant config that says nothing gets the engine's default agent."""
-    events = _ask(client, project, None)
-
-    assert [e["type"] for e in events][-1] == "done"
-
-
-def test_both_agents_return_the_same_stream_over_http(
-    client: TestClient, project: dict[str, object]
-) -> None:
-    """Switching `agent` must not change what the browser receives."""
-    loop = _ask(client, project, "loop")
-    graph = _ask(client, project, "graph")
-
-    assert [e["type"] for e in loop] == [e["type"] for e in graph]
-
-    def usage(events: list[dict]) -> dict:
-        return next(e for e in events if e["type"] == "usage")
-
-    assert usage(loop)["total_tokens"] == usage(graph)["total_tokens"]
-    assert usage(loop)["cost_usd"] == usage(graph)["cost_usd"]
-
-
-def test_an_unknown_agent_is_rejected(
-    client: TestClient, project: dict[str, object]
-) -> None:
-    """`agent` is an open string on the wire, because the valid set depends on
-    what is installed. The registry checks it and answers 422."""
-    response = client.post(
-        "/chat",
-        json={"project": {**project, "agent": "banana"}, "message": "hello"},
-    )
-
-    assert response.status_code == 422

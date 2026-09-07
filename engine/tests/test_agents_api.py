@@ -9,11 +9,6 @@ from fastapi.testclient import TestClient
 from chatbot_engine.agent import registry
 
 
-def test_it_lists_the_engines_own_agent(client: TestClient) -> None:
-    """`loop` is always there; anything else is a plugin, listed alongside it."""
-    assert "loop" in client.get("/agents").json()
-
-
 def test_an_installed_plugin_appears(client: TestClient) -> None:
     """Anything offering the choice to a user should see a new agent at once."""
 

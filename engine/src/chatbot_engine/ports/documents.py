@@ -14,7 +14,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Protocol
 
-from chatbot_engine.models.documents import DocumentRecord, IngestStatus
+from chatbot_engine.models.documents import DocumentRecord
 
 
 class IngestPipeline(Protocol):
@@ -59,7 +59,5 @@ class DocumentRegistry(Protocol):
     async def get(self, *, project_id: str, doc_id: str) -> DocumentRecord | None: ...
 
     async def list(self, *, project_id: str) -> Sequence[DocumentRecord]: ...
-
-    async def set_status(self, *, doc_id: str, status: IngestStatus) -> None: ...
 
     async def delete(self, *, project_id: str, doc_id: str) -> bool: ...

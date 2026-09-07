@@ -5,8 +5,6 @@ assistant's config, the same way the chat model does, so one engine can serve
 projects that embed with different models. `resolve_embedding_model` supplies the
 engine's configured default when a caller passes none.
 
-Embedding calls are asynchronous to keep network-bound batches from blocking the
-event loop and delaying unrelated requests in the same process.
 """
 
 from __future__ import annotations
@@ -14,7 +12,6 @@ from __future__ import annotations
 from functools import lru_cache
 
 from chatbot_engine.settings import get_settings
-from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
 
 
@@ -44,21 +41,3 @@ def get_embeddings(model: str | None = None) -> OpenAIEmbeddings:
         base_url=settings.openrouter_base_url,
     )
 
-
-async def embed_documents(
-    documents: list[Document], model: str | None = None
-) -> list[list[float]]:
-    """Embed each chunk, in the order it was given."""
-    texts = [document.page_content for document in documents]
-
-    return await get_embeddings(model).aembed_documents(texts)
-
-
-async def embed_query(text: str, model: str | None = None) -> list[float]:
-    """Embed one question, for searching with.
-
-    Must use the same model the documents were embedded with, or the distances
-    mean nothing -- which the vector store guarantees by keying each collection
-    to its embedding model.
-    """
-    return await get_embeddings(model).aembed_query(text)

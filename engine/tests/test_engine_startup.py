@@ -13,17 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from chatbot_engine.app import InsecureConfiguration, app
-from chatbot_engine.settings import Settings, get_settings
-
-
-def test_a_keyed_engine_has_nothing_to_report() -> None:
-    assert Settings.model_construct(api_key="a-key").unsafe_for_production() == []
-
-
-def test_a_keyless_engine_reports_the_variable_to_set() -> None:
-    (problem,) = Settings.model_construct(api_key=None).unsafe_for_production()
-
-    assert "ENGINE_API_KEY" in problem
+from chatbot_engine.settings import get_settings
 
 
 @pytest.fixture

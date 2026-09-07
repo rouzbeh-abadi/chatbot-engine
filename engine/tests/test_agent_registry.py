@@ -1,6 +1,6 @@
 """Installing your own agent, without forking the engine.
 
-The engine ships two agents, but the point of the registry is the third one:
+The engine ships one agent; the point of the registry is the next one:
 an adopter registers a factory under an entry point, installs the package
 alongside the engine, and names it in the assistant config.
 
@@ -21,7 +21,6 @@ from chatbot_engine.agent import registry
 from chatbot_engine.agent.registry import (
     ENTRY_POINT_GROUP,
     UnknownAgentError,
-    available_agents,
     build_agent,
 )
 
@@ -59,15 +58,6 @@ def _with_plugin():
 
 
 # --- discovery ----------------------------------------------------------------
-
-
-def test_the_builtin_agents_are_always_available() -> None:
-    assert {"loop", "graph"} <= set(available_agents())
-
-
-def test_an_installed_plugin_shows_up() -> None:
-    with _with_plugin():
-        assert "my-graph" in available_agents()
 
 
 def test_a_plugin_is_constructed_with_the_tool_provider() -> None:

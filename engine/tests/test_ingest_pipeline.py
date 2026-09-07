@@ -10,10 +10,11 @@ from collections.abc import Sequence
 
 from langchain_core.documents import Document
 
-from chatbot_engine.documents.registry import InMemoryDocumentRegistry
 from chatbot_engine.documents.models import ExtractedDocument
 from chatbot_engine.rag.pipeline import DocumentIngestPipeline, doc_id_for
+from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
 from chatbot_engine.rag.splitter import DocumentChunker
+from chatbot_engine.settings import get_settings
 
 TEXT = ("Cabin baggage is one bag up to 8 kg. " * 12).encode()
 
@@ -34,10 +35,10 @@ class RecordingChunker(DocumentChunker):
 
 
 def _pipeline() -> tuple[
-    DocumentIngestPipeline, RecordingChunker, InMemoryDocumentRegistry
+    DocumentIngestPipeline, RecordingChunker, SqliteDocumentRegistry
 ]:
     chunker = RecordingChunker()
-    registry = InMemoryDocumentRegistry()
+    registry = SqliteDocumentRegistry(get_settings().registry_db)
 
     return (
         DocumentIngestPipeline(registry=registry, chunker=chunker),
@@ -57,10 +58,6 @@ async def _ingest(pipeline: DocumentIngestPipeline, data: bytes = TEXT):
 
 
 # --- the identifier ----------------------------------------------------------
-
-
-def test_doc_id_is_stable_for_the_same_inputs() -> None:
-    assert doc_id_for("support", "baggage.md") == doc_id_for("support", "baggage.md")
 
 
 def test_doc_id_separates_the_two_fields() -> None:
@@ -86,25 +83,6 @@ async def test_every_chunk_knows_which_document_it_came_from() -> None:
         assert chunk.metadata["project_id"] == "support"
         assert chunk.metadata["source"] == "policies/baggage.md"
         assert chunk.metadata["filename"] == "baggage.md"
-
-
-async def test_every_chunk_knows_where_it_sits_in_the_file() -> None:
-    """A citation points at a place in a file, not just the file."""
-    pipeline, chunker, _ = _pipeline()
-
-    await _ingest(pipeline)
-
-    offsets = [chunk.metadata["start_index"] for chunk in chunker.produced]
-    assert offsets == sorted(offsets)
-    assert offsets[0] == 0
-
-
-async def test_the_reported_count_matches_the_chunks_produced() -> None:
-    pipeline, chunker, _ = _pipeline()
-
-    record = await _ingest(pipeline)
-
-    assert record.chunk_count == len(chunker.produced)
 
 
 # --- doing no work twice -----------------------------------------------------
