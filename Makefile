@@ -28,9 +28,9 @@ help:
 	@echo "    make test      run all tests (python + frontend)"
 	@echo "    make smoke     probe both services (needs them running)"
 	@echo "    make smoke-docs  exercise the whole document path for real"
-	@echo "    make seed      load backend/knowledge/ through the backend"
+	@echo "    make seed      load examples/backend/knowledge/ through the backend"
 	@echo '    make search Q="..."  what the vector store would retrieve'
-	@echo "    make eval      score the system prompt against backend/evals/"
+	@echo "    make eval      score the system prompt against examples/backend/evals/"
 	@echo "    make eval ARGS=--show   re-read the last run, no model calls"
 	@echo "    make eval-rag  score retrieval with RAGAS (needs the engine eval extra)"
 	@echo ""
@@ -63,7 +63,7 @@ tools:
 	uv run python -m support_agent.mcp_tools
 
 frontend:
-	cd frontend && npm install && npm run dev
+	cd examples/frontend && npm install && npm run dev
 
 # Postgres only. Everything else runs better as a plain process: `make dev`
 # reloads on save, a container has to be rebuilt.
@@ -75,25 +75,25 @@ db-stop:
 	docker compose stop postgres
 
 migrate:
-	uv run alembic -c backend/alembic.ini upgrade head
+	uv run alembic -c examples/backend/alembic.ini upgrade head
 
 seed-db:
-	uv run python backend/scripts/seed_database.py
+	uv run python examples/backend/scripts/seed_database.py
 
 # Both suites. The frontend's are fast and need no services, so there is no
 # reason to make you remember two commands.
 test:
 	uv run pytest -q
-	@cd frontend && npm run --silent test
+	@cd examples/frontend && npm run --silent test
 
 test-py:
 	uv run pytest -q
 
 test-ui:
-	cd frontend && npm run test
+	cd examples/frontend && npm run test
 
 seed:
-	uv run python backend/scripts/seed_knowledge.py
+	uv run python examples/backend/scripts/seed_knowledge.py
 
 smoke:
 	@printf 'engine   : '
@@ -111,17 +111,17 @@ smoke:
 # The document path end to end, against the running services: real embeddings,
 # real vectors on disk. `make test` covers the same ground with a fake embedder.
 smoke-docs:
-	uv run python backend/scripts/smoke_documents.py
+	uv run python examples/backend/scripts/smoke_documents.py
 
 # Ask every case in the dataset, then have the engine judge the answers.
 # ARGS passes flags through: make eval ARGS="--dry-run --only refuse_scope"
 eval:
-	uv run python backend/scripts/evaluate_prompt.py $(ARGS)
+	uv run python examples/backend/scripts/evaluate_prompt.py $(ARGS)
 
 # Score retrieval with RAGAS. Needs the engine's `eval` extra installed.
 # ARGS passes flags through: make eval-rag ARGS="--only follow_up"
 eval-rag:
-	uv run python backend/scripts/evaluate_rag.py $(ARGS)
+	uv run python examples/backend/scripts/evaluate_rag.py $(ARGS)
 
 # What retrieval would find, without an agent to use it yet.
 search:
@@ -151,5 +151,5 @@ logs:
 	docker compose logs -f
 
 clean:
-	rm -rf .pytest_cache frontend/dist
+	rm -rf .pytest_cache examples/frontend/dist
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

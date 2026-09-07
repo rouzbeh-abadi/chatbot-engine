@@ -52,7 +52,7 @@ number. Uploading a mixed corpus under one strategy is therefore safe.
 Set it on the project, beside the model and embedding model:
 
 ```yaml
-# backend/src/support_agent/projects/support.yaml
+# examples/backend/src/support_agent/projects/support.yaml
 chunking_strategy: headings    # size | headings | page
 chunk_size: 1000
 chunk_overlap: 200
@@ -70,7 +70,7 @@ curl -X PUT localhost:8100/documents \
   -F external_id=baggage.md \
   -F chunking_strategy=headings \
   -F chunk_size=1000 \
-  -F "file=@backend/knowledge/baggage.md;type=text/markdown"
+  -F "file=@examples/backend/knowledge/baggage.md;type=text/markdown"
 ```
 
 An unknown strategy is rejected with `422`, and nothing is stored. It is not

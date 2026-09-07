@@ -174,10 +174,10 @@ List the names explicitly.
 the browser (a message and maybe a session id) and build the `project` block
 server-side from your own configuration.
 
-The reference backend does exactly this: [`api/chat.py`](../backend/src/support_agent/api/chat.py)
+The reference backend does exactly this: [`api/chat.py`](../examples/backend/src/support_agent/api/chat.py)
 accepts `{message, session_id, project, history}` where `project` is only a
 *name*, then loads the real definition from
-[`projects/support.yaml`](../backend/src/support_agent/projects/support.yaml).
+[`projects/support.yaml`](../examples/backend/src/support_agent/projects/support.yaml).
 
 ### Unknown fields are rejected
 
@@ -241,7 +241,7 @@ def sse_frame(event) -> str:
     return f"event: {event.type}\ndata: {event.model_dump_json()}\n\n"
 ```
 
-Full version: [`api/streaming.py`](../backend/src/support_agent/api/streaming.py).
+Full version: [`api/streaming.py`](../examples/backend/src/support_agent/api/streaming.py).
 
 ### If you do not want to stream
 
@@ -261,7 +261,7 @@ extraction is the engine's job.
 curl -X PUT localhost:8100/documents \
   -F project_id=support \
   -F external_id=baggage.md \
-  -F "file=@backend/knowledge/baggage.md;type=text/markdown"
+  -F "file=@examples/backend/knowledge/baggage.md;type=text/markdown"
 ```
 
 | Field | Meaning |
@@ -305,7 +305,7 @@ not duplicated. Send identical bytes and the engine skips the work entirely and
 answers `unchanged`, so you can safely re-run a sync over your whole corpus.
 
 That is what makes bulk loading simple:
-[`scripts/seed_knowledge.py`](../backend/scripts/seed_knowledge.py) walks a folder
+[`scripts/seed_knowledge.py`](../examples/backend/scripts/seed_knowledge.py) walks a folder
 and uses each file's relative path as its `external_id`.
 
 ### Listing and deleting
@@ -365,7 +365,7 @@ engine reaches the browser as an empty success.
 
 The reference client makes `start_chat()` an awaited call that returns an iterator,
 so the status check happens while the status line can still change. See
-[`engine_client/client.py`](../backend/src/support_agent/engine_client/client.py).
+[`engine_client/client.py`](../examples/backend/src/support_agent/engine_client/client.py).
 
 ---
 
@@ -392,7 +392,7 @@ per tool call
 ### What you have to do
 
 **1. Run an MCP server.** The reference one is
-[`mcp_tools.py`](../backend/src/support_agent/mcp_tools.py), about 200 lines for
+[`mcp_tools.py`](../examples/backend/src/support_agent/mcp_tools.py), about 200 lines for
 three tools:
 
 ```bash
@@ -501,18 +501,18 @@ async def ask(question: str) -> None:
 
 ## 9. Reference implementation
 
-A working backend lives in [`backend/`](../backend). The parts worth reading, in
+A working backend lives in [`examples/backend/`](../examples/backend). The parts worth reading, in
 order:
 
 | File | What it shows |
 | --- | --- |
-| [`engine_client/client.py`](../backend/src/support_agent/engine_client/client.py) | The HTTP client: streaming, error taxonomy, connection cleanup |
-| [`engine_client/models.py`](../backend/src/support_agent/engine_client/models.py) | The wire contract as a client sees it |
-| [`api/chat.py`](../backend/src/support_agent/api/chat.py) | Building a safe request from an untrusted one |
-| [`api/streaming.py`](../backend/src/support_agent/api/streaming.py) | NDJSON to SSE, and folding a run into one object |
-| [`api/documents.py`](../backend/src/support_agent/api/documents.py) | Upload validation and forwarding raw bytes |
-| [`mcp_tools.py`](../backend/src/support_agent/mcp_tools.py) | Three tools the engine can call |
-| [`projects/support.yaml`](../backend/src/support_agent/projects/support.yaml) | An assistant definition |
+| [`engine_client/client.py`](../examples/backend/src/support_agent/engine_client/client.py) | The HTTP client: streaming, error taxonomy, connection cleanup |
+| [`engine_client/models.py`](../examples/backend/src/support_agent/engine_client/models.py) | The wire contract as a client sees it |
+| [`api/chat.py`](../examples/backend/src/support_agent/api/chat.py) | Building a safe request from an untrusted one |
+| [`api/streaming.py`](../examples/backend/src/support_agent/api/streaming.py) | NDJSON to SSE, and folding a run into one object |
+| [`api/documents.py`](../examples/backend/src/support_agent/api/documents.py) | Upload validation and forwarding raw bytes |
+| [`mcp_tools.py`](../examples/backend/src/support_agent/mcp_tools.py) | Three tools the engine can call |
+| [`projects/support.yaml`](../examples/backend/src/support_agent/projects/support.yaml) | An assistant definition |
 
 That backend copies the engine's models rather than importing its package, on
 purpose: two services that share a Python package are one deployable wearing a

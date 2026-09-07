@@ -182,6 +182,32 @@ shape, TLS, rate limits, migrations, and an honest list of what is
 authenticated and what is not, which is worth reading before you put this in
 front of users.
 
+## Bringing your own agent
+
+The engine ships one plain tool loop and no agent framework. Anything else is a
+package you install, discovered through a Python entry point:
+
+```toml
+# in YOUR package, not the engine
+[project.entry-points."chatbot_engine.agents"]
+my-agent = "my_package.agent:build"
+```
+
+```console
+$ pip install ./my-agent      # into wherever the engine runs
+$ curl localhost:8100/agents
+["loop", "my-agent"]
+```
+
+Then select it with `agent: my-agent` in the project config, or from the UI's
+dropdown. No fork, no change to engine code.
+
+`examples/langgraph-agent/` is a complete working one, a LangGraph state machine
+of four nodes and one conditional edge. It is installed by the demo stack the
+same way yours would be, so `agent: graph` in the picker really is an injected
+plugin rather than something built in. Copy it as your starting point, and see
+**[docs/agents.md](docs/agents.md)** for the contract your agent owes.
+
 ## Evaluation
 
 Two harnesses. Both run in the engine (only it holds the model credentials);
@@ -210,15 +236,18 @@ make eval-rag ARGS="--only follow_up"
 
 ```text
 engine/     the reusable AI engine. This is the product   -- see engine/README.md
-backend/    an example product backend                    -- see backend/README.md
-frontend/   an example chat UI                            -- see frontend/README.md
-examples/   things built with the engine: an agent plugin you can copy
+examples/   everything built *with* it:
+  backend/          an example product backend: database, domain tools, admin
+  frontend/         an example chat UI
+  langgraph-agent/  an agent plugin, installed into the engine
 docs/       guides
 tests/      the contract-parity test, where engine and backend meet
 ```
 
-The split is the point. `engine/` depends on none of the rest, and carries no
-opinion about your product, your users, or even which agent framework you use.
+The split is the point. `engine/` depends on nothing under `examples/`, and holds
+no opinion about your product, your users, or even which agent framework you use.
+Everything under `examples/` is one way to use it, and you are meant to replace
+all of it.
 
 ## Documentation
 
@@ -235,8 +264,8 @@ opinion about your product, your users, or even which agent framework you use.
 - **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies:
   what each cuts at, when to use it, and why changing one means re-indexing.
 - **[engine/README.md](engine/README.md)** covers the engine itself.
-- **[backend/README.md](backend/README.md)** and
-  **[frontend/README.md](frontend/README.md)** cover the example
+- **[examples/backend/README.md](examples/backend/README.md)** and
+  **[examples/frontend/README.md](examples/frontend/README.md)** cover the example
   application, and **[examples/langgraph-agent/](examples/langgraph-agent)** is a
   working agent plugin to copy.
 

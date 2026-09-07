@@ -29,7 +29,7 @@ Everything else lives outside it. `grep langgraph engine/src` returns nothing.
 ## Choosing one
 
 ```yaml
-# backend/src/support_agent/projects/support.yaml
+# examples/backend/src/support_agent/projects/support.yaml
 agent: loop     # or graph, or the name of a plugin you installed
 ```
 
@@ -118,11 +118,45 @@ emit the same events in the same order.
 plugin's `graph` are indistinguishable on all of it. An agent written outside
 the engine is not a second-class citizen, and that test is what keeps it true.
 
-## The bundled example
+## A worked example you can copy
 
 [`examples/langgraph-agent/`](../examples/langgraph-agent) is a complete, working
-plugin: its own `pyproject.toml`, its own LangGraph dependency, and a graph of
-four nodes with one conditional edge.
+plugin. Three files, and none of them are in the engine:
+
+```text
+examples/langgraph-agent/
+├── pyproject.toml                    the entry point that makes it discoverable
+└── langgraph_agent/
+    ├── __init__.py
+    └── agent.py                      the graph: nodes, edges, LangGraph import
+```
+
+**The entry point** is the whole integration. This is the only thing that
+connects the package to the engine:
+
+```toml
+[project.entry-points."chatbot_engine.agents"]
+graph = "langgraph_agent.agent:build"
+```
+
+**The graph** it builds, from `agent.py`:
+
+```python
+graph = StateGraph(_State)
+graph.add_node("retrieve", retrieve_node)
+graph.add_node("model", model_node)
+graph.add_node("tools", tools_node)
+graph.add_node("finish", finish_node)
+
+graph.add_edge(START, "retrieve")
+graph.add_edge("retrieve", "model")
+graph.add_conditional_edges("model", next_step,
+                            {"tools": "tools", "finish": "finish"})
+graph.add_edge("tools", "model")      # the loop back
+graph.add_edge("finish", END)
+
+return graph.compile()
+```
 
 ```text
 START -> retrieve -> model -+-(tool calls)-> tools -+
@@ -130,14 +164,27 @@ START -> retrieve -> model -+-(tool calls)-> tools -+
                             +-(none)-> finish -> END
 ```
 
-Copy it as the starting point for your own. It is installed by the demo stack
-and exercised by the test suite, so it cannot quietly rot.
+**Watch it appear.** Nothing about the engine changes; only what is installed:
+
+```console
+$ python -c "from chatbot_engine.agent.registry import available_agents; print(sorted(available_agents()))"
+['loop']
+
+$ pip install ./examples/langgraph-agent
+
+$ python -c "from chatbot_engine.agent.registry import available_agents; print(sorted(available_agents()))"
+['graph', 'loop']
+```
+
+From there it is selectable (`agent: graph`), it shows up in `GET /agents`, and
+the example UI lists it in the dropdown, because both read the installed set
+rather than a hardcoded one.
 
 **A graph is worth the machinery** once a turn stops being a straight line:
 pausing for human approval mid-turn, resuming a half-finished turn from a
 checkpointer, or branching on the kind of question. For a single question and
-answer, the engine's plain loop is simpler and does the same job, which is why
-it stays the default.
+answer the engine's plain loop does the same job with less, which is why it
+stays the default.
 
 ## When the name is not installed
 

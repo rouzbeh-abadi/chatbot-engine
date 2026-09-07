@@ -16,7 +16,7 @@ services:
   # browser only ever talks to one origin.
   frontend:
     build:
-      context: ./frontend
+      context: ./examples/frontend
     ports:
       - "5173:80"
     depends_on:
@@ -70,7 +70,7 @@ services:
 
   backend:
     build:
-      context: ./backend
+      context: ./examples/backend
     ports:
       - "8000:8000"
     environment:
@@ -92,7 +92,7 @@ services:
   # This project's domain tools, exposed to the engine over MCP.
   mcp-tools:
     build:
-      context: ./backend
+      context: ./examples/backend
     command: ["python", "-m", "support_agent.mcp_tools"]
     ports:
       - "8200:8200"

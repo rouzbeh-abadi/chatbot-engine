@@ -534,7 +534,7 @@ dev = [
 requires-dist = [
     { name = "chatbot-engine", editable = "engine" },
     { name = "langgraph-agent", editable = "examples/langgraph-agent" },
-    { name = "support-agent", editable = "backend" },
+    { name = "support-agent", editable = "examples/backend" },
 ]
 
 [package.metadata.requires-dev]
@@ -3442,7 +3442,7 @@ wheels = [
 [[package]]
 name = "support-agent"
 version = "0.1.0"
-source = { editable = "backend" }
+source = { editable = "examples/backend" }
 dependencies = [
     { name = "alembic" },
     { name = "fastapi", extra = ["standard"] },

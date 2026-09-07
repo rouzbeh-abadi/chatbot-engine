@@ -28,7 +28,7 @@ dependencies = [
 package = false
 
 [tool.uv.workspace]
-members = ["engine", "backend", "examples/langgraph-agent"]
+members = ["engine", "examples/backend", "examples/langgraph-agent"]
 
 [tool.uv.sources]
 support-agent = { workspace = true }
@@ -41,5 +41,5 @@ langgraph-agent = { workspace = true }
 dev = ["pytest>=8.0", "pytest-asyncio>=0.24", "langgraph>=0.2"]
 
 [tool.pytest.ini_options]
-testpaths = ["engine/tests", "backend/tests", "tests"]
+testpaths = ["engine/tests", "examples/backend/tests", "tests"]
 asyncio_mode = "auto"

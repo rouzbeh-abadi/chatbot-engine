@@ -99,7 +99,7 @@ src/
 
 `api/types.ts` is a deliberate copy of the backend's event contract, not a
 generated client; the frontend is a separate deployable. Keep it in step with
-`backend/src/support_agent/engine_client/models.py`.
+`examples/backend/src/support_agent/engine_client/models.py`.
 
 ## Notes
 

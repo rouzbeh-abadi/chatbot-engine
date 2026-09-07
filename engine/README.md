@@ -82,23 +82,25 @@ no business having one. That check belongs in the service calling it.
 
 ## Agents
 
-A turn runs either as the built-in tool loop or as a LangGraph state machine,
-chosen per assistant:
+A turn is run by an agent. The engine ships exactly one, a plain tool loop, and
+depends on no agent framework: choosing LangGraph, or anything else, is an
+application decision and belongs to you.
 
-```yaml
-agent: loop     # loop | graph
+Everything else is a plugin. Write a class with a `run` method, point an entry
+point at a factory, and install it wherever the engine runs:
+
+```toml
+[project.entry-points."chatbot_engine.agents"]
+my-agent = "my_package.agent:build"
 ```
 
-Both emit the same events, so the choice is invisible to the caller. You can
-also install your own agent and select it by name, without forking the engine.
-The bundled graph needs an optional extra:
+It then appears in `GET /agents` and is selectable with `agent: my-agent`. The
+engine never learns its name any other way, and a name it does not have is a
+`422` listing the ones it does.
 
-```bash
-pip install "chatbot-engine[graph]"
-```
-
-The loop is the default, and is the right answer until a turn needs to pause,
-branch, or resume. **[Agents](../docs/agents.md)** explains the trade.
+A working plugin to copy lives in `examples/langgraph-agent/`, and
+**[Agents](../docs/agents.md)** covers the event contract your agent owes its
+caller.
 
 ## Connecting a backend to it
 
