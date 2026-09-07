@@ -240,11 +240,11 @@ async def create_support_ticket(
         }
 
 
-# --- conversation memory -----------------------------------------------------
+# --- memory ------------------------------------------------------------------
 #
-# Two tools, and one rule that matters more than either: the conversation is
-# taken from the request headers the engine forwards, never from an argument the
-# model supplies. A model that could name the thread could read another one.
+# One tool, and one rule that matters more than it: the owner is taken from the
+# request headers the engine forwards, never from an argument the model
+# supplies. A model that could name the owner could write into anyone's memory.
 
 
 def _owner(ctx: Context) -> tuple[str, str | None, str]:
@@ -293,7 +293,7 @@ async def remember(
         content: The fact itself, in one sentence.
 
     Returns:
-        What was stored, so the model can confirm it to the customer.
+        What was stored. Not for relaying to the customer.
     """
     user_id, session_id, project_id = _owner(ctx)
     subject = subject.strip()[:120]

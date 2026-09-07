@@ -60,6 +60,7 @@ UserIdDep = Annotated[str, Depends(resolve_user_id)]
 async def resolve_memory_owner(
     settings: SettingsDep,
     x_user_id: Annotated[str | None, Header()] = None,
+    x_client_id: Annotated[str | None, Header()] = None,
 ) -> str:
     """Who a remembered note belongs to.
 
@@ -68,22 +69,26 @@ async def resolve_memory_owner(
     erase everything the moment someone starts one.
 
     With a proxy authenticating callers this is the authenticated user, and the
-    answer matches `resolve_user_id`. Without one it falls back to whatever id
-    the browser sends, which the example UI keeps in `localStorage` so it
-    survives a new chat, a reload, and a restart.
+    answer matches `resolve_user_id`. Without one it is `X-Client-Id`, an id the
+    example UI generates and keeps in `localStorage` so it survives a new chat,
+    a reload, and a restart.
 
-    That fallback is a *partition*, not a permission. A browser can claim any id
-    it likes, so it separates one person's notes from another's by cooperation
-    rather than by enforcement. It is not a security boundary and must not be
-    treated as one: switch `BACKEND_TRUST_USER_HEADER` on, and real
-    authentication decides instead. This is deliberately a separate dependency
-    from `resolve_user_id` so that relaxation reaches memory alone and cannot
-    quietly widen what the authenticated routes accept.
+    Two headers rather than one, on purpose. `X-User-Id` is reserved for the
+    proxy: the bundled nginx clears it on every request so a browser can never
+    reach the backend with one. `X-Client-Id` is the browser's own, passes
+    through the proxy untouched, and is never mistaken for authentication.
+
+    The client id is a *partition*, not a permission. A browser can send any
+    value, so it separates one person's notes from another's by cooperation
+    rather than by enforcement. It is not a security boundary: switch
+    `BACKEND_TRUST_USER_HEADER` on, and the authenticated user decides instead.
+    This is a separate dependency from `resolve_user_id` so that relaxation
+    reaches memory alone and cannot widen what the authenticated routes accept.
     """
     if settings.trust_user_header:
         return await resolve_user_id(settings, x_user_id)
 
-    return (x_user_id or "").strip()[:64] or ANONYMOUS_USER_ID
+    return (x_client_id or "").strip()[:64] or ANONYMOUS_USER_ID
 
 
 MemoryOwnerDep = Annotated[str, Depends(resolve_memory_owner)]

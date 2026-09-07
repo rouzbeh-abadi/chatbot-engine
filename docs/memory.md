@@ -26,17 +26,20 @@ The owner of a note is resolved in
 [`api/identity.py`](../examples/backend/src/support_agent/api/identity.py) by
 the `resolve_memory_owner` dependency.
 
-| `BACKEND_TRUST_USER_HEADER` | Owner | Forgeable |
-| --- | --- | --- |
-| `1` (proxy authenticates callers) | the authenticated user | no |
-| unset (default) | the `X-User-Id` value sent by the client | yes |
+| `BACKEND_TRUST_USER_HEADER` | Owner | Header | Forgeable |
+| --- | --- | --- | --- |
+| `1` (proxy authenticates callers) | the authenticated user | `X-User-Id`, set by the proxy | no |
+| unset (default) | the browser's client id | `X-Client-Id`, set by the browser | yes |
 
-In the default configuration the client supplies its own identifier. The example
-UI generates one and stores it in `localStorage`, which gives each browser a
-stable identity across chats and restarts.
+The two headers are deliberately distinct. `X-User-Id` is the proxy's: the
+bundled nginx clears it on every request, so a browser can never reach the
+backend with one. `X-Client-Id` is the browser's own, passes through the proxy
+untouched, and is never treated as authentication. The example UI generates it
+once and stores it in `localStorage`, which gives each browser a stable
+identity across chats and restarts.
 
-**This identifier partitions data; it does not protect it.** Any client can send
-any user's identifier and read that user's notes. Two constraints follow:
+**The client id partitions data; it does not protect it.** Any client can send
+any other client's id and read its notes. Two constraints follow:
 
 1. Do not key authorisation on `user_id` while the default configuration is in
    use. Memory is the only consumer of it today, which is what makes the current
@@ -68,7 +71,7 @@ to the engine, `recall_for_prompt` loads the caller's notes and appends them to
 the system prompt.
 
 ```
-POST /chat  X-User-Id: u-123
+POST /chat  X-Client-Id: u-123
       |
       +-- load notes for u-123
       +-- append to the system prompt
@@ -141,7 +144,7 @@ all later conversations for that user.
 ## API
 
 ```http
-GET    /memory     notes belonging to the caller in X-User-Id
+GET    /memory     notes belonging to the caller (X-Client-Id, or the proxy's X-User-Id)
 DELETE /memory     erase them
 ```
 

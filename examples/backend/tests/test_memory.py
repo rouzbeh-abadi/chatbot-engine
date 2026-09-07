@@ -36,8 +36,8 @@ OWNERS = [ALICE, BOB, DECOY]
 
 
 def _as(user_id: str) -> dict[str, str]:
-    """The identity header the browser sends. The backend trusts no other."""
-    return {"X-User-Id": user_id}
+    """The browser's own id. `X-User-Id` is the proxy's and never reaches here."""
+    return {"X-Client-Id": user_id}
 
 
 async def _has_database() -> bool:
@@ -265,3 +265,15 @@ async def test_a_blank_note_is_refused(store) -> None:
     )
 
     assert result["status"] == "rejected"
+
+
+async def test_a_browser_cannot_claim_identity_through_the_proxy_header(
+    client: TestClient, store
+) -> None:
+    """`X-User-Id` belongs to the proxy. With no proxy vouching for it, it is
+    ignored here too, so the only id a browser can set is its own client id."""
+    await store(ALICE, "seat", "aisle")
+
+    seen = client.get("/memory", headers={"X-User-Id": ALICE}).json()
+
+    assert all(row["subject"] != "seat" for row in seen)

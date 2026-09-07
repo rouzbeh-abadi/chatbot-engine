@@ -5,17 +5,22 @@
  * outlives a chat. This one is generated once and kept in `localStorage`, so it
  * survives New chat, a reload, and a restart, and two browsers stay separate.
  *
- * It is a partition, not a login. Anyone can set this header to anyone's id, so
- * it separates people by cooperation rather than by enforcement. That is only
+ * It travels as `X-Client-Id`, not `X-User-Id`. The latter is reserved for a
+ * proxy that has authenticated the user, and the bundled nginx clears it on
+ * every request so a browser can never reach the backend with one. This header
+ * passes through untouched and is never mistaken for authentication.
+ *
+ * It is a partition, not a login. Anyone can set it to anyone's id, so it
+ * separates people by cooperation rather than by enforcement. That is only
  * acceptable because the example backend authenticates nobody; with
  * BACKEND_TRUST_USER_HEADER on, the backend ignores this and uses the
  * authenticated user instead.
  */
-const KEY = "chatbot-engine.user-id";
+const KEY = "chatbot-engine.client-id";
 
 let cached: string | null = null;
 
-export function userId(): string {
+export function clientId(): string {
   if (cached) return cached;
 
   try {
@@ -37,17 +42,17 @@ export function userId(): string {
 }
 
 /** Start again as someone new, forgetting everything stored about this browser. */
-export function resetUserId(): string {
+export function resetClientId(): string {
   cached = null;
   try {
     localStorage.removeItem(KEY);
   } catch {
     // Nothing to clear; `cached` was the only copy.
   }
-  return userId();
+  return clientId();
 }
 
-/** The identity header every request that touches memory must carry. */
+/** The header every request that touches memory must carry. */
 export function identityHeaders(): Record<string, string> {
-  return { "X-User-Id": userId() };
+  return { "X-Client-Id": clientId() };
 }

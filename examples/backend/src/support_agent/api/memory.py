@@ -8,11 +8,11 @@ Scoped to whoever `api/identity.py` says is calling, not to the conversation.
 That is what makes it long-term: a new chat is a new thread, so keying on the
 thread would erase everything the moment someone started one.
 
-Without a proxy authenticating callers, that identity is an id the browser
-supplies, so anyone who knows another person's id can read their notes. That is
-a partition, not a permission, and it is only acceptable because nothing here is
-authenticated yet. Switch `BACKEND_TRUST_USER_HEADER` on and the id becomes the
-authenticated user instead.
+Without a proxy authenticating callers, that identity is the `X-Client-Id` the
+browser supplies, so anyone who knows another person's id can read their notes.
+That is a partition, not a permission, and it is only acceptable because
+nothing here is authenticated yet. Switch `BACKEND_TRUST_USER_HEADER` on and
+the authenticated user decides instead.
 """
 
 from __future__ import annotations

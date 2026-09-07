@@ -71,7 +71,7 @@ export class ApiError extends Error {
     this.name = "ApiError";
   }
 
-  /** The engine is reachable but that capability has no implementation yet. */
+  /** The engine is reachable but missing configuration, such as its provider key. */
   get isNotImplemented(): boolean {
     return this.status === 501;
   }

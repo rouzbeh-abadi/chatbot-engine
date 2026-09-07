@@ -70,9 +70,9 @@ def _build_request(
         )
 
     # `user_id` has already been decided by `api/identity.py`. Behind a proxy it
-    # is the authenticated user; otherwise it is the id the browser keeps, which
-    # is what lets memory outlive a conversation without authentication. The
-    # engine forwards it to the tool server as `X-User-Id` and attaches no
+    # is the authenticated user; otherwise it is the browser's `X-Client-Id`,
+    # which is what lets memory outlive a conversation without authentication.
+    # The engine forwards it to the tool server as `X-User-Id` and attaches no
     # meaning to it.
     #
     # What is still missing for a multi-tenant product is authorisation: nothing
