@@ -13,10 +13,12 @@ import type {
   ChatRequest,
   DocumentRecord,
   EvalCaseInfo,
+  MemoryRow,
   EvalRunResult,
   RagReport,
   TicketRow,
 } from "./types";
+import { identityHeaders } from "./identity";
 
 const BASE = import.meta.env.VITE_API_BASE ?? "/api";
 
@@ -102,7 +104,9 @@ export async function* streamChat(
 ): AsyncGenerator<ChatEvent> {
   const response = await fetch(`${BASE}/chat`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    // The identity header is what lets the assistant recall anything: the
+    // backend loads this person's notes before the turn reaches the engine.
+    headers: { "Content-Type": "application/json", ...identityHeaders() },
     body: JSON.stringify(request),
     signal,
   });
@@ -178,6 +182,20 @@ export async function listDocuments(): Promise<DocumentRecord[]> {
 /** The models the backend allows the UI to pick, the default first. */
 export async function listModels(): Promise<string[]> {
   return getJson<string[]>("/models");
+}
+
+/** What the assistant has stored about this browser's user, across all chats. */
+export async function listMemory(): Promise<MemoryRow[]> {
+  return getJson<MemoryRow[]>("/memory", identityHeaders());
+}
+
+/** Erase everything stored about this browser's user. */
+export async function forgetMemory(): Promise<void> {
+  const response = await fetch(`${BASE}/memory`, {
+    method: "DELETE",
+    headers: identityHeaders(),
+  });
+  if (!response.ok) throw new ApiError(response.status, await detailOf(response));
 }
 
 /**

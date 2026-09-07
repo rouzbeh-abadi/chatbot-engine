@@ -156,6 +156,7 @@ async def run_tool_calls(
                 name=name,
                 arguments=call["args"],
                 user_id=request.user_id,
+                session_id=request.session_id,
             )
             ok, error = True, None
         except Exception as exc:

@@ -28,7 +28,12 @@ from chatbot_engine.models.chat import AssistantConfig
 
 
 @asynccontextmanager
-async def _session(target: McpTarget, *, user_id: str | None = None):
+async def _session(
+    target: McpTarget,
+    *,
+    user_id: str | None = None,
+    session_id: str | None = None,
+):
     """Open one MCP session to a target, with the configured timeout.
 
     The timeout matters: without it a tool server that accepts a connection but
@@ -38,7 +43,14 @@ async def _session(target: McpTarget, *, user_id: str | None = None):
     A caller-provided http client is not lifecycle-managed by the transport, so
     it is opened here and closed when the session ends.
     """
-    headers = {"X-User-Id": user_id} if user_id else None
+    # Who is asking, and which conversation this is. Both are the caller's own
+    # identifiers, forwarded untouched: the engine attaches no meaning to either,
+    # but a tool server needs them to scope what it reads and writes.
+    headers = {
+        key: value
+        for key, value in (("X-User-Id", user_id), ("X-Session-Id", session_id))
+        if value
+    } or None
     async with (
         create_mcp_http_client(
             headers=headers, timeout=httpx2.Timeout(target.timeout_s)
@@ -118,6 +130,7 @@ class McpToolProvider:
         name: str,
         arguments: Mapping[str, Any],
         user_id: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         """Invoke one allowlisted tool on a configured MCP server.
 
@@ -146,7 +159,9 @@ class McpToolProvider:
                 f"Tool {name!r} is not allowed on MCP server {server!r}."
             )
 
-        async with _session(target, user_id=user_id) as session:
+        async with _session(
+            target, user_id=user_id, session_id=session_id
+        ) as session:
             result = await session.call_tool(
                 name,
                 dict(arguments),

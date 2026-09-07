@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentPicker } from "./components/AgentPicker";
+import { MemoryPanel } from "./components/MemoryPanel";
 import { ModelPicker } from "./components/ModelPicker";
 import { ApiError, streamChat } from "./api/client";
 import { Composer } from "./components/Composer";
@@ -73,6 +74,26 @@ export default function App() {
   /** Null until someone picks -- the YAML's own agent applies until then. */
   const [agent, setAgent] = useState<string | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  /** This conversation. A new chat is a new id, and the assistant's notes are
+   *  scoped to it, so starting one really does start from nothing. */
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  /** Bumped after each answer so the memory panel re-reads what the turn stored. */
+  const [turn, setTurn] = useState(0);
+
+  /**
+   * Start a new conversation: a new thread id, and no history carried over.
+   *
+   * Memory is not cleared. It belongs to the person, not the thread, which is
+   * what makes it long-term; use Forget everything in the memory panel to clear
+   * it.
+   */
+  const newChat = () => {
+    abort.current?.abort();
+    setMessages([]);
+    setSessionId(crypto.randomUUID());
+    setTurn((n) => n + 1);
+  };
   const abort = useRef<AbortController | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
 
@@ -126,6 +147,7 @@ export default function App() {
             history,
             model: model ?? undefined,
             agent: agent ?? undefined,
+            session_id: sessionId,
           },
           controller.signal,
         );
@@ -195,10 +217,13 @@ export default function App() {
       } finally {
         patch(answer.id, (m) => ({ ...m, streaming: false }));
         setBusy(false);
+        // The assistant may have written a note mid-answer, through a tool the
+        // browser never sees. Nudge the memory panel to re-read.
+        setTurn((n) => n + 1);
         abort.current = null;
       }
     },
-    [messages, patch, model, agent],
+    [messages, patch, model, agent, sessionId],
   );
 
   return (
@@ -209,6 +234,19 @@ export default function App() {
           <div className="header__actions">
             <button
               type="button"
+              className="btn btn--ghost"
+              onClick={() => setMemoryOpen(true)}
+            >
+              Memory
+            </button>
+            <button
+              className="btn btn--ghost"
+              onClick={newChat}
+              disabled={busy || messages.length === 0}
+            >
+              New chat
+            </button>
+            <button
               className="btn btn--ghost"
               onClick={() => setAdminOpen(true)}
             >
@@ -260,6 +298,12 @@ export default function App() {
       </footer>
 
       {adminOpen && <Admin onClose={() => setAdminOpen(false)} />}
+      {memoryOpen && (
+        <MemoryPanel
+          turn={turn}
+          onClose={() => setMemoryOpen(false)}
+        />
+      )}
     </div>
   );
 }

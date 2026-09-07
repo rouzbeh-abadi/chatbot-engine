@@ -21,16 +21,21 @@ from __future__ import annotations
 
 from datetime import date
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver import Context, MCPServer
 from sqlalchemy import select
 
 from support_agent.database.connection import get_session_factory
-from support_agent.database.models import Booking, Flight, SupportTicket
+from support_agent.database.models import Booking, Flight, Memory, SupportTicket
 
 HOST = "0.0.0.0"
 PORT = 8200
 
 TICKET_CATEGORIES = ("refund", "baggage", "schedule_change", "complaint", "other")
+
+#: Which assistant's memory these tools read and write. One project today; a
+#: multi-project backend would take it from the request the same way the
+#: conversation id is taken.
+DEFAULT_PROJECT_ID = "support"
 
 mcp = MCPServer(
     name="support-tools",
@@ -235,6 +240,93 @@ async def create_support_ticket(
         }
 
 
+# --- conversation memory -----------------------------------------------------
+#
+# Two tools, and one rule that matters more than either: the conversation is
+# taken from the request headers the engine forwards, never from an argument the
+# model supplies. A model that could name the thread could read another one.
+
+
+def _owner(ctx: Context) -> tuple[str, str | None, str]:
+    """Who this note belongs to, where it was noted, and which project.
+
+    The owner comes from the header the engine forwards, never from a tool
+    argument: a model that could name the owner could write into someone else's
+    memory, or read it back.
+
+    Raises rather than guessing. A note written to the wrong person, or read
+    from everyone, is worse than a tool that says it cannot run.
+    """
+    headers = ctx.headers or {}
+    user_id = headers.get("x-user-id") or headers.get("X-User-Id")
+    session_id = headers.get("x-session-id") or headers.get("X-Session-Id")
+
+    if not user_id:
+        raise ValueError(
+            "no user id on this request, so memory cannot be scoped; "
+            "the caller must send a user_id"
+        )
+
+    return user_id, session_id, DEFAULT_PROJECT_ID
+
+
+@mcp.tool()
+async def remember(
+    ctx: Context,
+    subject: str,
+    content: str,
+) -> dict[str, str]:
+    """Store one fact about this customer, for this and later conversations.
+
+    Use it when the customer states a lasting preference or detail worth having
+    later ("I always fly economy", "my company pays for changes"). Do not use it
+    for anything they would not expect a support agent to write down, and never
+    for payment details, passwords, or identity documents.
+
+    Storing the same `subject` twice replaces the earlier value, so a changed
+    preference corrects the old one rather than sitting beside it.
+
+    Do not announce that you stored something. Note it and carry on answering.
+
+    Args:
+        subject: A short label for what this is about, e.g. "seat preference".
+        content: The fact itself, in one sentence.
+
+    Returns:
+        What was stored, so the model can confirm it to the customer.
+    """
+    user_id, session_id, project_id = _owner(ctx)
+    subject = subject.strip()[:120]
+    content = content.strip()[:2000]
+
+    if not subject or not content:
+        return {"status": "rejected", "message": "A subject and content are required."}
+
+    async with get_session_factory()() as session:
+        existing = await session.scalar(
+            select(Memory).where(
+                Memory.user_id == user_id,
+                Memory.project_id == project_id,
+                Memory.subject == subject,
+            )
+        )
+        if existing is None:
+            session.add(
+                Memory(
+                    user_id=user_id,
+                    session_id=session_id,
+                    project_id=project_id,
+                    subject=subject,
+                    content=content,
+                )
+            )
+        else:
+            existing.content = content
+        await session.commit()
+
+    return {"status": "stored", "subject": subject, "content": content}
+
+
 def main() -> None:
     """Start the backend MCP tool server over streamable HTTP."""
     mcp.run(
@@ -246,3 +338,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

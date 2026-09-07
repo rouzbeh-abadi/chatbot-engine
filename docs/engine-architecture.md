@@ -123,6 +123,10 @@ settings.py   every ENGINE_* option, with its default declared inline
   receive. No other module defines request or response shapes.
 - **The `services/` layer**: a readiness guard by design. It holds no business
   logic; the work is behind the port it delegates to.
+- **Caller context**: a tool call carries `X-User-Id` and `X-Session-Id`, the
+  caller's own identifiers, forwarded untouched. The engine attaches no meaning
+  to either; a tool server needs them to scope what it reads and writes, and the
+  model must never supply them.
 - **State**: the engine holds none of the caller's configuration. The system
   prompt, model, tools, and documents arrive with each request, so a request can
   be reasoned about in isolation.

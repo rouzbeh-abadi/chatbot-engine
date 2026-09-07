@@ -74,15 +74,32 @@ def test_chat_sends_the_project_config_the_engine_needs(
 # --- who the caller is -------------------------------------------------------
 
 
-def test_chat_ignores_a_user_id_the_caller_made_up(
+def test_chat_passes_on_an_unauthenticated_user_id(
     client: TestClient, engine: FakeEngine
 ) -> None:
-    """`X-User-Id` is a header; a browser can type anything into it.
+    """With no proxy, `X-User-Id` is believed, and that is a deliberate trade.
 
-    With no proxy vouching for it (`BACKEND_TRUST_USER_HEADER` off) it must not
-    reach the engine, or every caller can claim to be every user.
+    Long-term memory has to follow a person across conversations, and the tool
+    server can only scope it by the id the engine forwards. So with
+    `BACKEND_TRUST_USER_HEADER` off this id is passed through: it partitions one
+    browser's notes from another's, and it is spoofable, because nothing here is
+    authenticated in the first place.
+
+    It is only safe while memory is the sole thing keyed on it. Anything that
+    grants *access* by user id must not be added without turning the proxy on;
+    see `test_chat_uses_the_user_id_a_trusted_proxy_set` for the version that
+    cannot be forged.
     """
     client.post("/chat/sync", json={"message": "hi"}, headers={"X-User-Id": "alice"})
+
+    assert engine.chat_requests[0].user_id == "alice"
+
+
+def test_chat_without_any_identity_is_anonymous(
+    client: TestClient, engine: FakeEngine
+) -> None:
+    """A caller that sends nothing still gets a stable bucket to remember into."""
+    client.post("/chat/sync", json={"message": "hi"})
 
     assert engine.chat_requests[0].user_id == "anonymous"
 

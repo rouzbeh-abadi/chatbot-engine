@@ -190,3 +190,11 @@ export interface RagReport {
   by_category: RagCategorySummary[];
   model: string | null;
 }
+
+/** One thing the assistant stored about the current user. */
+export interface MemoryRow {
+  subject: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}

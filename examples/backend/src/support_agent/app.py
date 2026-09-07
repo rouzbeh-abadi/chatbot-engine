@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from support_agent.api.chat import router as chat_router
 from support_agent.api.documents import router as documents_router
+from support_agent.api.memory import router as memory_router
 from support_agent.api.admin import router as admin_router
 from support_agent.api.options import router as options_router
 from support_agent.engine_client import (
@@ -104,4 +105,5 @@ async def health() -> dict[str, str]:
 app.include_router(chat_router)
 app.include_router(documents_router)
 app.include_router(options_router)
+app.include_router(memory_router)
 app.include_router(admin_router)

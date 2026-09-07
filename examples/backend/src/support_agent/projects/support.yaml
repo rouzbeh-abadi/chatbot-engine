@@ -45,3 +45,4 @@ mcp_servers:
       - get_booking_status
       - get_flight_status
       - create_support_ticket
+      - remember

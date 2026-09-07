@@ -23,6 +23,7 @@ It owns no prompts, no retrieval, no chunking and no model calls.
 | `app.py` | The app, `/health`, and engine-error → HTTP status mapping |
 | `api/chat.py` | `POST /chat`, `/chat/sync` |
 | `api/documents.py` | Upload, list and delete the knowledge base |
+| `api/memory.py` | Read and erase a person's notes, and load them into the prompt |
 | `api/admin.py` | The admin dashboard: data views and evaluation runs |
 | `api/auth.py` | The `BACKEND_ADMIN_KEY` guard on the privileged routes |
 | `api/identity.py` | Who the caller is; the seam for real authentication |
@@ -63,6 +64,7 @@ database:
 | `get_booking_status` | passenger, route, fare, baggage, **flight number**, status |
 | `get_flight_status` | on time / delayed / cancelled, times, gate |
 | `create_support_ticket` | a ticket row, after checking the booking exists |
+| `remember` | stores one note about the customer, kept for later conversations |
 
 `get_booking_status` returns the flight number on purpose: it is what lets the
 model chain a second call ("my booking is AB12CD, is my flight delayed?"), which

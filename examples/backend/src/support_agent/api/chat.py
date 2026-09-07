@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from support_agent.api.identity import UserIdDep
+from support_agent.api.identity import MemoryOwnerDep
+from support_agent.api.memory import recall_for_prompt
 from support_agent.api.options import CHAT_MODELS
 from support_agent.api.rate_limit import limit_chat
 from support_agent.api.schemas import ChatRequest, ChatResult
@@ -21,16 +22,28 @@ router = APIRouter(
 )
 
 
-def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:
+def _project(body: ChatRequest):
+    """The assistant config the request names, or 404.
+
+    Separate from `_build_request` because the memory lookup needs the project
+    id too, and an unknown project must answer 404 before anything else runs.
+    `load_project` is cached, so asking twice costs nothing.
+    """
+    try:
+        return load_project(body.project)
+    except ProjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def _build_request(
+    body: ChatRequest, user_id: str, notes: str = ""
+) -> EngineChatRequest:
     """Turn the frontend request into the engine request.
 
     Loads the assistant config server-side and applies the model override, so the
     engine always receives a complete, validated definition the browser never saw.
     """
-    try:
-        project = load_project(body.project)
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    project = _project(body)
 
     if body.model is not None:
         if body.model not in CHAT_MODELS:
@@ -46,8 +59,22 @@ def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:
         # which passes straight back through.
         project = project.model_copy(update={"agent": body.agent})
 
-    # `user_id` has already been decided by `api/identity.py` -- it is either a
-    # proxy-authenticated id or `anonymous`, never whatever the browser typed.
+    if notes:
+        # Read deterministically rather than through a tool the model may not
+        # think to call. A preference it has to *decide* to look up is a
+        # preference it will sometimes ignore, which reads as the assistant
+        # having forgotten. Writing stays a tool: the model chooses what is
+        # worth keeping, but it never chooses whether to remember at all.
+        project = project.model_copy(
+            update={"system_prompt": f"{project.system_prompt}\n\n{notes}"}
+        )
+
+    # `user_id` has already been decided by `api/identity.py`. Behind a proxy it
+    # is the authenticated user; otherwise it is the id the browser keeps, which
+    # is what lets memory outlive a conversation without authentication. The
+    # engine forwards it to the tool server as `X-User-Id` and attaches no
+    # meaning to it.
+    #
     # What is still missing for a multi-tenant product is authorisation: nothing
     # checks that *this* user may use *this* project. The engine only ever sees
     # an opaque id, so that check belongs here.
@@ -64,14 +91,15 @@ def _build_request(body: ChatRequest, user_id: str) -> EngineChatRequest:
 async def chat(
     body: ChatRequest,
     engine: EngineDep,
-    user_id: UserIdDep,
+    user_id: MemoryOwnerDep,
 ) -> StreamingResponse:
     """Receive a chat request from the client and stream the engine response back.
 
     The client request is converted to an engine request, sent to the chatbot engine,
     and the returned events are streamed back to the client using SSE.
     """
-    request = _build_request(body, user_id)
+    notes = await recall_for_prompt(user_id, _project(body).project_id)
+    request = _build_request(body, user_id, notes)
 
     # Awaited, so an unreachable engine or a 501 becomes a proper status code
     # here rather than an empty 200 with the error buried in the stream.
@@ -88,8 +116,9 @@ async def chat(
 async def chat_sync(
     body: ChatRequest,
     engine: EngineDep,
-    user_id: UserIdDep,
+    user_id: MemoryOwnerDep,
 ) -> ChatResult:
     """Non-streaming variant, for smoke tests and simple clients."""
-    request = _build_request(body, user_id)
+    notes = await recall_for_prompt(user_id, _project(body).project_id)
+    request = _build_request(body, user_id, notes)
     return await collect(await engine.start_chat(request))

@@ -78,6 +78,7 @@ class ToolProvider(Protocol):
         name: str,
         arguments: Mapping[str, Any],
         user_id: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         """Invoke one allowlisted tool on a configured tool server.
 

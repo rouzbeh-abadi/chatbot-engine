@@ -55,3 +55,35 @@ async def resolve_user_id(
 
 
 UserIdDep = Annotated[str, Depends(resolve_user_id)]
+
+
+async def resolve_memory_owner(
+    settings: SettingsDep,
+    x_user_id: Annotated[str | None, Header()] = None,
+) -> str:
+    """Who a remembered note belongs to.
+
+    Long-term memory has to follow a person across conversations, so it cannot
+    be keyed on the thread: a new chat is a new thread, and keying on it would
+    erase everything the moment someone starts one.
+
+    With a proxy authenticating callers this is the authenticated user, and the
+    answer matches `resolve_user_id`. Without one it falls back to whatever id
+    the browser sends, which the example UI keeps in `localStorage` so it
+    survives a new chat, a reload, and a restart.
+
+    That fallback is a *partition*, not a permission. A browser can claim any id
+    it likes, so it separates one person's notes from another's by cooperation
+    rather than by enforcement. It is not a security boundary and must not be
+    treated as one: switch `BACKEND_TRUST_USER_HEADER` on, and real
+    authentication decides instead. This is deliberately a separate dependency
+    from `resolve_user_id` so that relaxation reaches memory alone and cannot
+    quietly widen what the authenticated routes accept.
+    """
+    if settings.trust_user_header:
+        return await resolve_user_id(settings, x_user_id)
+
+    return (x_user_id or "").strip()[:64] or ANONYMOUS_USER_ID
+
+
+MemoryOwnerDep = Annotated[str, Depends(resolve_memory_owner)]

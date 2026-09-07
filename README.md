@@ -44,6 +44,10 @@ replace all of it.
 - **Chunking strategies.** Cut documents by fixed size, by Markdown heading, or
   by page. Chosen per project, so PDFs can carry page numbers into their
   citations. See [docs/chunking.md](docs/chunking.md).
+- **Long-term memory.** The assistant keeps notes about a customer and uses them
+  in later conversations. Scoped to the person, so a new chat does not lose
+  them, and visible and erasable from the UI. See
+  [docs/memory.md](docs/memory.md).
 - **Conversation export.** Download a transcript as JSON, CSV, or PDF.
 - **Admin dashboard.** Inspect the application data and run the evaluation from
   the browser, behind a shared operator key (`BACKEND_ADMIN_KEY`).
@@ -261,6 +265,9 @@ all of it.
   connect a backend to the engine.
 - **[docs/agents.md](docs/agents.md)** covers the two agents, when a graph is
   worth its weight, and how to add a third.
+- **[docs/memory.md](docs/memory.md)** covers long-term memory: what is stored,
+  why reading is injected rather than a tool, and why the unauthenticated owner
+  id partitions notes without protecting them.
 - **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies:
   what each cuts at, when to use it, and why changing one means re-indexing.
 - **[engine/README.md](engine/README.md)** covers the engine itself.

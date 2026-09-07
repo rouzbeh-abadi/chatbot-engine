@@ -7,6 +7,7 @@ below or autogenerate will silently miss them.
 
 from support_agent.database.models.booking import Booking
 from support_agent.database.models.flight import Flight
+from support_agent.database.models.memory import Memory
 from support_agent.database.models.support_ticket import SupportTicket
 
-__all__ = ["Booking", "Flight", "SupportTicket"]
+__all__ = ["Booking", "Flight", "Memory", "SupportTicket"]
