@@ -165,4 +165,4 @@ jobs:
           ghcr.io/$REPO/frontend:$tag
           \`\`\`
 
-          Running this where other people can reach it: see [DEPLOYMENT.md](DEPLOYMENT.md)."
+          Running this where other people can reach it: see [DEPLOYMENT.md](https://github.com/$REPO/blob/$VERSION/DEPLOYMENT.md)."
