@@ -85,6 +85,352 @@
         }
       ],
       "reference": "A passport may need to remain valid for a minimum period after the planned travel date, and some destinations also require empty passport pages. Requirements should be verified with official government or consular sources."
+    },
+    {
+      "id": "personal_item_size",
+      "category": "single_turn",
+      "question": "What size can my personal item be?",
+      "reference": "One personal item per passenger is permitted unless the booking states otherwise. The recommended maximum size is 40 × 30 × 15 cm, and it must fit under the seat in front."
+    },
+    {
+      "id": "single_bag_max_weight",
+      "category": "single_turn",
+      "question": "Is there a maximum weight for one checked bag?",
+      "reference": "A single checked bag must normally not exceed 32 kg, even when the passenger has a larger total allowance. Bags above the airline's individual bag limit may need to be repacked."
+    },
+    {
+      "id": "add_baggage_where",
+      "category": "single_turn",
+      "question": "How do I add a checked bag to my booking?",
+      "reference": "When the airline supports it, through My Trips → Manage booking → Baggage. Additional baggage depends on availability and airline pricing, and airport fees are often higher than advance online prices. If SkyDesk cannot sell it, buy it from the operating airline."
+    },
+    {
+      "id": "separate_tickets_baggage",
+      "category": "single_turn",
+      "question": "Do I have to collect my bags between flights booked on separate tickets?",
+      "reference": "When flights are on separate tickets, baggage normally must be collected and checked in again during the connection, and the passenger is responsible for allowing enough connection time."
+    },
+    {
+      "id": "power_banks",
+      "category": "single_turn",
+      "question": "Can I put a power bank in my checked bag?",
+      "reference": "Spare lithium batteries and power banks should generally be carried in cabin baggage rather than checked baggage."
+    },
+    {
+      "id": "lost_baggage",
+      "category": "single_turn",
+      "question": "My bag did not arrive. What should I do?",
+      "reference": "Report it at the airline's baggage desk before leaving the airport and obtain a Property Irregularity Report (PIR) or equivalent reference. SkyDesk cannot locate baggage or approve compensation, but can identify the operating airline and provide booking documents."
+    },
+    {
+      "id": "change_flight_costs",
+      "category": "single_turn",
+      "question": "What will it cost to change my flight date?",
+      "reference": "The new itinerary is repriced. The total can include the airline change fee, the difference between the original and new fare, taxes for the new itinerary, and disclosed service fees. If the new fare is cheaper, the difference is not automatically refundable."
+    },
+    {
+      "id": "flexible_free_change",
+      "category": "single_turn",
+      "question": "Are changes free on a flexible ticket?",
+      "reference": "A flexible fare reduces or removes the airline's change penalty but does not guarantee free changes, because a fare difference may still apply."
+    },
+    {
+      "id": "change_destination",
+      "category": "single_turn",
+      "question": "Can I change my ticket to fly somewhere else instead?",
+      "reference": "Most tickets do not permit arbitrary changes to the origin or destination. A customer wanting a completely different destination may need to cancel the original ticket and make a new booking."
+    },
+    {
+      "id": "name_transfer",
+      "category": "single_turn",
+      "question": "Can I give my ticket to a friend?",
+      "reference": "Complete transfer of a ticket to another person is generally prohibited by airlines. Minor spelling corrections may be possible and should be requested as soon as an error is noticed."
+    },
+    {
+      "id": "no_show",
+      "category": "single_turn",
+      "question": "What happens if I miss my outbound flight without telling anyone?",
+      "reference": "Missing a flight without changing or cancelling it beforehand can result in a no-show status, and on some tickets a no-show can also cancel later segments in the itinerary."
+    },
+    {
+      "id": "cancel_request_vs_refund",
+      "category": "single_turn",
+      "question": "If I cancel, do I get my money back automatically?",
+      "reference": "A cancellation request is not the same as a confirmed refund. After the request, SkyDesk checks the ticket conditions and communicates the applicable refundable amount. Some fares are fully refundable, some allow cancellation for a fee, and some are non-refundable."
+    },
+    {
+      "id": "airline_cancelled_options",
+      "category": "single_turn",
+      "question": "The airline cancelled my flight. What are my options?",
+      "reference": "Depending on the itinerary and airline, the customer may be offered rebooking on another flight, an alternative itinerary, a refund for the affected unused flight, or other options required by passenger-rights rules. SkyDesk displays the options received from the airline."
+    },
+    {
+      "id": "cancel_one_passenger",
+      "category": "single_turn",
+      "question": "Can I cancel just one passenger on our booking?",
+      "reference": "Self-service cancellation may apply to all passengers on the booking. If only one passenger wants to cancel, the booking may first need to be split by the airline."
+    },
+    {
+      "id": "partially_used",
+      "category": "single_turn",
+      "question": "I have already flown the first leg. Can I cancel the return?",
+      "reference": "For partially used bookings, cancellation and refund calculations can differ: the value of the used segment may be recalculated under the fare rules. Customers should contact support rather than cancelling the remaining itinerary without review."
+    },
+    {
+      "id": "travel_credit_nonrefundable",
+      "category": "single_turn",
+      "question": "If my fare is non-refundable, do I at least get a credit?",
+      "reference": "Customers should not assume that cancelling a non-refundable booking creates travel credit. Credit is available only where the fare conditions or the airline explicitly permit it."
+    },
+    {
+      "id": "checkin_info_needed",
+      "category": "single_turn",
+      "question": "What information do I need to check in online?",
+      "reference": "The airline booking reference, passenger surname, passport or identity document details, a destination address for certain countries, and visa or travel authorization information. The SkyDesk booking reference is not always the same as the airline booking reference."
+    },
+    {
+      "id": "codeshare_checkin",
+      "category": "single_turn",
+      "question": "My flight is a codeshare. Which airline do I check in with?",
+      "reference": "For codeshare bookings, check-in usually takes place with the airline actually operating the aircraft. The booking details identify the operating carrier."
+    },
+    {
+      "id": "checkin_deadline",
+      "category": "single_turn",
+      "question": "If I am at the airport before departure, can I still board?",
+      "reference": "Airlines close check-in before scheduled departure. Arriving at the airport before departure does not guarantee acceptance if the check-in deadline has passed."
+    },
+    {
+      "id": "online_checkin_unavailable",
+      "category": "single_turn",
+      "question": "Why can I not check in online?",
+      "reference": "Online check-in can be unavailable because of required passport or visa verification, special assistance, travelling with an infant, airline technical restrictions, schedule changes, airport-specific requirements, or incomplete passenger information. It does not necessarily mean the booking is invalid."
+    },
+    {
+      "id": "support_never_asks",
+      "category": "single_turn",
+      "question": "Will support ask for my card number to verify my identity?",
+      "reference": "No. Customers must never send full payment card numbers, CVV/CVC codes, online banking passwords, account passwords, or one-time authentication codes, and support will never request them. Payment cases may require only the transaction amount and the last four digits of the card."
+    },
+    {
+      "id": "ticket_categories",
+      "category": "single_turn",
+      "question": "What categories can a support ticket have?",
+      "reference": "Booking Change, Cancellation, Refund, Payment, Ticketing, Baggage, Check-in, Seat, and Technical Issue."
+    },
+    {
+      "id": "urgent_definition",
+      "category": "single_turn",
+      "question": "When is my case treated as urgent?",
+      "reference": "A case is time-sensitive when departure is within 24 hours and the customer cannot travel as booked because of a ticketing, schedule, check-in, or booking-management issue. Urgent classification does not guarantee that an airline will approve a requested change."
+    },
+    {
+      "id": "charged_no_confirmation",
+      "category": "single_turn",
+      "question": "My card was charged but I have no booking reference. What now?",
+      "reference": "Check My Trips before making another purchase, then contact support. Support will ask for the customer name, the email used at checkout, the approximate payment time, the amount and currency, and the last four digits of the card, and must never be sent a full card number, security code, banking password, or one-time code."
+    },
+    {
+      "id": "duplicate_charge",
+      "category": "single_turn",
+      "question": "I can see two charges for one booking. Was I charged twice?",
+      "reference": "Two visible transactions can be one completed payment and one temporary authorization, so first check whether both have fully settled. If two completed payments exist for the same booking, support can investigate and arrange a correction."
+    },
+    {
+      "id": "payment_declined_reason",
+      "category": "single_turn",
+      "question": "Why was my payment declined?",
+      "reference": "A decline can be caused by the issuing bank, authentication failure, spending limits, fraud controls, incorrect card information, or temporary payment-provider issues. Support usually cannot see the bank's exact reason. Customers can try again after confirming with their bank, or use another payment method."
+    },
+    {
+      "id": "refund_timing_card",
+      "category": "single_turn",
+      "question": "How long does a refund to my card take?",
+      "reference": "After the refund is released, card payments typically take 5 to 10 business days, and some debit and international cards up to 15 business days. Airline approval can take additional time before SkyDesk can release the refund."
+    },
+    {
+      "id": "refund_expired_card",
+      "category": "single_turn",
+      "question": "My card expired since I booked. Where will the refund go?",
+      "reference": "Refunds are normally sent to the original payment method. If the card has expired or been replaced, the issuing bank can often route the refund to the replacement account. Customers should contact their bank if a completed refund is not visible."
+    },
+    {
+      "id": "refund_statuses",
+      "category": "single_turn",
+      "question": "What are the possible refund statuses?",
+      "reference": "A refund request may be requested, under review, submitted to airline, approved, processing, completed, or rejected."
+    },
+    {
+      "id": "chargeback_advice",
+      "category": "single_turn",
+      "question": "Should I just dispute the charge with my bank?",
+      "reference": "Customers should contact SkyDesk before initiating a payment dispute when possible. A chargeback can prevent or delay an existing refund process because the payment becomes subject to the card provider's dispute procedure."
+    },
+    {
+      "id": "seat_free_assignment",
+      "category": "single_turn",
+      "question": "If I do not pay for seats, will my family sit together?",
+      "reference": "If a customer does not purchase a seat, the airline generally assigns one during check-in, and SkyDesk cannot guarantee that passengers on the same booking will be seated together. Families should check the operating airline's family seating rules."
+    },
+    {
+      "id": "seat_aircraft_change",
+      "category": "single_turn",
+      "question": "I paid for a specific seat. Can it still change?",
+      "reference": "Airlines can change aircraft for operational reasons, so a seat number may change even after it has been confirmed. When possible the airline assigns an equivalent seat, but an identical location cannot be guaranteed."
+    },
+    {
+      "id": "seat_fee_refund",
+      "category": "single_turn",
+      "question": "Can I get my seat fee back if I cancel?",
+      "reference": "Seat fees are generally non-refundable after voluntary cancellation or change unless the airline's conditions state otherwise. If the airline cannot provide a purchased seat because of an operational change, the customer may be eligible for a refund of the seat fee."
+    },
+    {
+      "id": "transit_visa",
+      "category": "single_turn",
+      "question": "I am only connecting through the airport. Do I need a visa?",
+      "reference": "A passenger may require a transit visa even when not intending to leave the airport. Self-transfer itineraries can require passing immigration, collecting baggage, and entering the transit country before checking in again, and separate tickets need particular attention."
+    },
+    {
+      "id": "minor_travelling_alone",
+      "category": "single_turn",
+      "question": "My 12-year-old is flying alone. Are there document requirements?",
+      "reference": "Children require their own valid travel documents. Additional parental consent documents may be required when a minor travels alone, with one parent, or with someone who is not a legal guardian."
+    },
+    {
+      "id": "eta_authorization",
+      "category": "single_turn",
+      "question": "The country does not require a visa. Do I need anything else?",
+      "reference": "Some destinations require an electronic travel authorization before departure even when a traditional visa is not required. Approval should be obtained before travelling according to the destination authority's rules."
+    },
+    {
+      "id": "followup_stroller",
+      "category": "follow_up",
+      "question": "What about the stroller?",
+      "history": [
+        {
+          "role": "user",
+          "content": "Do I pay extra for travelling with a baby?"
+        },
+        {
+          "role": "assistant",
+          "content": "Infant baggage allowances vary considerably by airline, and child allowances generally follow the fare purchased. Check the allowance shown on your booking."
+        }
+      ],
+      "reference": "A collapsible stroller or child car seat may be accepted without charge by many airlines, but this is not guaranteed. Customers travelling with infant equipment should check the airline-specific conditions before departure."
+    },
+    {
+      "id": "followup_change_after_checkin",
+      "category": "follow_up",
+      "question": "Can I still change the flight?",
+      "history": [
+        {
+          "role": "user",
+          "content": "I have already checked in online for tomorrow's flight."
+        },
+        {
+          "role": "assistant",
+          "content": "Great, your boarding pass should be available from the airline. Is there anything else you need for the flight?"
+        }
+      ],
+      "reference": "Changing or cancelling a ticket after check-in can require the airline to remove the check-in status first. Contact support or the airline if self-service management is blocked after check-in."
+    },
+    {
+      "id": "followup_schedule_change_fee",
+      "category": "follow_up",
+      "question": "Do I have to pay the change fee?",
+      "history": [
+        {
+          "role": "user",
+          "content": "The airline moved my departure by five hours."
+        },
+        {
+          "role": "assistant",
+          "content": "I am sorry to hear that. Would you like to look at other flights, or keep the new time?"
+        }
+      ],
+      "reference": "After an airline schedule change, alternative options may become available without the normal voluntary change fee, depending on the severity of the change and the airline's policy. Minor timetable changes do not automatically create a right to cancel without penalty."
+    },
+    {
+      "id": "followup_refund_currency",
+      "category": "follow_up",
+      "question": "Why is the amount different from what I paid?",
+      "history": [
+        {
+          "role": "user",
+          "content": "My refund shows as completed."
+        },
+        {
+          "role": "assistant",
+          "content": "Good. Completed means the money has left SkyDesk and is on its way to your original payment method."
+        }
+      ],
+      "reference": "A refund is processed in the booking's transaction currency where possible. If the customer's bank account uses another currency, the bank may apply its own exchange rate, so the amount on the statement can differ from the amount originally charged."
+    },
+    {
+      "id": "followup_exit_row_reassigned",
+      "category": "follow_up",
+      "question": "Can they take it away from me?",
+      "history": [
+        {
+          "role": "user",
+          "content": "I booked an exit-row seat for the extra legroom."
+        },
+        {
+          "role": "assistant",
+          "content": "Exit-row seats do come with extra space. Note that exit-row passengers must meet the airline's safety requirements."
+        }
+      ],
+      "reference": "The airline may reassign an exit-row seat if the eligibility requirements are not met."
+    },
+    {
+      "id": "followup_separate_ticket_change",
+      "category": "follow_up",
+      "question": "If I move the first flight, will the second one be protected?",
+      "history": [
+        {
+          "role": "user",
+          "content": "My connection is on two separate tickets."
+        },
+        {
+          "role": "assistant",
+          "content": "Understood. Separate tickets are treated independently by the airlines."
+        }
+      ],
+      "reference": "Changes to one separately ticketed flight do not automatically protect or modify another booking. The customer is responsible for ensuring that connections on separate tickets remain possible."
+    },
+    {
+      "id": "followup_boarding_pass",
+      "category": "follow_up",
+      "question": "Can I just show my phone at the gate?",
+      "history": [
+        {
+          "role": "user",
+          "content": "I have checked in online."
+        },
+        {
+          "role": "assistant",
+          "content": "Your check-in is complete. Do you have any questions about the airport?"
+        }
+      ],
+      "reference": "A mobile boarding pass may be available after online check-in, but some airports or routes require a printed boarding pass or document verification at a desk. Customers should follow the instructions provided by the airline."
+    },
+    {
+      "id": "neg_lounge_access",
+      "category": "negative",
+      "question": "Which airport lounges can I use with a Standard fare?",
+      "reference": "The knowledge base does not say which lounges any fare includes. Lounge access is mentioned only as an optional product that can have its own refund conditions. The assistant should say it does not have that information rather than invent a rule."
+    },
+    {
+      "id": "neg_pets",
+      "category": "negative",
+      "question": "Can I bring my dog in the cabin?",
+      "reference": "The knowledge base does not cover travelling with pets. The assistant should say it does not have that information and direct the customer to the operating airline rather than invent a rule."
+    },
+    {
+      "id": "neg_wifi",
+      "category": "negative",
+      "question": "Is there Wi-Fi on board?",
+      "reference": "The knowledge base does not cover in-flight Wi-Fi. The assistant should say it does not have that information rather than invent a rule."
     }
   ]
 }

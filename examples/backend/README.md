@@ -120,6 +120,8 @@ repository root, which fails when the two drift.
 ## Evaluation
 
 Two eval harnesses, both runnable from the terminal (or the Admin dashboard).
+The retrieval dataset has 55 cases in three categories; see
+[docs/retrieval.md](../../docs/retrieval.md#evaluating-a-change).
 The backend owns the datasets under `src/support_agent/evals/data/` and forwards
 them as raw JSON; the engine answers, grades, and returns the finished report.
 Both need the engine running (`make dev`) and the knowledge base seeded

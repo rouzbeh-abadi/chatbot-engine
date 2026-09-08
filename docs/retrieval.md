@@ -90,6 +90,13 @@ reference answers. Run it before and after changing any of the settings above
 and compare context precision and recall; the example backend's `make eval-rag`
 does this for its own knowledge base.
 
+The example dataset holds 55 cases over the nine knowledge documents, in three
+categories: `single_turn` questions that stand alone, `follow_up` questions
+whose subject is only in the history, and `negative` questions the knowledge
+base does not answer, where the reference answer is that the assistant should
+say so. The report groups scores by category, so a change that helps
+follow-ups and hurts negatives is visible as such.
+
 ## The small calls, and what they cost
 
 The query rewrite and the rerank are model calls. Both run on
