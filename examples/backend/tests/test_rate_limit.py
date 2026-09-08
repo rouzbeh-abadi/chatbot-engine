@@ -60,7 +60,7 @@ def test_the_bucket_refills_over_time() -> None:
 
     # Rewind this caller's clock by two seconds: one token per second, so two
     # are back. Reaching into the bucket beats sleeping in a test.
-    limiter._buckets["ip:1.2.3.4"].updated -= 2.0
+    limiter.store._buckets["ip:1.2.3.4"].updated -= 2.0
 
     _spend(limiter, "ip:1.2.3.4", 2)
     with pytest.raises(HTTPException):
@@ -100,3 +100,45 @@ def test_listing_is_not_metered(limited_client: TestClient) -> None:
     """Only the routes that call a model are limited; browsing the cases is free."""
     for _ in range(10):
         assert limited_client.get("/admin/eval/system-prompt/cases").status_code == 200
+
+
+# --- shared buckets ------------------------------------------------------------
+
+
+def _replica(redis, capacity: int = 2) -> RateLimiter:
+    from support_agent.api.rate_limit import RedisBuckets
+
+    store = RedisBuckets("redis://unused", name="chat", client=redis)
+    return RateLimiter(name="chat", capacity=capacity, window_s=60.0, store=store)
+
+
+def test_two_replicas_share_one_allowance() -> None:
+    """The bug an in-memory store has behind two replicas: each grants the
+    full capacity. `fakeredis` runs the real script."""
+    import fakeredis
+
+    redis = fakeredis.FakeRedis()
+    first, second = _replica(redis), _replica(redis)
+
+    first.check("user:alice")
+    second.check("user:alice")
+
+    with pytest.raises(HTTPException) as caught:
+        first.check("user:alice")
+    assert caught.value.status_code == 429
+
+
+def test_the_redis_store_is_selected_by_the_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import fakeredis
+
+    from support_agent.api.rate_limit import MemoryBuckets, RedisBuckets, _store_for
+    from support_agent.settings import Settings
+
+    monkeypatch.setattr("redis.Redis.from_url", lambda url: fakeredis.FakeRedis())
+
+    assert isinstance(_store_for("chat", Settings(redis_url=None)), MemoryBuckets)
+    assert isinstance(
+        _store_for("chat", Settings(redis_url="redis://cache/0")), RedisBuckets
+    )

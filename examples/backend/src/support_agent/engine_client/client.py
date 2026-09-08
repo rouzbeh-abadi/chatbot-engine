@@ -21,6 +21,7 @@ from support_agent.engine_client.models import (
     EngineChatRequest,
 )
 from support_agent.evals.models import JudgeReport, RagReport
+from support_agent.observability import request_id_header
 
 _EVENT = TypeAdapter(ChatEvent)
 _RECORDS = TypeAdapter(list[DocumentRecord])
@@ -77,9 +78,11 @@ class EngineClient:
         self._transport = transport
 
     def _client(self, timeout_s: float | None = None) -> httpx.AsyncClient:
+        # A client per call, so the request id of the call being handled goes
+        # out with it: the engine keeps the id and forwards it to the tools.
         return httpx.AsyncClient(
             base_url=self._base_url,
-            headers=self._headers,
+            headers={**self._headers, **request_id_header()},
             timeout=self._timeout
             if timeout_s is None
             else httpx.Timeout(timeout_s, connect=10.0),

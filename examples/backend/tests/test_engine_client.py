@@ -208,3 +208,26 @@ async def test_abandoning_a_stream_early_closes_the_connection() -> None:
 
     assert seen, "the request should have gone through the mock transport"
     assert seen[0].is_closed, "abandoning the stream must close the response"
+
+
+async def test_the_request_id_is_sent_to_the_engine() -> None:
+    """Set by the middleware for the request being handled; the client picks
+    it up so the engine's logs carry the same id as ours."""
+    from support_agent.observability import _request_id
+
+    seen: dict[str, str] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(request.headers)
+        return httpx.Response(200, json=[])
+
+    client = EngineClient(
+        base_url="http://engine", transport=httpx.MockTransport(handler)
+    )
+    token = _request_id.set("req-42")
+    try:
+        await client.list_agents()
+    finally:
+        _request_id.reset(token)
+
+    assert seen["x-request-id"] == "req-42"

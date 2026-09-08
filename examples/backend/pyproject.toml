@@ -17,6 +17,8 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-settings>=2.7",
     "pyyaml>=6.0",
+    # Shared rate-limit buckets across replicas, when BACKEND_REDIS_URL is set.
+    "redis>=5",
     # The `asyncio` extra pulls in greenlet, which SQLAlchemy's async engine
     # needs at runtime and does not require by default.
     "sqlalchemy[asyncio]>=2.0",

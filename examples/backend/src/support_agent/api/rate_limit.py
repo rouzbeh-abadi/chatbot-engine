@@ -5,12 +5,10 @@ the provider key. Without a limit, one script -- or one enthusiastic crawler --
 turns an open endpoint into someone else's bill, which is the failure mode that
 actually happens to small deployments.
 
-Scope, stated plainly: the buckets live in this process's memory. Behind two
-replicas the effective limit is doubled, and a restart forgets everything. That
-is a real limitation and it is still worth having: it stops runaway clients and
-accidental loops, which is what the limit is for. If you need an exact global
-limit, back `_Bucket` with Redis -- the seam is `RateLimiter.check`, nothing
-above it changes.
+Where the buckets live is a deployment choice: in this process's memory by
+default, which is exact for one replica and multiplies by the replica count for
+several; or in Redis, set by `BACKEND_REDIS_URL`, where every replica charges
+the same bucket. The arithmetic is identical in both, and mirrors the engine's.
 """
 
 from __future__ import annotations
@@ -18,12 +16,15 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Protocol
 
 from fastapi import Depends, HTTPException, Request, status
 
 from support_agent.api.identity import ANONYMOUS_USER_ID, UserIdDep
 from support_agent.settings import Settings, get_settings
+
+if TYPE_CHECKING:  # pragma: no cover - only for an annotation
+    import redis
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
@@ -57,6 +58,101 @@ class _Bucket:
         return (1.0 - self.tokens) / per_second
 
 
+class BucketStore(Protocol):
+    """Where one named limit keeps its buckets."""
+
+    def take(
+        self, caller: str, *, capacity: float, per_second: float, now: float
+    ) -> float:
+        """Spend one of `caller`'s tokens. Returns the seconds to wait, or 0.0."""
+        ...
+
+
+@dataclass
+class MemoryBuckets:
+    """Buckets in this process. Exact for one replica, per-replica for several."""
+
+    _buckets: dict[str, _Bucket] = field(default_factory=dict)
+
+    def take(
+        self, caller: str, *, capacity: float, per_second: float, now: float
+    ) -> float:
+        bucket = self._buckets.get(caller)
+        if bucket is None:
+            self._prune(now=now, capacity=capacity, per_second=per_second)
+            bucket = self._buckets.setdefault(
+                caller, _Bucket(tokens=capacity, updated=now)
+            )
+
+        return bucket.take(capacity=capacity, per_second=per_second, now=now)
+
+    def _prune(self, *, now: float, capacity: float, per_second: float) -> None:
+        """Forget callers whose allowance has fully refilled; they cost nothing.
+
+        Only when the table is large: pruning on every miss would walk the whole
+        dict per new caller, which is the cost this is meant to avoid.
+        """
+        if len(self._buckets) < MAX_TRACKED_CALLERS:
+            return
+
+        self._buckets = {
+            caller: bucket
+            for caller, bucket in self._buckets.items()
+            if bucket.tokens + (now - bucket.updated) * per_second < capacity
+        }
+
+
+#: The same arithmetic as `_Bucket.take`, run inside Redis. One script call is
+#: atomic, so two replicas charging the same caller at once cannot both read
+#: the old balance. The key expires once a full refill has elapsed.
+_TAKE = """
+local capacity = tonumber(ARGV[1])
+local per_second = tonumber(ARGV[2])
+local now = tonumber(ARGV[3])
+
+local state = redis.call('HMGET', KEYS[1], 'tokens', 'updated')
+local tokens = tonumber(state[1])
+local updated = tonumber(state[2])
+if tokens == nil then
+  tokens = capacity
+  updated = now
+end
+
+tokens = math.min(capacity, tokens + (now - updated) * per_second)
+local wait = 0.0
+if tokens >= 1.0 then
+  tokens = tokens - 1.0
+else
+  wait = (1.0 - tokens) / per_second
+end
+
+redis.call('HSET', KEYS[1], 'tokens', tokens, 'updated', now)
+redis.call('PEXPIRE', KEYS[1], math.ceil(capacity / per_second * 1000))
+return tostring(wait)
+"""
+
+
+class RedisBuckets:
+    """Buckets in Redis, shared by every replica that points at the same URL."""
+
+    def __init__(
+        self, url: str, *, name: str, client: redis.Redis | None = None
+    ) -> None:
+        import redis as redis_client
+
+        self._redis = client if client is not None else redis_client.Redis.from_url(url)
+        self._take = self._redis.register_script(_TAKE)
+        self._prefix = f"support-agent:ratelimit:{name}:"
+
+    def take(
+        self, caller: str, *, capacity: float, per_second: float, now: float
+    ) -> float:
+        wait = self._take(
+            keys=[self._prefix + caller], args=[capacity, per_second, now]
+        )
+        return float(wait)
+
+
 @dataclass
 class RateLimiter:
     """A named allowance of `capacity` calls per `window_s`, per caller."""
@@ -64,7 +160,7 @@ class RateLimiter:
     name: str
     capacity: int
     window_s: float
-    _buckets: dict[str, _Bucket] = field(default_factory=dict)
+    store: BucketStore = field(default_factory=MemoryBuckets)
 
     @property
     def enabled(self) -> bool:
@@ -76,17 +172,14 @@ class RateLimiter:
         if not self.enabled:
             return
 
-        now = time.monotonic()
-        per_second = self.capacity / self.window_s
-
-        bucket = self._buckets.get(caller)
-        if bucket is None:
-            self._prune(now=now, capacity=self.capacity, per_second=per_second)
-            bucket = self._buckets.setdefault(
-                caller, _Bucket(tokens=float(self.capacity), updated=now)
-            )
-
-        wait_s = bucket.take(capacity=self.capacity, per_second=per_second, now=now)
+        wait_s = self.store.take(
+            caller,
+            capacity=float(self.capacity),
+            per_second=self.capacity / self.window_s,
+            # Wall-clock, not monotonic: with Redis the clock has to mean the
+            # same thing on every replica.
+            now=time.time(),
+        )
         if wait_s == 0.0:
             return
 
@@ -100,21 +193,6 @@ class RateLimiter:
             # rounding down would refuse a client that obeyed it exactly.
             headers={"Retry-After": str(max(1, math.ceil(wait_s)))},
         )
-
-    def _prune(self, *, now: float, capacity: float, per_second: float) -> None:
-        """Forget callers whose allowance has fully refilled -- they cost nothing.
-
-        Only when the table is large: pruning on every miss would walk the whole
-        dict per new caller, which is the cost this is meant to avoid.
-        """
-        if len(self._buckets) < MAX_TRACKED_CALLERS:
-            return
-
-        self._buckets = {
-            caller: bucket
-            for caller, bucket in self._buckets.items()
-            if bucket.tokens + (now - bucket.updated) * per_second < capacity
-        }
 
 
 def caller_of(request: Request, user_id: str | None = None) -> str:
@@ -142,11 +220,24 @@ def caller_of(request: Request, user_id: str | None = None) -> str:
 _LIMITERS: dict[str, RateLimiter] = {}
 
 
-def _limiter(name: str, capacity: int, window_s: float) -> RateLimiter:
+def _store_for(name: str, settings: Settings) -> BucketStore:
+    if settings.redis_url:
+        return RedisBuckets(settings.redis_url, name=name)
+    return MemoryBuckets()
+
+
+def _limiter(
+    name: str, capacity: int, window_s: float, settings: Settings
+) -> RateLimiter:
     """The named limiter, built on first use and kept until its capacity changes."""
     existing = _LIMITERS.get(name)
     if existing is None or existing.capacity != capacity:
-        existing = RateLimiter(name=name, capacity=capacity, window_s=window_s)
+        existing = RateLimiter(
+            name=name,
+            capacity=capacity,
+            window_s=window_s,
+            store=_store_for(name, settings),
+        )
         _LIMITERS[name] = existing
     return existing
 
@@ -155,7 +246,7 @@ async def limit_chat(
     request: Request, user_id: UserIdDep, settings: SettingsDep
 ) -> None:
     """Charge a chat turn to whoever asked for it."""
-    _limiter("chat", settings.chat_rate_limit_per_minute, 60.0).check(
+    _limiter("chat", settings.chat_rate_limit_per_minute, 60.0, settings).check(
         caller_of(request, user_id)
     )
 
@@ -166,7 +257,7 @@ async def limit_eval(request: Request, settings: SettingsDep) -> None:
     No user id here: `/admin` is authenticated by a shared key, so every operator
     looks the same. The address is the only thing distinguishing them.
     """
-    _limiter("evaluation", settings.eval_rate_limit_per_hour, 3600.0).check(
+    _limiter("evaluation", settings.eval_rate_limit_per_hour, 3600.0, settings).check(
         caller_of(request)
     )
 

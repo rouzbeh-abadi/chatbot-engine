@@ -37,6 +37,18 @@ async def _no_notes(user_id: str, project_id: str) -> str:
     return ""
 
 
+def test_a_request_id_is_returned_and_a_callers_own_is_kept(client: TestClient) -> None:
+    """One id follows a turn from the browser through the backend to the
+    engine and its tools; it starts here, unless the caller already has one."""
+    minted = client.get("/health").headers["X-Request-Id"]
+    kept = client.get("/health", headers={"X-Request-Id": "browser-1"}).headers[
+        "X-Request-Id"
+    ]
+
+    assert len(minted) == 32
+    assert kept == "browser-1"
+
+
 def test_health_does_not_depend_on_the_engine(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
 

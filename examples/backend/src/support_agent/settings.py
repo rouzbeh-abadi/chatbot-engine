@@ -60,12 +60,21 @@ class Settings(BaseSettings):
     chat_rate_limit_per_minute: int = 30
     eval_rate_limit_per_hour: int = 20
 
+    # Where the buckets live. Unset, in this process, and every replica counts
+    # on its own. A Redis URL makes all replicas share one bucket per caller.
+    redis_url: str | None = None
+
+    # `text` for a terminal, `json` for a log collector. Every line carries the
+    # request id either way.
+    log_level: str = "INFO"
+    log_format: Literal["text", "json"] = "text"
+
     # Shared secret guarding the /admin routes. When set, every admin request
     # must send a matching `X-Admin-Key`. Left unset the dashboard is open,
     # which is fine on localhost and not fine anywhere else.
     admin_key: str | None = None
 
-    @field_validator("engine_api_key", "admin_key", mode="after")
+    @field_validator("engine_api_key", "admin_key", "redis_url", mode="after")
     @classmethod
     def _blank_means_unset(cls, value: str | None) -> str | None:
         """`BACKEND_ADMIN_KEY=` in a .env file arrives as "", not as None.

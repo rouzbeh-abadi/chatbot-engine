@@ -20,6 +20,7 @@ from support_agent.engine_client import (
     EngineRejected,
     EngineUnavailable,
 )
+from support_agent.observability import RequestIdMiddleware, configure_logging
 from support_agent.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     warnings, so `make dev` still needs no configuration at all.
     """
     settings = get_settings()
+    configure_logging(settings.log_level, settings.log_format)
     problems = settings.unsafe_for_production()
 
     if problems and settings.env == "production":
@@ -101,6 +103,10 @@ async def health() -> dict[str, str]:
     """Liveness for this backend only. It does not probe the engine."""
     return {"status": "ok"}
 
+
+# Every request gets an id, kept from the caller when it sent a well-formed
+# one, returned in the response, and sent on to the engine.
+app.add_middleware(RequestIdMiddleware)
 
 app.include_router(chat_router)
 app.include_router(documents_router)
