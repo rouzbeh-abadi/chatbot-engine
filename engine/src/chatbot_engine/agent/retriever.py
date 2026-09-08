@@ -116,7 +116,9 @@ async def retrieve(request: ChatRequest) -> list[Hit]:
     return hits
 
 
-async def retrieve_with_usage(request: ChatRequest) -> tuple[list[Hit], Totals]:
+async def retrieve_with_usage(
+    request: ChatRequest, *, queries: list[str] | None = None
+) -> tuple[list[Hit], Totals]:
     """Search this project's chunks for the question, and count what it cost.
 
     The `project_id` filter is not optional: without it one project's documents
@@ -124,6 +126,10 @@ async def retrieve_with_usage(request: ChatRequest) -> tuple[list[Hit], Totals]:
 
     Uses `load_vector_store`, so an unseeded engine raises instead of answering
     from an empty store.
+
+    `queries` are the search queries to run, for a caller that has already
+    rewritten the message with `rewrite_queries` and wants to reuse the result
+    rather than pay for the rewrite twice. Left out, the rewrite happens here.
     """
     project = request.project
     totals = empty_totals()
@@ -133,7 +139,8 @@ async def retrieve_with_usage(request: ChatRequest) -> tuple[list[Hit], Totals]:
     do_rerank = project.rerank if project.rerank is not None else settings.rerank
 
     store = load_vector_store(project.embedding_model)
-    queries = await rewrite_queries(request, totals)
+    if queries is None:
+        queries = await rewrite_queries(request, totals)
 
     # Across queries, a chunk keeps its best score. Keyed by content: the same
     # chunk can come back from both searches and from several queries.

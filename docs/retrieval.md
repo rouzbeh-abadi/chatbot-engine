@@ -102,6 +102,12 @@ At that model's prices the 55-case dataset costs about $0.25 per run,
 measured; a judge at Claude Haiku prices makes the same run about $7. Run
 it when a retrieval-side change is on the table, not routinely.
 
+A follow-up is scored against its rewritten, self-contained question rather
+than the words the customer typed. The metrics see one message, not the
+conversation, and "how long does it need to stay valid?" on its own would
+make a correct answer about passport validity look off-topic. The rewrite is
+the same one retrieval uses, made once and shared.
+
 The example dataset holds 55 cases over the nine knowledge documents, in three
 categories: `single_turn` questions that stand alone, `follow_up` questions
 whose subject is only in the history, and `negative` questions the knowledge
@@ -113,35 +119,40 @@ follow-ups and hurts negatives is visible as such.
 
 Scored on 8 September 2026 with the example project as shipped: answers by
 `openai/gpt-5-mini`, hybrid retrieval, no rerank, judged by
-`google/gemini-2.5-flash-lite`. Cost: $0.25, 25 minutes.
+`google/gemini-2.5-flash-lite`. Cost: $0.28, 25 minutes.
 
 | category    | cases | faithfulness | answer relevancy | context precision | context recall |
 |-------------|------:|-------------:|-----------------:|------------------:|---------------:|
-| single_turn |    42 |         0.87 |             0.67 |              0.82 |           0.98 |
-| follow_up   |    10 |         0.84 |             0.49 |              0.84 |           1.00 |
-| negative    |     3 |         0.17 |             0.09 |              0.00 |           0.00 |
-| overall     |    55 |         0.83 |             0.60 |              0.78 |           0.93 |
+| single_turn |    42 |         0.86 |             0.70 |              0.82 |           0.98 |
+| follow_up   |    10 |         0.90 |             0.62 |              0.76 |           0.95 |
+| negative    |     3 |         0.35 |             0.21 |              0.00 |           0.00 |
+| overall     |    55 |         0.83 |             0.66 |              0.76 |           0.92 |
+
+An earlier run the same day, before the prompt asked for the answer in the
+first sentence and before follow-ups were scored against their standalone
+question, had overall answer relevancy at 0.60 and follow-ups at 0.49. The
+retrieval columns did not move; the answer columns did.
 
 How to read it:
 
-- Context recall is the retrieval number. At 0.98 and 1.00 for the answerable
+- Context recall is the retrieval number. At 0.98 and 0.95 for the answerable
   categories, the chunk that holds the answer is almost always retrieved.
 - Context precision below that means the answer's chunk arrives with
   neighbours that do not help. Reranking is the lever for it, and costs one
   more small call per turn.
-- Answer relevancy is the weakest metric, and follow-ups score lowest. RAGAS
-  measures how directly the answer addresses the question, and the assistant's
-  answers carry caveats and hand-offs that the metric counts against them.
-  Two answers scored zero (`followup_passport_validity`, `transit_visa`): the
-  assistant redirected to the airline rather than answering.
-- The negative cases score zero by construction: they have no reference
+- Answer relevancy is the weakest metric. RAGAS measures how directly the
+  answer addresses the question, and multiplies by zero when it reads the
+  answer as non-committal. An honest "the documents do not give a number"
+  therefore scores zero even when it is right: `followup_passport_validity`
+  is one, and the knowledge base really does not state a validity period.
+- The negative cases score near zero by construction: they have no reference
   context and the right answer is a refusal, which these four metrics cannot
   reward. They are in the dataset to be read, not averaged.
-- The cheap judge left faithfulness empty on 15 cases where its output did not
-  parse. Empty cells are left out of the averages rather than counted as zero.
-  `lost_baggage` scored zero recall although its chunk is the first hit; treat
-  single-case outliers from this judge with suspicion and re-run them before
-  acting.
+- The cheap judge leaves the odd faithfulness cell empty where its output did
+  not parse: 8 of 55 on this run. Empty cells are left out of the averages
+  rather than counted as zero. Single cases move by 0.2 or more between
+  otherwise identical runs, so read the category rows and treat one-case
+  differences as noise.
 
 ## The small calls, and what they cost
 

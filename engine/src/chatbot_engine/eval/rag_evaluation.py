@@ -21,7 +21,11 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from chatbot_engine.agent.client import stream_completion
-from chatbot_engine.agent.retriever import retrieve_with_usage, to_context
+from chatbot_engine.agent.retriever import (
+    retrieve_with_usage,
+    rewrite_queries,
+    to_context,
+)
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.evals import (
     RagCaseResult,
@@ -146,15 +150,23 @@ def _build_metrics() -> tuple:
 
 async def _answer_and_contexts(
     project: AssistantConfig, case: RagEvalCase
-) -> tuple[str, list[str]]:
+) -> tuple[str, str, list[str]]:
     """Retrieve once, then answer from exactly those chunks.
 
     Using the same retrieval for the answer and for the scored contexts is both
     cheaper (one search, no tool discovery) and more correct: faithfulness then
     grades the answer against the context it was actually generated from.
+
+    Returns the question the metrics should judge against as well. For a
+    follow-up that is the rewritten, self-contained form ("how long must the
+    passport stay valid", not "how long does it need to stay valid?"): the
+    metrics see one message, not the conversation, and would otherwise mark a
+    correct answer as off-topic for answering a question they cannot see. A
+    first-turn question is returned as it was asked.
     """
     request = ChatRequest(project=project, message=case.question, history=case.history)
-    hits, spent = await retrieve_with_usage(request)
+    queries = await rewrite_queries(request)
+    hits, spent = await retrieve_with_usage(request, queries=queries)
     contexts = [document.page_content for document, _ in hits]
 
     answer = "".join(
@@ -166,7 +178,7 @@ async def _answer_and_contexts(
             if isinstance(item, str)
         ]
     )
-    return answer, contexts
+    return answer, queries[0], contexts
 
 
 async def _score(metric, /, **kwargs) -> float | None:
@@ -193,7 +205,7 @@ async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
     results: list[RagCaseResult] = []
     total = len(request.cases)
     for index, case in enumerate(request.cases, start=1):
-        answer, contexts = await _answer_and_contexts(request.project, case)
+        answer, question, contexts = await _answer_and_contexts(request.project, case)
         # Scoring a case is twenty-odd judge calls. Say when each finishes, so
         # an operator can see an evaluation move rather than guess at it.
         logger.info("rag eval: scoring case %d/%d %s", index, total, case.id)
@@ -206,22 +218,22 @@ async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
                 contexts=contexts,
                 faithfulness=await _score(
                     faithfulness,
-                    user_input=case.question,
+                    user_input=question,
                     response=answer,
                     retrieved_contexts=contexts,
                 ),
                 answer_relevancy=await _score(
-                    answer_relevancy, user_input=case.question, response=answer
+                    answer_relevancy, user_input=question, response=answer
                 ),
                 context_precision=await _score(
                     precision,
-                    user_input=case.question,
+                    user_input=question,
                     reference=case.reference,
                     retrieved_contexts=contexts,
                 ),
                 context_recall=await _score(
                     recall,
-                    user_input=case.question,
+                    user_input=question,
                     retrieved_contexts=contexts,
                     reference=case.reference,
                 ),
