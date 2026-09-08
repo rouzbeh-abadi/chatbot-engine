@@ -151,15 +151,18 @@ jobs:
           VERSION: ${{ github.ref_name }}
           REPO: ${{ github.repository }}
         run: |
+          # The image tags carry no leading v: metadata-action publishes
+          # v0.1.0 as 0.1.0, 0.1 and 0.
+          tag="${VERSION#v}"
           notes=$(gh release view "$VERSION" --json body --jq .body)
           gh release edit "$VERSION" --notes "$notes
 
           ## Container images
 
           \`\`\`
-          ghcr.io/$REPO/engine:$VERSION
-          ghcr.io/$REPO/backend:$VERSION
-          ghcr.io/$REPO/frontend:$VERSION
+          ghcr.io/$REPO/engine:$tag
+          ghcr.io/$REPO/backend:$tag
+          ghcr.io/$REPO/frontend:$tag
           \`\`\`
 
           Running this where other people can reach it: see [DEPLOYMENT.md](DEPLOYMENT.md)."
