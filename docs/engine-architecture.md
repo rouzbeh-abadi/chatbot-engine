@@ -109,6 +109,7 @@ mcp/          the MCP client that reaches the application's tools
 documents/    document bookkeeping: the registry and the stored originals
 models/       the request, response, and event schemas (the wire contract)
 services/     thin boundaries between the routes and the ports
+observability.py  the request id, the per-turn log line, and the metrics
 eval/         the two graders: the system-prompt judge and RAGAS retrieval
 settings.py   every ENGINE_* option, with its default declared inline
 ```

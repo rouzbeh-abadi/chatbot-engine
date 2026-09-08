@@ -13,7 +13,7 @@ from functools import lru_cache
 
 from langchain_openai import OpenAIEmbeddings
 
-from chatbot_engine.settings import get_settings
+from chatbot_engine.settings import Settings, get_settings
 
 
 def resolve_embedding_model(model: str | None = None) -> str:
@@ -34,10 +34,15 @@ def get_embeddings(model: str | None = None) -> OpenAIEmbeddings:
     client rather than sharing one bound to the wrong model. A missing provider
     key is a 501, not a crash.
     """
-    settings = get_settings()
+    return build_embeddings(get_settings(), model)
 
+
+def build_embeddings(settings: Settings, model: str | None = None) -> OpenAIEmbeddings:
+    """The embedder for `model` under `settings`. Uncached; see `get_embeddings`."""
     return OpenAIEmbeddings(
         model=resolve_embedding_model(model),
         api_key=settings.require_openrouter_key(),
         base_url=settings.openrouter_base_url,
+        max_retries=settings.provider_max_retries,
+        timeout=settings.provider_timeout_s,
     )

@@ -82,6 +82,14 @@ all, rather than serving openly. See [DEPLOYMENT.md](../DEPLOYMENT.md).
 decided *which person* may ask something would need your user model, and it has
 no business having one. That check belongs in the service calling it.
 
+## What it reports
+
+Every response carries `X-Request-Id`, kept from the caller when it sent a
+well-formed one, forwarded to the tool server, and stamped on every log line.
+Each chat turn produces one log line with caller, agent, model, tokens, cost,
+tool calls and outcome. `GET /metrics` serves Prometheus metrics for the same.
+See [DEPLOYMENT.md](../DEPLOYMENT.md#observability).
+
 ## Agents
 
 A turn is run by an agent. The engine ships exactly one, a plain tool loop, and

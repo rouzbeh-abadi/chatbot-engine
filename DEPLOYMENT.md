@@ -199,37 +199,65 @@ multiplied by the replica count for several. Set `ENGINE_REDIS_URL` and every
 engine replica charges one shared bucket per caller, atomically. See
 [Scaling out](#scaling-out).
 
+## Observability
+
+Three things the engine reports about itself, all on by default.
+
+**A request id on every log line.** The backend mints one per request, or
+keeps a well-formed `X-Request-Id` the caller sent, returns it in the
+response, and sends it to the engine; the engine keeps it and forwards it to
+the tool server. One id therefore follows a turn through all three processes,
+and a failure in one can be found in the logs of the others by that id. Both
+services accept and return the header, so a proxy or a browser that already
+tags requests sees its own id come back.
+
+**One line per chat turn**, from the logger `chatbot_engine.turn`: caller,
+agent, model, tokens in and out, cost, tool calls and how many failed, the
+outcome, and the duration. A turn the client abandoned is logged as
+`cancelled`. With `ENGINE_LOG_FORMAT=json` every line is one JSON object with
+those fields, for a collector that indexes them; the default is text for a
+terminal. The backend has the same switch, `BACKEND_LOG_FORMAT`.
+
+**Metrics** at the engine's `GET /metrics`, in Prometheus format,
+unauthenticated like `/health`: turns by caller, agent and outcome; turn
+latency; tokens and cost by model; tool calls by result.
+`ENGINE_METRICS_ENABLED=false` removes the route.
+
+Not included: distributed tracing. The request id gives the correlation;
+spans and a trace backend are a deployment's own choice.
+
 ## Scaling out
 
-One engine process is the default shape, and two things in it belong to a
-single process: the embedded Chroma files under `ENGINE_CHROMA_DIR`, and the
-rate-limit buckets. Running several replicas requires moving both into shared
-services, each selected by one setting:
+One engine process is the default shape, and four things in it belong to a
+single process or host: the embedded Chroma files, the rate-limit buckets, the
+SQLite document registry, and the directory of stored originals. Running
+several replicas means moving each into a shared service, selected by one
+setting:
 
 | Setting | Moves | Service |
 | --- | --- | --- |
-| `ENGINE_CHROMA_URL` | the vector store | a Chroma server, `http://host:8000` |
-| `ENGINE_REDIS_URL` | the rate-limit buckets | Redis, `redis://host:6379/0` |
+| `ENGINE_CHROMA_URL` | the vector store | a Chroma server; `ENGINE_CHROMA_TOKEN` when it requires a credential |
+| `ENGINE_REDIS_URL` | the rate-limit buckets | Redis |
+| `ENGINE_REGISTRY_URL` | the document registry | Postgres |
+| `ENGINE_BLOB_S3_BUCKET` | the stored originals | S3, or MinIO via `ENGINE_BLOB_S3_ENDPOINT_URL` |
+| `BACKEND_REDIS_URL` | the backend's own rate-limit buckets | Redis |
 
-Nothing above either seam changes: per-model collections, the deletion sweep
-and the limit arithmetic are identical embedded or shared. The published engine
-image includes the `redis` extra, so the setting works without a rebuild.
+Nothing above any of these seams changes. The published images include every
+driver, so each setting works without a rebuild.
 
-The scale overlay applies both and runs two engine replicas:
+The scale overlay applies all of them and runs two engine replicas:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
   -f docker-compose.scale.yml up -d
 ```
 
-Two components still belong to one writer after this: the document registry
-(SQLite) and the stored originals, both under the engine volume. They are
-written only by document uploads, which are an operator action, so a deployment
-that ingests from one place is unaffected. A deployment that uploads from
-several replicas at once must put both on shared storage or replace them;
-`DocumentRegistry` and `BlobStore` are the ports.
+It requires `MINIO_ROOT_USER` and `MINIO_ROOT_PASSWORD` in addition to the
+production overlay's secrets, and points the engine's registry at the demo's
+Postgres server, where the engine keeps its own table. A real deployment gives
+the engine its own database and bucket.
 
-Readiness reflects the shared store: `GET /health/ready` reports
+Readiness reflects the shared vector store: `GET /health/ready` reports
 `vector_store: false`, and therefore `ready: false`, when the Chroma server
 does not answer.
 

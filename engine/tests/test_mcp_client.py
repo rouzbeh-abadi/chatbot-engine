@@ -141,3 +141,72 @@ async def test_the_callers_identifiers_reach_the_server_as_headers() -> None:
             pass
 
     assert opened == [{"user_id": "user-7", "session_id": "thread-42"}]
+
+
+# --- discovery is cached ---------------------------------------------------------
+
+
+async def test_a_servers_tool_list_is_reused_while_fresh() -> None:
+    """Every turn needs the list, and a graph agent asks at every step; asking
+    the server each time opens a connection to learn nothing new."""
+    serving, opened = _serving(tools=["get_booking_status"])
+    provider = McpToolProvider(timeout_s=1, tools_ttl_s=60)
+
+    with serving:
+        first = await provider.list_tools(CONFIG)
+        second = await provider.list_tools(CONFIG)
+
+    assert first == second
+    assert len(opened) == 1, "one connection for two discoveries"
+
+
+async def test_the_cache_is_keyed_by_the_allowlist() -> None:
+    """Two assistants on one server with different allowlists must not share
+    a filtered list: the second would see tools it never allowed."""
+    serving, opened = _serving(tools=["get_booking_status", "get_flight_status"])
+    provider = McpToolProvider(timeout_s=1, tools_ttl_s=60)
+    wider = CONFIG.model_copy(
+        update={
+            "mcp_servers": [
+                McpServerConfig(
+                    name="s",
+                    url="http://x/mcp",
+                    allowed_tools=["get_booking_status", "get_flight_status"],
+                )
+            ]
+        }
+    )
+
+    with serving:
+        narrow = await provider.list_tools(CONFIG)
+        wide = await provider.list_tools(wider)
+
+    assert [t["name"] for t in narrow] == ["get_booking_status"]
+    assert [t["name"] for t in wide] == ["get_booking_status", "get_flight_status"]
+    assert len(opened) == 2
+
+
+async def test_a_zero_ttl_asks_every_time() -> None:
+    serving, opened = _serving(tools=["get_booking_status"])
+    provider = McpToolProvider(timeout_s=1, tools_ttl_s=0)
+
+    with serving:
+        await provider.list_tools(CONFIG)
+        await provider.list_tools(CONFIG)
+
+    assert len(opened) == 2
+
+
+async def test_an_expired_list_is_fetched_again() -> None:
+    serving, opened = _serving(tools=["get_booking_status"])
+    provider = McpToolProvider(timeout_s=1, tools_ttl_s=60)
+
+    with serving:
+        await provider.list_tools(CONFIG)
+        # Age the entry past its TTL rather than sleeping.
+        key = next(iter(provider._discovered))
+        stamp, tools = provider._discovered[key]
+        provider._discovered[key] = (stamp - 61, tools)
+        await provider.list_tools(CONFIG)
+
+    assert len(opened) == 2

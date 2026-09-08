@@ -11,6 +11,7 @@ The configuration side - which servers, which tools are allowed - lives in
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any
@@ -25,6 +26,7 @@ from mcp.types import TextContent
 
 from chatbot_engine.mcp.config import McpTarget, resolve_targets
 from chatbot_engine.models.chat import AssistantConfig
+from chatbot_engine.observability import REQUEST_ID_HEADER, request_id
 
 
 @asynccontextmanager
@@ -47,11 +49,7 @@ async def _session(
     A caller-provided http client is not lifecycle-managed by the transport, so
     it is opened here and closed when the session ends.
     """
-    headers = {
-        key: value
-        for key, value in (("X-User-Id", user_id), ("X-Session-Id", session_id))
-        if value
-    } or None
+    headers = caller_headers(user_id, session_id) or None
     async with (
         create_mcp_http_client(
             headers=headers, timeout=httpx2.Timeout(target.timeout_s)
@@ -64,6 +62,20 @@ async def _session(
     ):
         await session.initialize()
         yield session
+
+
+def caller_headers(user_id: str | None, session_id: str | None) -> dict[str, str]:
+    """What a tool call carries about its caller: who, which conversation, and
+    which request, so the tool server's logs can be lined up with ours."""
+    return {
+        key: value
+        for key, value in (
+            ("X-User-Id", user_id),
+            ("X-Session-Id", session_id),
+            (REQUEST_ID_HEADER, request_id()),
+        )
+        if value
+    }
 
 
 class McpServerNotFoundError(ValueError):
@@ -87,13 +99,22 @@ class McpToolError(RuntimeError):
 class McpToolProvider:
     """Discover and invoke application-owned tools through MCP."""
 
-    def __init__(self, *, timeout_s: float) -> None:
+    def __init__(self, *, timeout_s: float, tools_ttl_s: float = 0.0) -> None:
         """Initialize the MCP tool provider.
 
         Args:
             timeout_s: Maximum time allowed for MCP server operations.
+            tools_ttl_s: How long a server's discovered tool list is reused
+                before the server is asked again. Zero asks every time.
         """
         self._timeout_s = timeout_s
+        self._tools_ttl_s = tools_ttl_s
+        #: Discovered tools per server, keyed by what would change them: the
+        #: address and the allowlist. Two assistants pointing at one server
+        #: with different allowlists get different, correctly filtered lists.
+        self._discovered: dict[
+            tuple[str, frozenset[str]], tuple[float, list[Mapping[str, Any]]]
+        ] = {}
 
     async def list_tools(
         self,
@@ -115,23 +136,41 @@ class McpToolProvider:
         )
 
         for target in targets:
-            async with _session(target) as session:
-                result = await session.list_tools()
-
-                for tool in result.tools:
-                    if not target.allows(tool.name):
-                        continue
-
-                    tools.append(
-                        {
-                            "server": target.name,
-                            "name": tool.name,
-                            "description": tool.description or "",
-                            "input_schema": tool.input_schema,
-                        }
-                    )
+            tools.extend(await self._tools_of(target))
 
         return tools
+
+    async def _tools_of(self, target: McpTarget) -> list[Mapping[str, Any]]:
+        """One server's allowlisted tools, from the cache while it is fresh."""
+        key = (target.url, target.allowed_tools)
+        now = time.monotonic()
+
+        cached = self._discovered.get(key)
+        if cached is not None and now - cached[0] < self._tools_ttl_s:
+            return cached[1]
+
+        async with _session(target) as session:
+            result = await session.list_tools()
+
+        tools: list[Mapping[str, Any]] = [
+            {
+                "server": target.name,
+                "name": tool.name,
+                "description": tool.description or "",
+                "input_schema": tool.input_schema,
+            }
+            for tool in result.tools
+            if target.allows(tool.name)
+        ]
+
+        if self._tools_ttl_s > 0:
+            self._discovered[key] = (now, tools)
+
+        return tools
+
+    def forget_tools(self) -> None:
+        """Drop every cached tool list, so the next turn asks the servers again."""
+        self._discovered.clear()
 
     async def call_tool(
         self,

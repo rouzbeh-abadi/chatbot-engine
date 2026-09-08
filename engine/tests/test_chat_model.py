@@ -109,3 +109,22 @@ def test_documents_still_work_without_a_provider_key(client: TestClient) -> None
 def test_a_zero_overlap_is_honoured() -> None:
     """`if x is None` rather than `or`: 0 is a real value, not "unset"."""
     assert DocumentChunker(chunk_overlap=0)._splitter._chunk_overlap == 0
+
+
+def test_provider_calls_retry_transient_failures_with_a_deadline() -> None:
+    """A 429 or a dropped connection is retried with backoff; a hung provider is
+    given up on. Both are the client library's job, configured here so an
+    operator can tune them without a release."""
+    from chatbot_engine.rag.embeddings import build_embeddings
+
+    settings = Settings(
+        openrouter_api_key="k", provider_max_retries=5, provider_timeout_s=12.5
+    )
+
+    model = build_chat_model(_config(), settings)
+    assert model.max_retries == 5
+    assert model.request_timeout == 12.5
+
+    embedder = build_embeddings(settings)
+    assert embedder.max_retries == 5
+    assert embedder.request_timeout == 12.5

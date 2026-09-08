@@ -58,11 +58,23 @@ def _chroma_client() -> chromadb.ClientAPI:
                 host=url.hostname or "localhost",
                 port=url.port or (443 if url.scheme == "https" else 8000),
                 ssl=url.scheme == "https",
+                headers=_auth_headers(
+                    settings.chroma_token, settings.chroma_token_header
+                ),
             )
         else:
             _client = chromadb.PersistentClient(path=str(settings.chroma_dir))
 
     return _client
+
+
+def _auth_headers(token: str | None, header: str) -> dict[str, str] | None:
+    """The credential a Chroma server expects, in the header it expects it in."""
+    if not token:
+        return None
+    if header.lower() == "authorization":
+        return {"Authorization": f"Bearer {token}"}
+    return {header: token}
 
 
 def vector_store_reachable() -> bool:

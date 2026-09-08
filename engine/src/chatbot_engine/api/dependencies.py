@@ -99,19 +99,38 @@ def get_registry() -> DocumentRegistry:
     """Document bookkeeping: what is indexed, is it current, delete it.
 
     On disk, because the vectors are: a registry that did not survive a restart
-    would leave chunks that nothing lists and nothing can delete.
+    would leave chunks that nothing lists and nothing can delete. In Postgres
+    when `ENGINE_REGISTRY_URL` is set, so replicas share one.
     """
-    return SqliteDocumentRegistry(get_settings().registry_db)
+    settings = get_settings()
+    if settings.registry_url:
+        from chatbot_engine.documents.postgres_registry import PostgresDocumentRegistry
+
+        return PostgresDocumentRegistry(settings.registry_url)
+    return SqliteDocumentRegistry(settings.registry_db)
 
 
 @lru_cache
 def get_blob_store() -> DocumentBlobs:
     """The original uploaded files, addressed by `doc_id`.
 
-    `DocumentBlobs` computes the URI from the root and the id, so nothing has to
-    be stored on `DocumentRecord` and no filesystem path goes on the wire.
+    The store computes each URI from the id, so nothing has to be stored on
+    `DocumentRecord` and no path goes on the wire. In a bucket when
+    `ENGINE_BLOB_S3_BUCKET` is set, so replicas share the uploads.
     """
-    return DocumentBlobs(get_settings().blob_dir)
+    settings = get_settings()
+    if settings.blob_s3_bucket:
+        from chatbot_engine.documents.s3_storage import S3BlobStore
+
+        store = S3BlobStore(
+            bucket=settings.blob_s3_bucket,
+            prefix=settings.blob_s3_prefix,
+            endpoint_url=settings.blob_s3_endpoint_url,
+            region=settings.blob_s3_region,
+        )
+        store.ensure_bucket()
+        return DocumentBlobs(store=store)
+    return DocumentBlobs(settings.blob_dir)
 
 
 @lru_cache
@@ -132,7 +151,10 @@ def get_chunk_store() -> ChromaChunkStore | None:
 @lru_cache
 def get_tool_provider() -> ToolProvider:
     """The MCP client the agent discovers and calls tools through."""
-    return McpToolProvider(timeout_s=get_settings().mcp_timeout_s)
+    settings = get_settings()
+    return McpToolProvider(
+        timeout_s=settings.mcp_timeout_s, tools_ttl_s=settings.mcp_tools_ttl_s
+    )
 
 
 # services

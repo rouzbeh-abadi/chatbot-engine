@@ -232,5 +232,41 @@ def test_a_chroma_url_selects_the_server_client(
 
     _chroma_client()
 
-    assert seen == {"host": "vectors.internal", "port": 8443, "ssl": True}
+    assert seen == {
+        "host": "vectors.internal",
+        "port": 8443,
+        "ssl": True,
+        "headers": None,
+    }
+    reset_vector_store()
+
+
+def test_a_chroma_token_is_sent_in_the_configured_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A server that requires a credential gets one on every request, in the
+    form its configuration expects: a bearer token by default, or a plain
+    value in a named header."""
+    import chromadb
+
+    from chatbot_engine.api.dependencies import reset_dependency_cache
+    from chatbot_engine.rag.vector_store import _chroma_client, reset_vector_store
+
+    seen: dict = {}
+    monkeypatch.setattr(
+        chromadb, "HttpClient", lambda **kw: seen.update(kw) or object()
+    )
+    monkeypatch.setenv("ENGINE_CHROMA_URL", "http://vectors:8000")
+    monkeypatch.setenv("ENGINE_CHROMA_TOKEN", "s3cret")
+
+    reset_dependency_cache()
+    reset_vector_store()
+    _chroma_client()
+    assert seen["headers"] == {"Authorization": "Bearer s3cret"}
+
+    monkeypatch.setenv("ENGINE_CHROMA_TOKEN_HEADER", "X-Chroma-Token")
+    reset_dependency_cache()
+    reset_vector_store()
+    _chroma_client()
+    assert seen["headers"] == {"X-Chroma-Token": "s3cret"}
     reset_vector_store()

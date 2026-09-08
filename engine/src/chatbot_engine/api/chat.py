@@ -5,9 +5,11 @@ from __future__ import annotations
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 
+from chatbot_engine.api.auth import CallerDep
 from chatbot_engine.api.dependencies import ChatServiceDep, SettingsDep
 from chatbot_engine.api.streaming import MEDIA_TYPE, to_ndjson
 from chatbot_engine.models.chat import ChatRequest
+from chatbot_engine.observability import record_turn
 
 router = APIRouter(tags=["chat"])
 
@@ -28,7 +30,10 @@ router = APIRouter(tags=["chat"])
     },
 )
 async def chat(
-    request: ChatRequest, service: ChatServiceDep, settings: SettingsDep
+    request: ChatRequest,
+    service: ChatServiceDep,
+    settings: SettingsDep,
+    caller: CallerDep,
 ) -> StreamingResponse:
     """Run one turn and stream its events as NDJSON.
 
@@ -38,7 +43,11 @@ async def chat(
     inside a stream that has already committed to 200.
     """
     settings.require_openrouter_key()
-    events = service.stream(request)
+    events = record_turn(
+        service.stream(request),
+        caller=caller.name,
+        agent=request.project.agent or settings.agent,
+    )
 
     return StreamingResponse(
         to_ndjson(events),

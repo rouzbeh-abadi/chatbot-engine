@@ -7,13 +7,15 @@
 # belong to one process. This overlay moves each into a shared service so the
 # engine can run as several replicas:
 #   - vectors move to a Chroma server, reached through ENGINE_CHROMA_URL
-#   - rate-limit buckets move to Redis, reached through ENGINE_REDIS_URL
+#   - rate-limit buckets move to Redis, reached through ENGINE_REDIS_URL and,
+#     for the backend's own limits, BACKEND_REDIS_URL
 # and the engine runs two replicas behind compose's built-in DNS round robin.
 #
-# The engine volume is no longer used for vectors, only for the document
-# registry and stored originals. Those are SQLite and files, and still belong
-# to one writer: a real multi-replica deployment puts them on shared storage
-# or replaces them, which is outside what an overlay can do.
+#   - the document registry moves to Postgres, reached through
+#     ENGINE_REGISTRY_URL (the demo shares the backend's database server)
+#   - stored originals move to a MinIO bucket, reached through the
+#     ENGINE_BLOB_S3_* settings
+# so nothing under the engine volume is written any more.
 
 services:
   chroma:
@@ -43,17 +45,54 @@ services:
       timeout: 5s
       retries: 5
 
+  minio:
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    command: ["server", "/data"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   engine:
     deploy:
       replicas: 2
     environment:
       ENGINE_CHROMA_URL: http://chroma:8000
       ENGINE_REDIS_URL: redis://redis:6379/0
+      # The demo shares the backend's database server; the engine keeps its
+      # own table in it. A real deployment points this at its own database.
+      ENGINE_REGISTRY_URL: postgresql://support_agent:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/support_agent
+      ENGINE_BLOB_S3_BUCKET: chatbot-engine
+      ENGINE_BLOB_S3_ENDPOINT_URL: http://minio:9000
+      ENGINE_BLOB_S3_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:?set MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?set MINIO_ROOT_PASSWORD}
     depends_on:
       chroma:
         condition: service_healthy
       redis:
         condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+
+  backend:
+    environment:
+      BACKEND_REDIS_URL: redis://redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
 
 volumes:
   chroma_data:
+  minio_data:

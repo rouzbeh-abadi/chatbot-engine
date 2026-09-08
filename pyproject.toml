@@ -45,6 +45,7 @@ dev = [
     "fakeredis[lua]>=2.20",
     "ruff>=0.14",
     "ty>=0.0.1a0",
+    "moto[s3]>=5",
 ]
 
 [tool.pytest.ini_options]

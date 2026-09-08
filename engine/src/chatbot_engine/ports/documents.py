@@ -42,6 +42,11 @@ class IngestPipeline(Protocol):
 
 
 class BlobStore(Protocol):
+    """Where original uploads live. `uri_for` is what lets a document be read
+    back or deleted by its id alone, without storing the URI anywhere."""
+
+    def uri_for(self, key: str) -> str: ...
+
     """The original uploaded files."""
 
     async def put(self, *, key: str, data: bytes, mimetype: str) -> str: ...

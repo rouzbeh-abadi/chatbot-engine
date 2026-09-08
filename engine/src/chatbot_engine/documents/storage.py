@@ -25,6 +25,9 @@ class LocalBlobStore(BlobStore):
         self._root = root
         self._root.mkdir(parents=True, exist_ok=True)
 
+    def uri_for(self, key: str) -> str:
+        return str(self._root / key)
+
     async def put(
         self,
         *,

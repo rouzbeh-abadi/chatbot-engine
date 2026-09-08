@@ -18,14 +18,14 @@ COPY examples/backend/pyproject.toml examples/backend/README.md examples/backend
 COPY examples/langgraph-agent/pyproject.toml examples/langgraph-agent/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-workspace \
-    --package chatbot-engine --extra eval --extra redis
+    --package chatbot-engine --extra eval --extra redis --extra postgres --extra s3
 
 COPY engine/src engine/src
 COPY examples/langgraph-agent examples/langgraph-agent
 # The engine with its extras, then the plugin on top. `--inexact` keeps what
 # the first sync installed rather than removing it as extraneous.
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package chatbot-engine --extra eval --extra redis \
+    uv sync --frozen --no-dev --package chatbot-engine --extra eval --extra redis --extra postgres --extra s3 \
     && uv sync --frozen --no-dev --inexact --package langgraph-agent
 
 # /app stays root-owned and read-only to the process; see engine/Dockerfile.

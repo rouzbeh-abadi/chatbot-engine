@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse
 
 from chatbot_engine import __version__
 from chatbot_engine.agent.registry import UnknownAgentError
-from chatbot_engine.api import agents, chat, documents, eval_rag, health, judge
+from chatbot_engine.api import agents, chat, documents, eval_rag, health, judge, metrics
 from chatbot_engine.api.auth import require_api_key
 from chatbot_engine.api.rate_limit import limit_chat, limit_eval
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
@@ -24,6 +24,7 @@ from chatbot_engine.errors import (
     EngineError,
     NotConfiguredError,
 )
+from chatbot_engine.observability import RequestIdMiddleware, configure_logging
 from chatbot_engine.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     """Build the FastAPI app: exception handlers, then the routers."""
     settings = get_settings()
-    logging.basicConfig(level=settings.log_level)
+    configure_logging(settings.log_level, settings.log_format)
 
     app = FastAPI(
         title="Chatbot Engine",
@@ -101,8 +102,14 @@ def create_app() -> FastAPI:
         """500: any deliberate engine error that is not one of the above."""
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 
-    # Health is unauthenticated, so probes and Docker healthchecks can reach it.
+    # Every request gets an id, kept from the caller when it sent one.
+    app.add_middleware(RequestIdMiddleware)
+
+    # Health and metrics are unauthenticated, so probes and scrapers can reach
+    # them.
     app.include_router(health.router)
+    if settings.metrics_enabled:
+        app.include_router(metrics.router)
 
     # Everything else requires the shared secret (see api/auth.py), and the
     # routes that spend provider credits are metered on top of it. On the

@@ -18,15 +18,24 @@ from chatbot_engine.ports.documents import BlobStore
 
 
 class DocumentBlobs:
-    """Keeps one file per document, so re-indexing needs no re-upload."""
+    """Keeps one file per document, so re-indexing needs no re-upload.
 
-    def __init__(self, root: Path, store: BlobStore | None = None) -> None:
-        self._root = root
-        self._store = store or LocalBlobStore(root)
+    Composes a `BlobStore`: local files by default, an object store when the
+    engine runs as replicas that must share their uploads.
+    """
+
+    def __init__(
+        self, root: Path | None = None, store: BlobStore | None = None
+    ) -> None:
+        if store is None:
+            if root is None:
+                raise ValueError("DocumentBlobs needs a root directory or a store")
+            store = LocalBlobStore(root)
+        self._store = store
 
     def _uri(self, doc_id: str) -> str:
-        """Where `write` put it. Pinned by a test against `LocalBlobStore.put`."""
-        return str(self._root / doc_id)
+        """Where `write` put it: the store's own addressing, from the id alone."""
+        return self._store.uri_for(doc_id)
 
     async def write(self, *, doc_id: str, data: bytes, mimetype: str) -> str:
         return await self._store.put(key=doc_id, data=data, mimetype=mimetype)

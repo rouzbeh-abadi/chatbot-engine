@@ -18,16 +18,16 @@ COPY pyproject.toml uv.lock ./
 COPY engine/pyproject.toml engine/README.md engine/LICENSE engine/NOTICE engine/
 COPY examples/backend/pyproject.toml examples/backend/README.md examples/backend/
 COPY examples/langgraph-agent/pyproject.toml examples/langgraph-agent/
-# `eval` (RAGAS) so the admin dashboard can run the RAG evaluation live, and
-# `redis` so ENGINE_REDIS_URL can be set without rebuilding. Both are imported
-# lazily, so normal serving loads neither.
+# `eval` (RAGAS) so the admin dashboard can run the RAG evaluation live;
+# `redis`, `postgres` and `s3` so the shared-service settings work without a
+# rebuild. All are imported lazily, so normal serving loads none of them.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-workspace \
-    --package chatbot-engine --extra eval --extra redis
+    --package chatbot-engine --extra eval --extra redis --extra postgres --extra s3
 
 COPY engine/src engine/src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package chatbot-engine --extra eval --extra redis
+    uv sync --frozen --no-dev --package chatbot-engine --extra eval --extra redis --extra postgres --extra s3
 
 # Drop root, and own the data directory: the engine writes vectors, the document
 # registry, and uploaded blobs, so its volume has to belong to the same user.

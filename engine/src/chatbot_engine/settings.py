@@ -77,6 +77,16 @@ class Settings(BaseSettings):
     #: Point this elsewhere for a proxy or a locally hosted model.
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
+    #: How many times a provider call is retried on a transient failure (a
+    #: 429, a 5xx, a dropped connection), with exponential backoff between
+    #: attempts. Applies to the request; a stream that fails after its first
+    #: token is not retried, because the tokens already sent cannot be taken
+    #: back.
+    provider_max_retries: int = 3
+
+    #: Seconds to wait for a provider before giving up on one attempt.
+    provider_timeout_s: float = 60.0
+
     #: Used when the backend sends no `model` in `AssistantConfig`.
     chat_model: str = "openai/gpt-5-mini"
 
@@ -111,6 +121,13 @@ class Settings(BaseSettings):
     #: by any number. Unset, the engine runs embedded.
     chroma_url: str | None = None
 
+    #: The credential for a Chroma server that requires one. Sent on every
+    #: request in `chroma_token_header`: as `Authorization: Bearer <token>` by
+    #: default, or as `X-Chroma-Token: <token>` when the server is configured
+    #: for that header. Unset, requests carry no credential.
+    chroma_token: str | None = None
+    chroma_token_header: str = "Authorization"
+
     #: One collection for every project. Chunks carry `project_id` in their
     #: metadata, so scoping a query is a filter, not a second collection.
     chroma_collection: str = "documents"
@@ -119,9 +136,23 @@ class Settings(BaseSettings):
     #: that nothing lists and nothing can delete.
     registry_db: Path = Path("var/documents.sqlite3")
 
+    #: A Postgres URL (`postgresql://user:pass@host/db`) to keep the registry
+    #: in instead of the SQLite file, so several replicas share one. Needs
+    #: the `postgres` extra. Unset, the file is used.
+    registry_url: str | None = None
+
     #: The uploaded files themselves, kept so a change of chunk size or embedding
     #: model is an internal re-index rather than a re-upload for every caller.
     blob_dir: Path = Path("var/blobs")
+
+    #: An S3-compatible bucket to keep the uploads in instead of `blob_dir`,
+    #: so several replicas share them. Credentials come from the standard AWS
+    #: environment; `endpoint_url` points at MinIO or another compatible
+    #: service. Needs the `s3` extra. Unset, the directory is used.
+    blob_s3_bucket: str | None = None
+    blob_s3_prefix: str = ""
+    blob_s3_endpoint_url: str | None = None
+    blob_s3_region: str | None = None
 
     # --- retrieval ----------------------------------------------------------
 
@@ -160,7 +191,22 @@ class Settings(BaseSettings):
     #: Seconds to wait on an MCP server before giving up.
     mcp_timeout_s: float = 30.0
 
+    #: How long a server's tool list is reused before it is asked again. Every
+    #: turn needs the list, and a graph agent asks for it at every step, so
+    #: without a cache each answer opens a connection per server just to learn
+    #: what has not changed. Zero disables the cache. A new tool on a server
+    #: takes this long to appear; the allowlist still decides whether it may.
+    mcp_tools_ttl_s: float = 60.0
+
     log_level: str = "INFO"
+
+    #: `text` for a person reading a terminal; `json` for a collector that
+    #: indexes fields. Either way every line carries the request id.
+    log_format: Literal["text", "json"] = "text"
+
+    #: Whether `GET /metrics` is served. On by default; it is unauthenticated
+    #: and carries counts, not content.
+    metrics_enabled: bool = True
 
     @field_validator("pricing", mode="after")
     @classmethod
@@ -178,7 +224,12 @@ class Settings(BaseSettings):
         "openrouter_api_key",
         "redis_url",
         "chroma_url",
+        "chroma_token",
         "utility_model",
+        "registry_url",
+        "blob_s3_bucket",
+        "blob_s3_endpoint_url",
+        "blob_s3_region",
         mode="after",
     )
     @classmethod

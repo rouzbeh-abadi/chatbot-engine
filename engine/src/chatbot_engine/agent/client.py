@@ -85,6 +85,8 @@ def build_chat_model(
         api_key=settings.require_openrouter_key(),
         base_url=settings.openrouter_base_url,
         stream_usage=True,
+        max_retries=settings.provider_max_retries,
+        timeout=settings.provider_timeout_s,
     )
 
 
