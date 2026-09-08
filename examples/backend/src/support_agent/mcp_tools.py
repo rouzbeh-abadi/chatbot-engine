@@ -19,6 +19,7 @@ Two conventions the tools follow, both aimed at the model that reads them:
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -30,12 +31,28 @@ from support_agent.database.models import Booking, Flight, Memory, SupportTicket
 HOST = "0.0.0.0"
 PORT = 8200
 
+logger = logging.getLogger(__name__)
+
 TICKET_CATEGORIES = ("refund", "baggage", "schedule_change", "complaint", "other")
 
 #: Which assistant's memory these tools read and write. One project today; a
 #: multi-project backend would take it from the request the same way the
 #: conversation id is taken.
 DEFAULT_PROJECT_ID = "support"
+
+
+def _trace(ctx: Context, tool: str) -> None:
+    """One log line per call, carrying the engine's request id.
+
+    The engine forwards the id of the turn it is serving as `X-Request-Id`,
+    so a tool call can be found in this server's log by the same id as in
+    the backend's and the engine's. Nothing else about the request is logged
+    here; the arguments are the customer's data.
+    """
+    headers = ctx.headers or {}
+    rid = headers.get("x-request-id") or headers.get("X-Request-Id") or "-"
+    logger.info("tool %s [%s]", tool, rid)
+
 
 mcp = MCPServer(
     name="support-tools",
@@ -49,6 +66,7 @@ mcp = MCPServer(
 
 @mcp.tool()
 async def get_booking_status(
+    ctx: Context,
     booking_reference: str,
 ) -> dict[str, str]:
     """Look up one booking by its reference.
@@ -64,6 +82,7 @@ async def get_booking_status(
     Returns:
         Booking details and its current status, or a not-found result.
     """
+    _trace(ctx, "get_booking_status")
     reference = booking_reference.strip().upper()
 
     async with get_session_factory()() as session:
@@ -98,6 +117,7 @@ async def get_booking_status(
 
 @mcp.tool()
 async def get_flight_status(
+    ctx: Context,
     flight_number: str,
     departure_date: str,
 ) -> dict[str, str]:
@@ -115,6 +135,7 @@ async def get_flight_status(
     Returns:
         Current flight status and available timing information.
     """
+    _trace(ctx, "get_flight_status")
     number = flight_number.strip().upper()
 
     try:
@@ -164,6 +185,7 @@ async def get_flight_status(
 
 @mcp.tool()
 async def create_support_ticket(
+    ctx: Context,
     booking_reference: str,
     summary: str,
     category: str,
@@ -184,6 +206,7 @@ async def create_support_ticket(
     Returns:
         The created ticket, or a rejection explaining what to fix.
     """
+    _trace(ctx, "create_support_ticket")
     reference = booking_reference.strip().upper()
     chosen = category.strip().lower()
 
@@ -295,6 +318,7 @@ async def remember(
     Returns:
         What was stored. Not for relaying to the customer.
     """
+    _trace(ctx, "remember")
     user_id, session_id, project_id = _owner(ctx)
     subject = subject.strip()[:120]
     content = content.strip()[:2000]
