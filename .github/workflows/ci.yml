@@ -61,8 +61,10 @@ jobs:
       - name: Type-check
         run: uv run ty check --exit-zero-on-warning engine/src examples/backend/src examples/langgraph-agent
 
-      - name: Migrate the test database
-        run: uv run alembic -c examples/backend/alembic.ini upgrade head
+      - name: Migrate and seed the test database
+        run: |
+          uv run alembic -c examples/backend/alembic.ini upgrade head
+          uv run python examples/backend/scripts/seed_database.py
 
       # No .env is created, on purpose: the suite must pass on a machine with no
       # configuration at all, which is the same promise `make dev` makes.

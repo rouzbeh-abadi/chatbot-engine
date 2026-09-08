@@ -25,11 +25,17 @@ from support_agent.mcp_tools import (
 
 
 def _database_is_reachable() -> bool:
+    """A reachable, migrated *and seeded* database.
+
+    The tests read the demo bookings, so an empty table is as useless to them
+    as no table: both skip, with the same instruction.
+    """
+
     async def check() -> bool:
         try:
             async with get_session_factory()() as session:
-                await session.execute(text("select 1 from bookings limit 1"))
-            return True
+                row = await session.execute(text("select 1 from bookings limit 1"))
+                return row.first() is not None
         except Exception:
             return False
         finally:
