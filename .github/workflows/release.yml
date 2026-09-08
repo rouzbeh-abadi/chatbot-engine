@@ -37,7 +37,7 @@ jobs:
     name: Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -46,7 +46,7 @@ jobs:
       - run: uv sync
       - run: uv run pytest -q
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: npm
@@ -82,7 +82,7 @@ jobs:
             context: ./examples/frontend
             dockerfile: examples/frontend/Dockerfile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # arm64 is built under emulation, which is slow but means the images run
       # unchanged on Apple silicon and Graviton.
@@ -131,7 +131,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Release notes are generated from the commits since the last tag, so
           # a shallow clone would produce an empty changelog.

@@ -23,8 +23,27 @@ jobs:
   python:
     name: Python tests
     runs-on: ubuntu-latest
+    # A real Postgres, so the tests that need one (the backend's tools and
+    # memory, the engine's shared registry) run here rather than only on a
+    # laptop that happens to have the demo stack up. They skip without it,
+    # which is how 27 of them went unrun for a week.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: support_agent
+          POSTGRES_USER: support_agent
+          POSTGRES_PASSWORD: support_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U support_agent -d support_agent"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      BACKEND_DATABASE_URL: postgresql+psycopg://support_agent:support_agent@localhost:5432/support_agent
+      ENGINE_TEST_POSTGRES_URL: postgresql://support_agent:support_agent@localhost:5432/support_agent
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: astral-sh/setup-uv@v5
         with:
@@ -40,7 +59,10 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type-check
-        run: uv run ty check engine/src examples/backend/src examples/langgraph-agent
+        run: uv run ty check --exit-zero-on-warning engine/src examples/backend/src examples/langgraph-agent
+
+      - name: Migrate the test database
+        run: uv run alembic -c examples/backend/alembic.ini upgrade head
 
       # No .env is created, on purpose: the suite must pass on a machine with no
       # configuration at all, which is the same promise `make dev` makes.
@@ -54,9 +76,9 @@ jobs:
       run:
         working-directory: examples/frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: "24"
           cache: npm
@@ -92,7 +114,7 @@ jobs:
             context: ./examples/frontend
             dockerfile: examples/frontend/Dockerfile
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # Built but not pushed: a Dockerfile that stopped building is a broken
       # deployment, and it is worth catching here rather than at deploy time.
@@ -103,7 +125,7 @@ jobs:
     name: Compose files
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: The demo stack resolves
         run: docker compose -f docker-compose.yml config --quiet

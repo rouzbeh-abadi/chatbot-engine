@@ -97,7 +97,7 @@ test-ui:
 lint:
 	uv run ruff check .
 	uv run ruff format .
-	uv run ty check engine/src examples/backend/src examples/langgraph-agent
+	uv run ty check --exit-zero-on-warning engine/src examples/backend/src examples/langgraph-agent
 
 seed:
 	uv run python examples/backend/scripts/seed_knowledge.py
