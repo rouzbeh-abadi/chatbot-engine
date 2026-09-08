@@ -90,6 +90,16 @@ reference answers. Run it before and after changing any of the settings above
 and compare context precision and recall; the example backend's `make eval-rag`
 does this for its own knowledge base.
 
+A run is sent a few cases per request (`make eval-rag` uses five), so no
+request lasts long enough to hit a timeout and a failure part-way keeps every
+batch already scored. The engine logs one line per case as it scores it.
+
+Scoring is not cheap: RAGAS makes about thirty judge-model calls per case,
+each carrying the question, the answer and the retrieved chunks. On the
+example's judge model that is roughly $0.12 per case, so the 55-case dataset
+costs about $7 per run. Run it when a retrieval-side change is on the table,
+not routinely.
+
 The example dataset holds 55 cases over the nine knowledge documents, in three
 categories: `single_turn` questions that stand alone, `follow_up` questions
 whose subject is only in the history, and `negative` questions the knowledge

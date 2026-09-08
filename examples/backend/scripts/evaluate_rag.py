@@ -22,6 +22,7 @@ from support_agent.assistant import load_project
 from support_agent.engine import get_engine_client
 from support_agent.engine_client import EngineError
 from support_agent.evals import RagReport, load_rag_cases
+from support_agent.evals.merge import merge_rag_reports
 
 METRICS = [
     ("faithfulness", "faith"),
@@ -63,6 +64,14 @@ def render(report: RagReport) -> None:
 async def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--only", help="run one category, or one case id")
+    parser.add_argument(
+        "--batch",
+        type=int,
+        default=5,
+        help="cases per engine request (default 5). Scoring a case is twenty-odd "
+        "judge calls, so small batches keep every request short and keep what "
+        "was already scored if a later one fails.",
+    )
     args = parser.parse_args()
 
     cases = [
@@ -74,20 +83,37 @@ async def main() -> int:
         print(f"nothing matches {args.only!r}", file=sys.stderr)
         return 1
 
-    print(f"{len(cases)} cases -- answering and scoring, several model calls each\n")
+    batches = [cases[i : i + args.batch] for i in range(0, len(cases), args.batch)]
+    print(
+        f"{len(cases)} cases in {len(batches)} requests of up to {args.batch}; "
+        "scoring a case is twenty-odd judge calls\n"
+    )
+    reports = []
     try:
-        report = await get_engine_client().evaluate_rag(
-            project=load_project(), cases=cases
-        )
+        for number, batch in enumerate(batches, start=1):
+            ids = ", ".join(case["id"] for case in batch)
+            print(f"  batch {number}/{len(batches)}: {ids}", flush=True)
+            reports.append(
+                await get_engine_client().evaluate_rag(
+                    project=load_project(), cases=batch
+                )
+            )
     except EngineError as exc:
-        print(f"\nRAG eval failed: {exc}", file=sys.stderr)
+        print(f"\nRAG eval failed on batch {len(reports) + 1}: {exc}", file=sys.stderr)
         print(
             "Needs a seeded engine with the `eval` extra installed.",
             file=sys.stderr,
         )
+        if reports:
+            print(
+                f"\nScores for the {sum(len(r.results) for r in reports)} cases "
+                "that did finish:\n",
+                file=sys.stderr,
+            )
+            render(merge_rag_reports(reports))
         return 1
 
-    render(report)
+    render(merge_rag_reports(reports))
     return 0
 
 

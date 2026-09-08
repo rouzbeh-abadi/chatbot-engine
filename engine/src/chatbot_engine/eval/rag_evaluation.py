@@ -13,6 +13,7 @@ turn uses, then scores four things with RAGAS.
 from __future__ import annotations
 
 import importlib
+import logging
 import math
 from collections.abc import Mapping
 from typing import Any
@@ -31,6 +32,8 @@ from chatbot_engine.models.evals import (
     RagReport,
 )
 from chatbot_engine.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 class _NoTools:
@@ -192,8 +195,12 @@ async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
     faithfulness, answer_relevancy, precision, recall = _build_metrics()
 
     results: list[RagCaseResult] = []
-    for case in request.cases:
+    total = len(request.cases)
+    for index, case in enumerate(request.cases, start=1):
         answer, contexts = await _answer_and_contexts(request.project, case)
+        # Scoring a case is twenty-odd judge calls. Say when each finishes, so
+        # an operator can see an evaluation move rather than guess at it.
+        logger.info("rag eval: scoring case %d/%d %s", index, total, case.id)
         results.append(
             RagCaseResult(
                 id=case.id,
