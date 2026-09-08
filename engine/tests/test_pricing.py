@@ -27,7 +27,9 @@ def test_the_engine_ships_no_prices(monkeypatch: pytest.MonkeyPatch) -> None:
     configuration: an engine with none set shows no cost for any model."""
     monkeypatch.delenv("ENGINE_PRICING", raising=False)
 
-    assert Settings().pricing == {}
+    # `_env_file=None`: the developer's own .env may well list prices, and
+    # this is about the default, not about that file.
+    assert Settings(_env_file=None).pricing == {}
     assert price_usage(TOTALS, "openai/gpt-5-mini", {}).cost_usd is None
 
 
@@ -42,3 +44,16 @@ def test_the_table_is_read_from_the_environment(
 def test_a_negative_price_is_refused() -> None:
     with pytest.raises(ValueError, match="negative"):
         Settings(pricing={"x/y": (-1.0, 2.0)})
+
+
+def test_a_blank_env_var_means_no_prices_rather_than_a_crash(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`ENGINE_PRICING=` in a .env file, or a compose default of `${VAR:-}`,
+    arrives as an empty string. It must mean "none", not fail at startup."""
+    monkeypatch.setenv("ENGINE_PRICING", "")
+
+    assert Settings().pricing == {}
+
+    monkeypatch.setenv("ENGINE_PRICING", "   ")
+    assert Settings().pricing == {}

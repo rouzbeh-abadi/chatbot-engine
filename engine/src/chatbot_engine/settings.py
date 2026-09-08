@@ -9,12 +9,13 @@ built, so an engine that was never asked to call a model still starts.
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from chatbot_engine.errors import NotConfiguredError
 
@@ -102,7 +103,11 @@ class Settings(BaseSettings):
     #: A model not listed reports no cost rather than a wrong one.
     #:
     #:     ENGINE_PRICING='{"openai/gpt-5-mini": [0.25, 2.00]}'
-    pricing: dict[str, tuple[float, float]] = {}
+    #:
+    #: Decoded by the validator below rather than by pydantic-settings, so that
+    #: a blank value, which is what `ENGINE_PRICING=` in a .env file or a
+    #: compose default becomes, means "no prices" instead of a startup crash.
+    pricing: Annotated[dict[str, tuple[float, float]], NoDecode] = {}
 
     #: Changing this invalidates every vector already stored -- distances against
     #: a different model are nonsense, not an error. Treat it as a full re-index.
@@ -207,6 +212,14 @@ class Settings(BaseSettings):
     #: Whether `GET /metrics` is served. On by default; it is unauthenticated
     #: and carries counts, not content.
     metrics_enabled: bool = True
+
+    @field_validator("pricing", mode="before")
+    @classmethod
+    def _blank_pricing_means_none(cls, value: object) -> object:
+        """`ENGINE_PRICING=` arrives as "", and "" is not JSON."""
+        if isinstance(value, str):
+            return json.loads(value) if value.strip() else {}
+        return value
 
     @field_validator("pricing", mode="after")
     @classmethod
