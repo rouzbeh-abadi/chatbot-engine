@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     #: answer, which those calls never write.
     utility_model: str | None = None
 
+    #: The model that scores answers in `/eval/rag`. Keep it in a different
+    #: family than `chat_model`, so the metrics are not self-graded, and keep
+    #: it cheap: scoring one case is twenty-odd judge calls, most of them
+    #: carrying the retrieved contexts as input.
+    rag_judge_model: str = "google/gemini-2.5-flash-lite"
+
     #: Prices per million tokens, `{model: [input, output]}` in USD, used to
     #: put a cost on the `usage` event. The engine ships none: prices belong
     #: to the provider and change without notice, so they are configuration.

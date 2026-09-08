@@ -94,11 +94,13 @@ A run is sent a few cases per request (`make eval-rag` uses five), so no
 request lasts long enough to hit a timeout and a failure part-way keeps every
 batch already scored. The engine logs one line per case as it scores it.
 
-Scoring is not cheap: RAGAS makes about thirty judge-model calls per case,
-each carrying the question, the answer and the retrieved chunks. On the
-example's judge model that is roughly $0.12 per case, so the 55-case dataset
-costs about $7 per run. Run it when a retrieval-side change is on the table,
-not routinely.
+Scoring is not free: RAGAS makes about thirty judge-model calls per case,
+each carrying the question, the answer and the retrieved chunks. The judge
+is `ENGINE_RAG_JUDGE_MODEL`, by default `google/gemini-2.5-flash-lite`, kept
+in a different family than the answering model so nothing grades itself.
+At that model's prices the 55-case dataset costs about $0.25 per run,
+measured; a judge at Claude Haiku prices makes the same run about $7. Run
+it when a retrieval-side change is on the table, not routinely.
 
 The example dataset holds 55 cases over the nine knowledge documents, in three
 categories: `single_turn` questions that stand alone, `follow_up` questions
@@ -106,6 +108,40 @@ whose subject is only in the history, and `negative` questions the knowledge
 base does not answer, where the reference answer is that the assistant should
 say so. The report groups scores by category, so a change that helps
 follow-ups and hurts negatives is visible as such.
+
+## Baseline
+
+Scored on 8 September 2026 with the example project as shipped: answers by
+`openai/gpt-5-mini`, hybrid retrieval, no rerank, judged by
+`google/gemini-2.5-flash-lite`. Cost: $0.25, 25 minutes.
+
+| category    | cases | faithfulness | answer relevancy | context precision | context recall |
+|-------------|------:|-------------:|-----------------:|------------------:|---------------:|
+| single_turn |    42 |         0.87 |             0.67 |              0.82 |           0.98 |
+| follow_up   |    10 |         0.84 |             0.49 |              0.84 |           1.00 |
+| negative    |     3 |         0.17 |             0.09 |              0.00 |           0.00 |
+| overall     |    55 |         0.83 |             0.60 |              0.78 |           0.93 |
+
+How to read it:
+
+- Context recall is the retrieval number. At 0.98 and 1.00 for the answerable
+  categories, the chunk that holds the answer is almost always retrieved.
+- Context precision below that means the answer's chunk arrives with
+  neighbours that do not help. Reranking is the lever for it, and costs one
+  more small call per turn.
+- Answer relevancy is the weakest metric, and follow-ups score lowest. RAGAS
+  measures how directly the answer addresses the question, and the assistant's
+  answers carry caveats and hand-offs that the metric counts against them.
+  Two answers scored zero (`followup_passport_validity`, `transit_visa`): the
+  assistant redirected to the airline rather than answering.
+- The negative cases score zero by construction: they have no reference
+  context and the right answer is a refusal, which these four metrics cannot
+  reward. They are in the dataset to be read, not averaged.
+- The cheap judge left faithfulness empty on 15 cases where its output did not
+  parse. Empty cells are left out of the averages rather than counted as zero.
+  `lost_baggage` scored zero recall although its chunk is the first hit; treat
+  single-case outliers from this judge with suspicion and re-run them before
+  acting.
 
 ## The small calls, and what they cost
 

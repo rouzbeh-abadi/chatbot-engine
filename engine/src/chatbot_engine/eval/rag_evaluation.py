@@ -61,10 +61,6 @@ class _NoTools:
 
 _NO_TOOLS = _NoTools()
 
-#: A different family than the assistant's `openai/gpt-5-mini`, so the metrics
-#: are not self-graded. Must be a model the OpenRouter account can reach.
-RAG_JUDGE_MODEL = "anthropic/claude-haiku-4.5"
-
 _METRICS = (
     "faithfulness",
     "answer_relevancy",
@@ -130,7 +126,7 @@ def _build_metrics() -> tuple:
         base_url=settings.openrouter_base_url,
         max_retries=6,
     )
-    llm = llm_factory(RAG_JUDGE_MODEL, provider="openai", client=client)
+    llm = llm_factory(settings.rag_judge_model, provider="openai", client=client)
     embeddings = embedding_factory(
         provider="openai",
         model=settings.embedding_model,
@@ -236,5 +232,5 @@ async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
         results=results,
         overall=_averages(results),
         by_category=_by_category(results),
-        model=RAG_JUDGE_MODEL,
+        model=get_settings().rag_judge_model,
     )
