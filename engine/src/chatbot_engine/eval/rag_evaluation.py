@@ -12,6 +12,7 @@ turn uses, then scores four things with RAGAS.
 
 from __future__ import annotations
 
+import importlib
 import math
 from collections.abc import Mapping
 from typing import Any
@@ -103,6 +104,11 @@ def _build_metrics() -> tuple:
     Collections metrics take a ragas-native LLM built from an OpenAI client, so
     we point one at OpenRouter rather than reusing the LangChain chat model.
     """
+    # The shim must load before anything from ragas. A call rather than an
+    # import statement, because an import sorter once moved it below the ragas
+    # imports and broke the evaluation in a way nothing here exercised.
+    importlib.import_module("chatbot_engine.eval._ragas_compat")
+
     from ragas.embeddings import embedding_factory
     from ragas.llms import llm_factory
     from ragas.metrics.collections import (
@@ -111,8 +117,6 @@ def _build_metrics() -> tuple:
         ContextRecall,
         Faithfulness,
     )
-
-    from chatbot_engine.eval import _ragas_compat  # noqa: F401  patch before ragas
 
     settings = get_settings()
     # RAGAS fires many calls per case, so a rate-limited account (429s) will
