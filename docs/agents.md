@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.0
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.1
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```

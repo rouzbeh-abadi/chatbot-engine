@@ -11,9 +11,9 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.0
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.0
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.0
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.1
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.1
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.1
 ```
 
 Each is also tagged `0.1`, `0` and `latest`. Pin to a full version in
@@ -40,7 +40,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.1 && git push origin v0.1.1
 ```
 
 The Release workflow runs the full test suite, publishes the three images, and
