@@ -17,4 +17,11 @@ Kept deliberately import-light so `from chatbot_engine import __version__` costs
 nothing: the package root pulls in no framework.
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    #: The installed package's version, so /health and the OpenAPI document
+    #: cannot drift from pyproject.toml the way a hand-written string did.
+    __version__ = version("chatbot-engine")
+except PackageNotFoundError:  # pragma: no cover - source tree without an install
+    __version__ = "0+unknown"
