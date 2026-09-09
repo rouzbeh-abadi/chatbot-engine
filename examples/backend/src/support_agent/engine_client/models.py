@@ -28,6 +28,21 @@ class Message(BaseModel):
     content: str = Field(max_length=32_000)
 
 
+class TracingConfig(BaseModel):
+    """Where this assistant's turns are traced, when not the engine's default.
+
+    Mirrors the engine's model: an assistant can send its traces to its own
+    Langfuse rather than the operator's. The keys travel with the request.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider: Literal["langfuse"] = "langfuse"
+    public_key: str = Field(min_length=1)
+    secret_key: str = Field(min_length=1)
+    host: str = "https://cloud.langfuse.com"
+
+
 class McpServerConfig(BaseModel):
     """An MCP tool server the engine may call, and the tools it is allowed to use.
 
@@ -77,6 +92,8 @@ class AssistantConfig(BaseModel):
     retrieval_candidates: int | None = Field(default=None, ge=1, le=200)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
+    #: This assistant's own trace destination. Unset, the engine's setting applies.
+    tracing: TracingConfig | None = None
 
 
 class EngineChatRequest(BaseModel):
