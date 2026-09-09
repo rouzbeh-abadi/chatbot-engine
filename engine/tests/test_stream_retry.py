@@ -29,7 +29,7 @@ class FlakyChain:
         self.fail_after = fail_after
         self.calls = 0
 
-    async def astream(self, _inputs):
+    async def astream(self, _inputs, config=None):
         self.calls += 1
         if self.calls <= self.failures:
             for i in range(self.fail_after):

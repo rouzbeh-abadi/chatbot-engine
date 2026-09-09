@@ -23,11 +23,11 @@ COPY examples/langgraph-agent/pyproject.toml examples/langgraph-agent/
 # rebuild. All are imported lazily, so normal serving loads none of them.
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-workspace \
-    --package chatbot-engine --extra eval --extra redis --extra postgres --extra s3
+    --package chatbot-engine --extra eval --extra redis --extra postgres --extra s3 --extra tracing
 
 COPY engine/src engine/src
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv sync --frozen --no-dev --package chatbot-engine --extra eval --extra redis --extra postgres --extra s3
+    uv sync --frozen --no-dev --package chatbot-engine --extra eval --extra redis --extra postgres --extra s3 --extra tracing
 
 # Drop root, and own the data directory: the engine writes vectors, the document
 # registry, and uploaded blobs, so its volume has to belong to the same user.

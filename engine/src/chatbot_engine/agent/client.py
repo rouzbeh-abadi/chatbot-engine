@@ -24,6 +24,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 
 from chatbot_engine.errors import EngineError
@@ -34,6 +35,7 @@ from chatbot_engine.models.events import (
 )
 from chatbot_engine.ports.agent import ToolProvider
 from chatbot_engine.settings import Settings, get_settings
+from chatbot_engine.tracing import run_config
 
 logger = logging.getLogger(__name__)
 
@@ -260,11 +262,14 @@ async def stream_completion(
     totals = dict(prior) if prior else empty_totals()
 
     retries = get_settings().provider_max_retries
+    config = run_config(request, name="answer")
 
     for _ in range(request.project.max_tool_iterations):
         reply: AIMessageChunk | None = None
 
-        async for chunk in stream_round(chain, messages, retries=retries):
+        async for chunk in stream_round(
+            chain, messages, retries=retries, config=config
+        ):
             if chunk.text:
                 yield chunk.text
 
@@ -328,6 +333,7 @@ async def stream_round(
     *,
     retries: int,
     backoff_s: float = RETRY_BACKOFF_S,
+    config: RunnableConfig | None = None,
 ) -> AsyncIterator[AIMessageChunk]:
     """One model call, streamed, retried while nothing has reached the caller.
 
@@ -340,7 +346,7 @@ async def stream_round(
     for attempt in range(retries + 1):
         emitted = False
         try:
-            async for chunk in chain.astream({"messages": messages}):
+            async for chunk in chain.astream({"messages": messages}, config=config):
                 if chunk.text:
                     emitted = True
                 yield chunk

@@ -44,6 +44,10 @@ eval = [
 redis = [
     "redis>=5",
 ]
+# Traces to Langfuse (`ENGINE_TRACING=langfuse`). LangSmith needs no extra.
+tracing = [
+    "langfuse>=3",
+]
 postgres = [
     "psycopg[binary]>=3.2",
 ]

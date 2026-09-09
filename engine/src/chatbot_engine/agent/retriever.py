@@ -40,6 +40,7 @@ from chatbot_engine.rag import sparse
 from chatbot_engine.rag.rerank import rerank
 from chatbot_engine.rag.vector_store import load_vector_store
 from chatbot_engine.settings import get_settings
+from chatbot_engine.tracing import run_config
 
 #: A retrieved chunk and its score: 1.0 is the best match in the result set.
 Hit = tuple[Document, float]
@@ -100,7 +101,8 @@ async def rewrite_queries(
                 f"Conversation so far:\n{history}\n\n"
                 f"Latest message: {request.message}\n\nSearch queries:"
             ),
-        ]
+        ],
+        config=run_config(request, name="rewrite"),
     )
 
     if totals is not None:

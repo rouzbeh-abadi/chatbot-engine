@@ -226,6 +226,26 @@ latency; tokens and cost by model; tool calls by result.
 Not included: distributed tracing. The request id gives the correlation;
 spans and a trace backend are a deployment's own choice.
 
+### Tracing
+
+`ENGINE_TRACING` records every model call of a turn, with its prompt,
+response, latency and tokens, where an operator can open it:
+
+| Value | Needs | Where traces go |
+| --- | --- | --- |
+| `off` | nothing | nowhere (default) |
+| `langsmith` | `ENGINE_LANGSMITH_API_KEY`, optional `ENGINE_LANGSMITH_PROJECT` | LangChain's hosted LangSmith |
+| `langfuse` | `ENGINE_LANGFUSE_PUBLIC_KEY`, `ENGINE_LANGFUSE_SECRET_KEY`, optional `ENGINE_LANGFUSE_HOST`; the image has the `tracing` extra | Langfuse cloud, or a self-hosted Langfuse at the host you name |
+
+Every trace carries the request id, the project id, the session id and the
+user id, the same ids as the log lines, so a trace, a log line and a
+conversation in the calling application all meet on one id. A misconfigured
+destination stops the engine at startup rather than recording nothing.
+
+Traces contain prompts and retrieved text. For a product that handles other
+people's documents, Langfuse on a host you control is the option that keeps
+that data where you can answer for it.
+
 ## Scaling out
 
 One engine process is the default shape, and four things in it belong to a

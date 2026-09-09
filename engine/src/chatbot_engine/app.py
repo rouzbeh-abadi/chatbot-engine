@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from chatbot_engine import __version__
+from chatbot_engine import __version__, tracing
 from chatbot_engine.agent.registry import UnknownAgentError
 from chatbot_engine.api import agents, chat, documents, eval_rag, health, judge, metrics
 from chatbot_engine.api.auth import require_api_key
@@ -54,7 +54,9 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     for problem in problems:
         logger.warning("insecure for deployment: %s", problem)
 
+    tracing.configure(settings)
     yield
+    tracing.flush()
 
 
 def create_app() -> FastAPI:

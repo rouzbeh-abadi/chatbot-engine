@@ -219,6 +219,18 @@ class Settings(BaseSettings):
     #: and carries counts, not content.
     metrics_enabled: bool = True
 
+    #: Where every model call of a turn is recorded. `langsmith` uses
+    #: LangChain's tracer and its `LANGCHAIN_*` environment (the two settings
+    #: below map onto it); `langfuse` needs the `tracing` extra and the keys
+    #: below, and can point at a self-hosted instance. Every run carries the
+    #: request, project, session and user ids either way. See tracing.py.
+    tracing: Literal["off", "langsmith", "langfuse"] = "off"
+    langsmith_api_key: str | None = None
+    langsmith_project: str = "chatbot-engine"
+    langfuse_public_key: str | None = None
+    langfuse_secret_key: str | None = None
+    langfuse_host: str = "https://cloud.langfuse.com"
+
     @field_validator("pricing", mode="before")
     @classmethod
     def _blank_pricing_means_none(cls, value: object) -> object:
@@ -245,6 +257,9 @@ class Settings(BaseSettings):
         "chroma_url",
         "chroma_token",
         "utility_model",
+        "langsmith_api_key",
+        "langfuse_public_key",
+        "langfuse_secret_key",
         "registry_url",
         "blob_s3_bucket",
         "blob_s3_endpoint_url",

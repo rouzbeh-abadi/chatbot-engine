@@ -58,6 +58,7 @@ from chatbot_engine.models.events import (
     UsageEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
+from chatbot_engine.tracing import run_config
 
 #: Marks the end of the event stream, so `run` knows the graph has finished.
 _DONE = object()
@@ -109,9 +110,13 @@ class LangGraphAgent:
             try:
                 await graph.ainvoke(
                     {"messages": [], "usage": {}, "context": ""},
-                    # One more than the tool rounds allowed: each round is a
-                    # model step and a tool step, plus the retrieval step.
-                    {"recursion_limit": 2 * request.project.max_tool_iterations + 3},
+                    {
+                        # The tracer and the ids; the nodes' model calls inherit them.
+                        **run_config(request, name="graph"),
+                        # One more than the tool rounds allowed: each round is a
+                        # model step and a tool step, plus the retrieval step.
+                        "recursion_limit": 2 * request.project.max_tool_iterations + 3,
+                    },
                 )
             finally:
                 await events.put(_DONE)

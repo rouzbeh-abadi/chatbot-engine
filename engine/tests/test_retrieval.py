@@ -175,7 +175,7 @@ class _Reranker:
         self.reply = reply
         self.prompts: list[str] = []
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         self.prompts.append(messages[-1].content)
         return AIMessage(content=self.reply)
 
@@ -222,7 +222,7 @@ async def test_a_failing_rerank_call_keeps_the_fused_order(client: TestClient) -
     _seed(client)
 
     class Exploding:
-        async def ainvoke(self, messages):
+        async def ainvoke(self, messages, config=None):
             raise RuntimeError("provider down")
 
     without = await retrieve(_request(retrieval="hybrid"))
@@ -249,7 +249,7 @@ class _Utility:
     def __init__(self, reply: str) -> None:
         self.reply = reply
 
-    async def ainvoke(self, messages):
+    async def ainvoke(self, messages, config=None):
         return AIMessage(
             content=self.reply,
             usage_metadata={"input_tokens": 40, "output_tokens": 5, "total_tokens": 45},

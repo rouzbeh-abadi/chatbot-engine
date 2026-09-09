@@ -24,6 +24,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from chatbot_engine.agent.client import Totals, add_usage, build_chat_model
 from chatbot_engine.models.chat import ChatRequest
+from chatbot_engine.tracing import run_config
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,8 @@ async def rerank(
             [
                 SystemMessage(RERANK_SYSTEM),
                 HumanMessage(f"Question: {query}\n\nPassages:\n\n{numbered}"),
-            ]
+            ],
+            config=run_config(request, name="rerank"),
         )
         if totals is not None:
             add_usage(totals, reply)
