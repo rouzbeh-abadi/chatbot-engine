@@ -80,9 +80,9 @@ class Settings(BaseSettings):
 
     #: How many times a provider call is retried on a transient failure (a
     #: 429, a 5xx, a dropped connection), with exponential backoff between
-    #: attempts. Applies to the request; a stream that fails after its first
-    #: token is not retried, because the tokens already sent cannot be taken
-    #: back.
+    #: attempts. Applies to the request, and to a stream that breaks before
+    #: its first token. A stream that fails after its first token is not
+    #: retried, because the tokens already sent cannot be taken back.
     provider_max_retries: int = 3
 
     #: Seconds to wait for a provider before giving up on one attempt.

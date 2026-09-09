@@ -8,10 +8,11 @@ This is where retrieval, the prompt, the model, and the tools finally meet.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
-from typing import cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -33,6 +34,8 @@ from chatbot_engine.models.events import (
 )
 from chatbot_engine.ports.agent import ToolProvider
 from chatbot_engine.settings import Settings, get_settings
+
+logger = logging.getLogger(__name__)
 
 #: Token totals, as accumulated across a turn's model calls.
 Totals = dict[str, int]
@@ -256,17 +259,19 @@ async def stream_completion(
     # calls, and reporting only the last one would understate the total.
     totals = dict(prior) if prior else empty_totals()
 
+    retries = get_settings().provider_max_retries
+
     for _ in range(request.project.max_tool_iterations):
         reply: AIMessageChunk | None = None
 
-        async for chunk in chain.astream({"messages": messages}):
+        async for chunk in stream_round(chain, messages, retries=retries):
             if chunk.text:
                 yield chunk.text
 
             # Chunks add up into the whole message, and only the whole message
             # has usable `tool_calls`: a fragment cannot know whether the model
             # was part-way through asking for a tool.
-            reply = cast(AIMessageChunk, chunk if reply is None else reply + chunk)
+            reply = chunk if reply is None else reply + chunk
 
         if reply is None:
             # The model produced nothing at all. An empty answer, which is what
@@ -294,6 +299,64 @@ async def stream_completion(
         f"the model was still calling tools after "
         f"{request.project.max_tool_iterations} rounds"
     )
+
+
+#: Seconds before the first retry; doubles each attempt.
+RETRY_BACKOFF_S = 0.5
+
+
+def is_transient(exc: BaseException) -> bool:
+    """Whether a model call failed in a way a retry can fix.
+
+    Rate limits, upstream 5xx and dropped connections come and go; a 400 or an
+    authentication failure will not change on the next attempt.
+    """
+    try:
+        import openai
+    except ImportError:  # pragma: no cover - openai ships with langchain-openai
+        return False
+    if isinstance(exc, openai.RateLimitError | openai.APIConnectionError):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        return exc.status_code >= 500
+    return False
+
+
+async def stream_round(
+    chain,
+    messages: Sequence[BaseMessage],
+    *,
+    retries: int,
+    backoff_s: float = RETRY_BACKOFF_S,
+) -> AsyncIterator[AIMessageChunk]:
+    """One model call, streamed, retried while nothing has reached the caller.
+
+    The provider client already retries a request that fails outright. This
+    covers the stream that opens and then breaks before its first token,
+    which the client cannot retry because the response has started. Once a
+    token has been yielded the failure is passed on: the caller has shown
+    text that a replay would duplicate.
+    """
+    for attempt in range(retries + 1):
+        emitted = False
+        try:
+            async for chunk in chain.astream({"messages": messages}):
+                if chunk.text:
+                    emitted = True
+                yield chunk
+            return
+        except Exception as exc:
+            if emitted or attempt >= retries or not is_transient(exc):
+                raise
+            delay = backoff_s * 2**attempt
+            logger.warning(
+                "model call failed before its first token (%s); retry %d/%d in %.1fs",
+                type(exc).__name__,
+                attempt + 1,
+                retries,
+                delay,
+            )
+            await asyncio.sleep(delay)
 
 
 def price_usage(
