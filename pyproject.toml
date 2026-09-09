@@ -9,7 +9,7 @@
 # Not "chatbot-engine": that name belongs to the engine package below, and a
 # workspace root cannot depend on itself.
 name = "chatbot-engine-workspace"
-version = "0.1.1"
+version = "0.1.2"
 description = "Development workspace for the chatbot engine and its example application."
 readme = "README.md"
 license = "Apache-2.0"
