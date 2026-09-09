@@ -145,6 +145,25 @@ request carries the whole assistant definition:
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
 | `history` | no | Earlier turns, oldest first |
 
+### Tracing per assistant
+
+Add a `tracing` block to `project` to send that assistant's traces to its own
+Langfuse, a cloud project or a self-hosted instance, instead of the engine's
+`ENGINE_TRACING` destination (engine 0.1.3+):
+
+```json
+"tracing": {
+  "provider": "langfuse",
+  "public_key": "pk-lf-…",
+  "secret_key": "sk-lf-…",
+  "host": "https://cloud.langfuse.com"
+}
+```
+
+The keys travel with every request, so this assumes what the deployment
+guide already requires: the engine is reached only by the backend, over TLS.
+Traces carry the request, project, session and user ids either way.
+
 ### Why the whole configuration is sent every time
 
 The engine then holds no state that needs migrating, and the backend remains

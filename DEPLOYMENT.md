@@ -244,7 +244,10 @@ destination stops the engine at startup rather than recording nothing.
 
 Traces contain prompts and retrieved text. For a product that handles other
 people's documents, Langfuse on a host you control is the option that keeps
-that data where you can answer for it.
+that data where you can answer for it. An assistant can also name its own
+destination in the request (`project.tracing`, see the integration guide),
+which is how a multi-tenant product lets each customer keep their traces
+on their own Langfuse.
 
 ## Scaling out
 

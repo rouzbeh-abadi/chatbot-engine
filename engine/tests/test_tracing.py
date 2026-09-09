@@ -8,7 +8,7 @@ import pytest
 
 from chatbot_engine import tracing
 from chatbot_engine.errors import EngineError
-from chatbot_engine.models.chat import AssistantConfig, ChatRequest
+from chatbot_engine.models.chat import AssistantConfig, ChatRequest, TracingConfig
 from chatbot_engine.observability import _request_id
 from chatbot_engine.settings import Settings
 
@@ -99,3 +99,41 @@ def test_langfuse_attaches_its_handler_and_its_grouping_keys():
     assert config["metadata"]["langfuse_session_id"] == "sess-1"
     assert config["metadata"]["langfuse_user_id"] == "user-1"
     assert config["metadata"]["langfuse_tags"] == ["shop"]
+
+
+def _own(public_key: str) -> ChatRequest:
+    return ChatRequest(
+        project=AssistantConfig(
+            project_id="tenant",
+            name="Tenant",
+            system_prompt=".",
+            tracing=TracingConfig(
+                public_key=public_key, secret_key="sk", host="http://localhost:1"
+            ),
+        ),
+        message="hi",
+        session_id="s",
+        user_id="u",
+    )
+
+
+def test_an_assistant_with_its_own_langfuse_traces_there_even_when_the_engine_is_off():
+    pytest.importorskip("langfuse")
+    config = tracing.run_config(_own("pk-tenant"), name="answer")
+    assert len(config["callbacks"]) == 1
+    assert config["metadata"]["langfuse_session_id"] == "s"
+    assert config["metadata"]["langfuse_tags"] == ["tenant"]
+
+
+def test_the_handler_for_a_key_is_created_once():
+    pytest.importorskip("langfuse")
+    first = tracing.run_config(_own("pk-once"), name="a")["callbacks"][0]
+    second = tracing.run_config(_own("pk-once"), name="b")["callbacks"][0]
+    assert first is second
+
+
+def test_the_tracing_block_rejects_unknown_fields_and_empty_keys():
+    with pytest.raises(ValueError):
+        TracingConfig(public_key="", secret_key="x")
+    with pytest.raises(ValueError):
+        TracingConfig.model_validate({"public_key": "a", "secret_key": "b", "extra": 1})
