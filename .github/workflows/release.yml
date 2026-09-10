@@ -5,11 +5,14 @@
 # Images land in this repository's GitHub Container Registry:
 #
 #   ghcr.io/<owner>/chatbot-engine/engine
+#   ghcr.io/<owner>/chatbot-engine/engine-langgraph
 #   ghcr.io/<owner>/chatbot-engine/backend
 #   ghcr.io/<owner>/chatbot-engine/frontend
 #
-# The engine is the reusable part -- the other two are the example app, published
-# alongside it so the whole stack can be run from a compose file without a build.
+# The engine is the reusable part; engine-langgraph is the same engine with the
+# LangGraph plugin installed (the `graph` and `workflow` agents). The other two
+# are the example app, published alongside so the whole stack can be run from a
+# compose file without a build.
 #
 # Nothing here deploys anywhere. This is a package, so where it runs is the
 # adopter's decision; see DEPLOYMENT.md.
@@ -75,6 +78,9 @@ jobs:
           - service: engine
             context: .
             dockerfile: engine/Dockerfile
+          - service: engine-langgraph
+            context: .
+            dockerfile: docker/engine-with-plugins.Dockerfile
           - service: backend
             context: .
             dockerfile: examples/backend/Dockerfile
@@ -161,6 +167,7 @@ jobs:
 
           \`\`\`
           ghcr.io/$REPO/engine:$tag
+          ghcr.io/$REPO/engine-langgraph:$tag
           ghcr.io/$REPO/backend:$tag
           ghcr.io/$REPO/frontend:$tag
           \`\`\`
