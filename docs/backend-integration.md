@@ -139,7 +139,7 @@ request carries the whole assistant definition:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)) |
+| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below) |
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
@@ -163,6 +163,16 @@ Langfuse, a cloud project or a self-hosted instance, instead of the engine's
 The keys travel with every request, so this assumes what the deployment
 guide already requires: the engine is reached only by the backend, over TLS.
 Traces carry the request, project, session and user ids either way.
+
+### A workflow per assistant
+
+With `agent: workflow` (the LangGraph plugin, in the `engine-langgraph`
+image), `project.workflow` describes the turn as nodes and edges from a fixed
+library: retrieve, model, condition, tool, reply, handoff, end. The schema is
+validated at the API boundary, so a malformed graph is a `422` before anything
+runs; a tool step may only name a tool that one of `mcp_servers` allowlists.
+Without a `workflow`, the agent runs retrieve then model. The node table and
+an example are in the Workflows section of [agents.md](agents.md).
 
 ### Why the whole configuration is sent every time
 

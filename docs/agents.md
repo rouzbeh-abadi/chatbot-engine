@@ -238,16 +238,18 @@ other agent, so the caller's UI needs nothing new.
 | Node | Does |
 | --- | --- |
 | `retrieve` | searches the knowledge base; later model steps see the passages |
-| `model` | calls the assistant's model, streams the answer, runs tools it asks for; `var` stores the reply instead of speaking it; `prompt` adds instructions for this step |
-| `condition` | asks the model one question and follows the branch whose label it picks; the first label is the fallback |
-| `tool` | calls one allowed tool with templated arguments and keeps the result in `var` |
-| `reply` | speaks a fixed, templated text |
-| `handoff` | speaks a message, marks the turn handed off, and calls a tool with the transcript when named |
-| `end` | finishes |
+| `model` | calls the assistant's model with the prompt, the conversation and the retrieved passages, streams the reply as the answer, and runs the tools it asks for, up to `max_tool_iterations` rounds (`tools: false` disables them); `prompt` appends instructions for this step; `var` stores the reply in a variable instead of speaking it |
+| `condition` | asks the utility model (`ENGINE_UTILITY_MODEL`, temperature 0) one question, expecting one of the branch labels, and follows that branch; the answer is matched exactly, then as a whole word, and the first label is the fallback |
+| `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, and stores the result text in `var`; the call is reported as `tool_call_started` and `tool_call_finished` events like any other |
+| `reply` | streams a fixed, templated text as the answer |
+| `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with the transcript so a ticket or an email can be raised |
+| `end` | finishes the turn; the same as a node with no outgoing edge |
 
 Templates in `prompt`, `text`, `message` and tool arguments may use
-`{{message}}`, `{{user_id}}`, `{{session_id}}` and `{{vars.<name>}}`. A node
-with no outgoing edge ends the turn. The schema refuses unknown node ids,
+`{{message}}`, `{{user_id}}`, `{{session_id}}` and `{{vars.<name>}}`; a
+condition also sets `vars.condition_<id>` to the label it chose. A node with
+no outgoing edge ends the turn, after which the agent emits the `usage` and
+`done` events. The schema refuses unknown node ids,
 unreachable nodes, a condition with edges, and a node with two outgoing
 edges; `max_steps` (default 30) caps the visits in one turn. Every node
 appears as a step in the trace when tracing is on. Without a `workflow`, the

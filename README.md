@@ -43,6 +43,17 @@ replace all of it.
   framework. Anything else, including the bundled LangGraph agent, is a package
   you install: register a factory under an entry point and name it in the
   project config, no fork required. See [docs/agents.md](docs/agents.md).
+- **Workflows.** A request can carry a `workflow`: the turn as a graph of
+  steps from a fixed library (retrieve, model, condition, tool, reply,
+  hand-off, end) with edges between them. The bundled `workflow` agent builds
+  a LangGraph from it per request, so a caller composes the turn as data and
+  never ships code to the engine. See the Workflows section of
+  [docs/agents.md](docs/agents.md).
+- **Tracing.** With `ENGINE_TRACING` set, every model call in a turn is
+  recorded in LangSmith or Langfuse (cloud or self-hosted), tagged with the
+  request, project, session and user ids so a trace lines up with the log
+  lines. An assistant can name its own Langfuse instead of the engine's. See
+  the Tracing section of [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Chunking strategies.** Cut documents by fixed size, by Markdown heading, or
   by page. Chosen per project, so PDFs can carry page numbers into their
   citations. See [docs/chunking.md](docs/chunking.md).
@@ -208,11 +219,18 @@ $ curl localhost:8100/agents
 Then select it with `agent: my-agent` in the project config, or from the UI's
 dropdown. No fork, no change to engine code.
 
-`examples/langgraph-agent/` is a complete working one, a LangGraph state machine
-of four nodes and one conditional edge. It is installed by the demo stack the
-same way yours would be, so `agent: graph` in the picker really is an injected
-plugin rather than something built in. Copy it as your starting point, and see
-**[docs/agents.md](docs/agents.md)** for the contract your agent owes.
+`examples/langgraph-agent/` is a complete working one. It registers two
+agents: `graph`, a fixed LangGraph state machine of four nodes and one
+conditional edge, and `workflow`, which assembles a LangGraph per request from
+the `workflow` block in the assistant config. The demo stack installs it the
+same way yours would be installed, so `agent: graph` in the picker really is an
+injected plugin rather than something built in. Copy it as your starting
+point, and see **[docs/agents.md](docs/agents.md)** for the contract your
+agent owes.
+
+Every release publishes two engine images: `engine`, with the loop agent only,
+and `engine-langgraph`, the same engine with this plugin installed. Pick the
+second to get `graph` and `workflow` without a build.
 
 ## Evaluation
 
@@ -266,7 +284,8 @@ all of it.
 - **[docs/backend-integration.md](docs/backend-integration.md)** shows how to
   connect a backend to the engine.
 - **[docs/agents.md](docs/agents.md)** covers the agent contract, the bundled
-  LangGraph plugin, and how to install your own.
+  LangGraph plugin, workflows described in the request, and how to install
+  your own agent.
 - **[docs/memory.md](docs/memory.md)** covers long-term memory: what is stored,
   why reading is injected rather than a tool, and why the unauthenticated owner
   id partitions notes without protecting them.
