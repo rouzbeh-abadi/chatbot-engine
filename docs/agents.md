@@ -208,3 +208,47 @@ installed set:
 ```
 
 The list is read from the installed packages at request time.
+
+## Workflows
+
+An assistant can describe its turn as a graph instead of relying on an
+agent's built-in shape. Set `agent: workflow` and send a `workflow` block
+with the assistant config: nodes from a fixed library, edges between them,
+and a start node. The `workflow` agent (in the LangGraph plugin) builds a
+LangGraph from it for each request and streams the same events as every
+other agent, so the caller's UI needs nothing new.
+
+```json
+"agent": "workflow",
+"workflow": {
+  "start": "retrieve",
+  "nodes": [
+    {"id": "retrieve", "type": "retrieve"},
+    {"id": "kind", "type": "condition",
+     "question": "Is the visitor asking about a specific order?",
+     "branches": {"order": "lookup", "other": "answer"}},
+    {"id": "lookup", "type": "tool", "tool": "get_booking_status",
+     "arguments": {"reference": "{{message}}"}, "var": "booking"},
+    {"id": "answer", "type": "model", "prompt": "Booking data: {{vars.booking}}"}
+  ],
+  "edges": [{"from": "retrieve", "to": "kind"}, {"from": "lookup", "to": "answer"}]
+}
+```
+
+| Node | Does |
+| --- | --- |
+| `retrieve` | searches the knowledge base; later model steps see the passages |
+| `model` | calls the assistant's model, streams the answer, runs tools it asks for; `var` stores the reply instead of speaking it; `prompt` adds instructions for this step |
+| `condition` | asks the model one question and follows the branch whose label it picks; the first label is the fallback |
+| `tool` | calls one allowed tool with templated arguments and keeps the result in `var` |
+| `reply` | speaks a fixed, templated text |
+| `handoff` | speaks a message, marks the turn handed off, and calls a tool with the transcript when named |
+| `end` | finishes |
+
+Templates in `prompt`, `text`, `message` and tool arguments may use
+`{{message}}`, `{{user_id}}`, `{{session_id}}` and `{{vars.<name>}}`. A node
+with no outgoing edge ends the turn. The schema refuses unknown node ids,
+unreachable nodes, a condition with edges, and a node with two outgoing
+edges; `max_steps` (default 30) caps the visits in one turn. Every node
+appears as a step in the trace when tracing is on. Without a `workflow`, the
+agent runs retrieve then model, the same shape as the `graph` agent.

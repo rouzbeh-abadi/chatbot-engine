@@ -22,6 +22,7 @@ dependencies = [
 # The entry point is the whole integration. The engine looks up this group.
 [project.entry-points."chatbot_engine.agents"]
 graph = "langgraph_agent.agent:build"
+workflow = "langgraph_agent.workflow:build"
 
 [build-system]
 requires = ["hatchling"]

@@ -16,6 +16,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from support_agent.engine_client.workflow import WorkflowSpec
+
 # --- what we send -----------------------------------------------------------
 
 
@@ -94,6 +96,8 @@ class AssistantConfig(BaseModel):
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
     #: This assistant's own trace destination. Unset, the engine's setting applies.
     tracing: TracingConfig | None = None
+    #: The turn as a graph of steps, run by the engine's `workflow` agent.
+    workflow: WorkflowSpec | None = None
 
 
 class EngineChatRequest(BaseModel):

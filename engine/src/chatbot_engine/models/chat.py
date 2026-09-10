@@ -12,6 +12,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from chatbot_engine.models.workflow import WorkflowSpec
+
 
 class Message(BaseModel):
     """One turn of conversation history, supplied by the caller."""
@@ -97,6 +99,9 @@ class AssistantConfig(BaseModel):
     #: This assistant's own trace destination. Unset, the engine's
     #: `ENGINE_TRACING` setting applies.
     tracing: TracingConfig | None = None
+    #: The turn as a graph of steps, run by the `workflow` agent. Unset, the
+    #: named agent's built-in shape applies. See models/workflow.py.
+    workflow: WorkflowSpec | None = None
     #: Bounds the tool-calling loop, so a misbehaving model cannot spin.
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
 
