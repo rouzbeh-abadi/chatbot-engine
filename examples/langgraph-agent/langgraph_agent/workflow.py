@@ -23,7 +23,13 @@ from langchain_core.messages import (
 )
 from langgraph.graph import END, START, StateGraph
 
-from chatbot_engine.agent.client import build_chat_model, run_tool_calls, to_messages
+from chatbot_engine.agent.client import (
+    FinishReason,
+    build_chat_model,
+    finish_reason_of,
+    run_tool_calls,
+    to_messages,
+)
 from chatbot_engine.agent.retriever import (
     retrieve_with_usage,
     to_context,
@@ -73,6 +79,8 @@ class _State(TypedDict, total=False):
     #: This turn's model replies and tool results, in order.
     messages: Annotated[list[BaseMessage], lambda a, b: [*a, *b]]
     usage: Annotated[dict[str, int], _merge_usage]
+    #: Why the last spoken reply ended; `length` when `max_output_tokens` cut it.
+    finish_reason: FinishReason
     vars: Annotated[dict[str, str], _merge_vars]
     context: str
     model_name: str
@@ -211,6 +219,10 @@ class WorkflowAgent:
                 }
                 if node.var is not None:
                     out["vars"] = {node.var: text}
+                elif new:
+                    out["finish_reason"] = finish_reason_of(
+                        cast(AIMessageChunk, new[-1])
+                    )
                 return out
 
             return step
@@ -391,7 +403,9 @@ class WorkflowAgent:
                     state.get("usage", {}), state.get("model_name") or project.model
                 )
             )
-            await events.put(DoneEvent(finish_reason="stop"))
+            await events.put(
+                DoneEvent(finish_reason=state.get("finish_reason", "stop"))
+            )
             return {}
 
         graph = StateGraph(_State)  # ty: ignore[invalid-argument-type]

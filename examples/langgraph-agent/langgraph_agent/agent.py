@@ -38,7 +38,9 @@ from langchain_core.messages import (
 from langgraph.graph import END, START, StateGraph
 
 from chatbot_engine.agent.client import (
+    FinishReason,
     build_chat_model,
+    finish_reason_of,
     price_usage,
     run_tool_calls,
     to_messages,
@@ -82,6 +84,8 @@ class _State(TypedDict, total=False):
 
     messages: Annotated[list[BaseMessage], lambda a, b: [*a, *b]]
     usage: Annotated[dict[str, int], _merge_usage]
+    #: Why the last reply ended; `length` when `max_output_tokens` cut it.
+    finish_reason: FinishReason
     context: str
     #: Taken from the model actually built, so pricing matches the loop agent's.
     model_name: str
@@ -173,6 +177,7 @@ class LangGraphAgent:
                 "messages": [reply],
                 "usage": _usage_of(reply),
                 "model_name": model.model_name,
+                "finish_reason": finish_reason_of(reply),
             }
 
         async def tools_node(state: _State) -> _State:
@@ -201,7 +206,9 @@ class LangGraphAgent:
             await events.put(
                 _usage_event(state.get("usage", {}), state.get("model_name"))
             )
-            await events.put(DoneEvent(finish_reason="stop"))
+            await events.put(
+                DoneEvent(finish_reason=state.get("finish_reason", "stop"))
+            )
             return {}
 
         def next_step(state: _State) -> str:

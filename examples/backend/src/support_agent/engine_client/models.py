@@ -85,6 +85,8 @@ class AssistantConfig(BaseModel):
     chunk_size: int | None = Field(default=None, ge=100, le=8000)
     chunk_overlap: int | None = Field(default=None, ge=0, le=2000)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    #: Cap on one model reply; the `done` event says `length` when it bites.
+    max_output_tokens: int | None = Field(default=None, ge=1, le=128_000)
     top_k: int = Field(default=5, ge=1, le=100)
     #: Retrieval: `vector` or `hybrid` (vector fused with keyword search),
     #: whether the model reranks the candidates, and how many candidates each

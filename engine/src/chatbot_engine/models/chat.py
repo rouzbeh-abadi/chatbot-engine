@@ -82,6 +82,11 @@ class AssistantConfig(BaseModel):
     chunk_size: int | None = Field(default=None, ge=100, le=8000)
     chunk_overlap: int | None = Field(default=None, ge=0, le=2000)
     temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    #: The most tokens one model reply may contain. The provider stops the
+    #: reply there and the turn's `done` event says `length`. None leaves it
+    #: to the provider. Small calls around the answer (rewrite, rerank,
+    #: condition) ignore it.
+    max_output_tokens: int | None = Field(default=None, ge=1, le=128_000)
     #: How many chunks reach the model per turn.
     top_k: int = Field(default=5, ge=1, le=100)
     #: How chunks are found. `vector` is similarity search alone; `hybrid`

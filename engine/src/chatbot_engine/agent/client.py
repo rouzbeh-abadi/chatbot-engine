@@ -13,6 +13,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
 from langchain_core.messages import (
     AIMessage,
@@ -75,6 +76,9 @@ class Usage:
     model: str | None = None
     #: USD cost at OpenRouter's listed prices, or None for an unpriced model.
     cost_usd: float | None = None
+    #: Why the last reply ended: `stop`, or `length` when `max_output_tokens`
+    #: cut it. What the turn's `done` event reports.
+    finish_reason: FinishReason = "stop"
 
 
 def build_chat_model(
@@ -87,6 +91,7 @@ def build_chat_model(
     return ChatOpenAI(
         model=config.model or settings.chat_model,
         temperature=config.temperature,
+        max_tokens=config.max_output_tokens,
         api_key=settings.require_openrouter_key(),
         base_url=settings.openrouter_base_url,
         stream_usage=True,
@@ -288,7 +293,9 @@ async def stream_completion(
         messages.append(reply)
 
         if not reply.tool_calls:
-            yield price_usage(totals, model.model_name)
+            yield price_usage(
+                totals, model.model_name, finish_reason=finish_reason_of(reply)
+            )
             return
 
         async for item in run_tool_calls(
@@ -365,10 +372,30 @@ async def stream_round(
             await asyncio.sleep(delay)
 
 
+#: The reasons a reply can end that `price_usage` passes on to the `done` event.
+FinishReason = Literal["stop", "length"]
+
+
+def finish_reason_of(reply: AIMessageChunk) -> FinishReason:
+    """Whether the provider cut the reply at `max_output_tokens`.
+
+    The provider sets `finish_reason` on its last chunks (the final text chunk
+    and the usage chunk both carry it), and summing chunks concatenates the
+    strings, so the summed reply reads `lengthlength`. Match the prefix.
+    Anything but `length` is a normal stop: a reply that ended to call tools
+    is not the end of the turn.
+    """
+    metadata = getattr(reply, "response_metadata", None) or {}
+    reason = str(metadata.get("finish_reason") or "")
+    return "length" if reason.startswith("length") else "stop"
+
+
 def price_usage(
     totals: Totals,
     model_name: str | None,
     pricing: Mapping[str, tuple[float, float]] | None = None,
+    *,
+    finish_reason: FinishReason = "stop",
 ) -> Usage:
     """Package token totals as a `Usage`, priced when the model is in the table.
 
@@ -389,4 +416,4 @@ def price_usage(
         if prices is not None
         else None
     )
-    return Usage(model=model_name, cost_usd=cost, **totals)
+    return Usage(model=model_name, cost_usd=cost, finish_reason=finish_reason, **totals)

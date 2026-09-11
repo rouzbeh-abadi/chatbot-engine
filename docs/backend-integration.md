@@ -115,6 +115,7 @@ request carries the whole assistant definition:
     "system_prompt": "You are a customer support assistant. Be concise.",
     "model": "openai/gpt-5-mini",
     "temperature": 0.2,
+    "max_output_tokens": 800,
     "top_k": 5,
     "max_tool_iterations": 6,
     "mcp_servers": [
@@ -139,7 +140,7 @@ request carries the whole assistant definition:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below) |
+| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply, and the `done` event says `length` when it did |
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
@@ -229,7 +230,7 @@ Read it line by line and switch on `type`.
 | `tool_call_finished` | `call_id`, `tool`, `ok`, `duration_ms`, `error` | Pair with `started` by `call_id` |
 | `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model` | Display cost. Tokens cover every model call in the turn; `cost_usd` is null unless the engine's `ENGINE_PRICING` lists the model |
 | `error` | `code`, `message` | The turn failed after the response started |
-| `done` | `finish_reason` | Always last |
+| `done` | `finish_reason` | Always last. `stop`, or `length` when `max_output_tokens` cut the answer; show the visitor the answer was shortened |
 
 Each `sources[]` entry has `doc_id`, `source`, `score`, and optionally
 `heading`, `page` and `excerpt`. `heading` is present when the document was

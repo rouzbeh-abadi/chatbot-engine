@@ -63,6 +63,15 @@ async def test_without_a_workflow_it_retrieves_and_answers():
     assert isinstance(events[-1], DoneEvent) and isinstance(events[-2], UsageEvent)
 
 
+async def test_a_cut_reply_ends_the_turn_with_length():
+    cut = AIMessageChunk(content="", response_metadata={"finish_reason": "length"})
+    events = await _run(
+        None, ScriptedModel(rounds=[[AIMessageChunk(content="On"), cut]], seen=[])
+    )
+    assert isinstance(events[-1], DoneEvent)
+    assert events[-1].finish_reason == "length"
+
+
 async def test_a_reply_node_speaks_a_template_and_ends():
     spec = {
         "start": "hello",

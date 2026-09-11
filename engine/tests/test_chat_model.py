@@ -51,6 +51,27 @@ def test_a_blank_key_counts_as_missing() -> None:
         build_chat_model(_config(), Settings(openrouter_api_key=""))
 
 
+def test_max_output_tokens_reaches_the_provider_client() -> None:
+    settings = Settings(openrouter_api_key="k")
+
+    assert build_chat_model(_config(max_output_tokens=800), settings).max_tokens == 800
+    assert build_chat_model(_config(), settings).max_tokens is None
+
+
+def test_max_output_tokens_is_bounded() -> None:
+    with pytest.raises(ValueError):
+        _config(max_output_tokens=0)
+    with pytest.raises(ValueError):
+        _config(max_output_tokens=1_000_000)
+
+
+def test_utility_calls_ignore_the_answer_cap() -> None:
+    """A 200-token answer cap must not truncate a rerank list."""
+    from chatbot_engine.agent.retriever import utility_config
+
+    assert utility_config(_config(max_output_tokens=200)).max_output_tokens is None
+
+
 def test_the_assistant_model_wins_and_the_engine_default_fills_in() -> None:
     settings = Settings(openrouter_api_key="k")
 

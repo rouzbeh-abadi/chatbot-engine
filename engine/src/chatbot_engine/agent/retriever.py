@@ -70,11 +70,17 @@ def utility_config(project: AssistantConfig) -> AssistantConfig:
 
     `ENGINE_UTILITY_MODEL` swaps in a cheaper model for the rewrite and the
     rerank; neither writes a word the customer reads. Temperature zero, since
-    both want the same output for the same input.
+    both want the same output for the same input. The assistant's
+    `max_output_tokens` is for the answer the customer reads; a tight cap
+    there must not truncate a rerank list, so it is lifted here.
     """
     settings = get_settings()
     return project.model_copy(
-        update={"model": settings.utility_model or project.model, "temperature": 0.0}
+        update={
+            "model": settings.utility_model or project.model,
+            "temperature": 0.0,
+            "max_output_tokens": None,
+        }
     )
 
 

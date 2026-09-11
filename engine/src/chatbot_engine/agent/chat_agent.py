@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from chatbot_engine.agent.client import Usage, stream_completion
+from chatbot_engine.agent.client import FinishReason, Usage, stream_completion
 from chatbot_engine.agent.retriever import (
     retrieve_with_usage,
     to_context,
@@ -42,10 +42,12 @@ class ChatAgent:
         # stream_completion yields answer text as it is generated, tool
         # started/finished events around any tool call, and one Usage value at
         # the end; turn each into the matching event.
+        finish_reason: FinishReason = "stop"
         async for item in stream_completion(
             request, self._tools, to_context(hits), prior=spent
         ):
             if isinstance(item, Usage):
+                finish_reason = item.finish_reason
                 yield UsageEvent(
                     input_tokens=item.input_tokens,
                     output_tokens=item.output_tokens,
@@ -59,4 +61,4 @@ class ChatAgent:
                 # Already an Event (a tool started/finished), pass it through.
                 yield item
 
-        yield DoneEvent(finish_reason="stop")
+        yield DoneEvent(finish_reason=finish_reason)

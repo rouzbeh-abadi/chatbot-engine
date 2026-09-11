@@ -11,7 +11,7 @@
 
 [project]
 name = "langgraph-agent"
-version = "0.1.5"
+version = "0.1.6"
 description = "A LangGraph agent for the chatbot engine, provided as a plugin."
 requires-python = ">=3.13"
 dependencies = [

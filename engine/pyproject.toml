@@ -1,6 +1,6 @@
 [project]
 name = "chatbot-engine"
-version = "0.1.5"
+version = "0.1.6"
 description = "A standalone RAG and MCP tool-calling service."
 readme = "README.md"
 license = "Apache-2.0"

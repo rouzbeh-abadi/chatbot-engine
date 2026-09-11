@@ -187,6 +187,34 @@ async def test_usage_is_summed_across_tool_rounds(which: str) -> None:
 
 
 @pytest.mark.parametrize("which", AGENTS)
+async def test_a_reply_cut_by_the_provider_ends_the_turn_with_length(
+    which: str,
+) -> None:
+    """The provider's last chunks carry finish_reason; `done` repeats it.
+
+    Two chunks carry it, as OpenAI's stream does (the last text chunk and the
+    usage chunk), so the summed reply holds the concatenated string.
+    """
+    cut = AIMessageChunk(content="", response_metadata={"finish_reason": "length"})
+    usage = _usage_chunk(5, 2)
+    usage.response_metadata = {"finish_reason": "length"}
+    rounds = [[AIMessageChunk(content="Delayed because"), cut, usage]]
+
+    events = await _run(which, rounds, FakeTools())
+
+    assert isinstance(events[-1], DoneEvent)
+    assert events[-1].finish_reason == "length"
+
+
+@pytest.mark.parametrize("which", AGENTS)
+async def test_a_reply_that_stopped_to_call_a_tool_is_not_length(which: str) -> None:
+    events = await _run(which, _rounds_with_a_tool_call(), FakeTools())
+
+    assert isinstance(events[-1], DoneEvent)
+    assert events[-1].finish_reason == "stop"
+
+
+@pytest.mark.parametrize("which", AGENTS)
 async def test_the_answer_text_streams_as_tokens(which: str) -> None:
     rounds = [[AIMessageChunk(content="Hi."), _usage_chunk(5, 2)]]
 
