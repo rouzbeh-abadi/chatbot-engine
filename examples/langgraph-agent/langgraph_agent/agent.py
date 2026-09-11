@@ -26,8 +26,9 @@ versions. The queue keeps this agent's output identical to `ChatAgent`'s.
 from __future__ import annotations
 
 import asyncio
+import operator
 from collections.abc import AsyncIterator
-from typing import Annotated, Any, TypedDict, cast
+from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import (
     AIMessageChunk,
@@ -43,6 +44,7 @@ from chatbot_engine.agent.client import (
     finish_reason_of,
     price_usage,
     run_tool_calls,
+    stream_reply,
     to_messages,
 )
 from chatbot_engine.agent.retriever import (
@@ -60,10 +62,9 @@ from chatbot_engine.models.events import (
     UsageEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
+from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
-
-#: Marks the end of the event stream, so `run` knows the graph has finished.
-_DONE = object()
+from langgraph_agent.runner import run_graph
 
 
 def _merge_usage(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
@@ -86,6 +87,8 @@ class _State(TypedDict, total=False):
     usage: Annotated[dict[str, int], _merge_usage]
     #: Why the last reply ended; `length` when `max_output_tokens` cut it.
     finish_reason: FinishReason
+    #: Tool rounds run so far, against `max_tool_iterations`.
+    rounds: Annotated[int, operator.add]
     context: str
     #: Taken from the model actually built, so pricing matches the loop agent's.
     model_name: str
@@ -109,34 +112,20 @@ class LangGraphAgent:
         """
         events: asyncio.Queue[Any] = asyncio.Queue()
         graph = self._build(request, events)
-
-        async def drive() -> None:
-            try:
-                await graph.ainvoke(
-                    {"messages": [], "usage": {}, "context": ""},
-                    {
-                        # The tracer and the ids; the nodes' model calls inherit them.
-                        **run_config(request, name="graph"),
-                        # One more than the tool rounds allowed: each round is a
-                        # model step and a tool step, plus the retrieval step.
-                        "recursion_limit": 2 * request.project.max_tool_iterations + 3,
-                    },
-                )
-            finally:
-                await events.put(_DONE)
-
-        task = asyncio.create_task(drive())
-        try:
-            while True:
-                item = await events.get()
-                if item is _DONE:
-                    break
-                yield item
-            # Surfaces anything the graph raised, now that the stream is drained.
-            await task
-        finally:
-            if not task.done():
-                task.cancel()
+        config = {
+            # The tracer and the ids; the nodes' model calls inherit them.
+            **run_config(request, name="graph"),
+            # Each tool round is a model step and a tool step, plus retrieval,
+            # the final model step and finish.
+            "recursion_limit": 2 * request.project.max_tool_iterations + 4,
+        }
+        async for event in run_graph(
+            graph,
+            {"messages": [], "usage": {}, "context": "", "rounds": 0},
+            config,
+            events,
+        ):
+            yield event
 
     def _build(self, request: ChatRequest, events: asyncio.Queue[Any]) -> Any:
         async def retrieve_node(state: _State) -> _State:
@@ -167,10 +156,13 @@ class LangGraphAgent:
             bound = model.bind_tools([dict(t) for t in tools]) if tools else model
 
             reply: AIMessageChunk | None = None
-            async for chunk in bound.astream(state["messages"]):
+            async for chunk in stream_reply(
+                lambda: bound.astream(state["messages"]),
+                retries=get_settings().provider_max_retries,
+            ):
                 if chunk.text:
                     await events.put(TokenEvent(text=chunk.text))
-                reply = cast(AIMessageChunk, chunk if reply is None else reply + chunk)
+                reply = chunk if reply is None else reply + chunk
 
             assert reply is not None
             return {
@@ -200,21 +192,31 @@ class LangGraphAgent:
                 else:
                     await events.put(item)
 
-            return {"messages": results}
+            return {"messages": results, "rounds": 1}
 
         async def finish_node(state: _State) -> _State:
             await events.put(
                 _usage_event(state.get("usage", {}), state.get("model_name"))
             )
+            # Arriving here with a tool request still open means the rounds
+            # ran out: the same `tool_limit` the loop agent reports.
+            last = state["messages"][-1] if state.get("messages") else None
+            limited = bool(getattr(last, "tool_calls", None))
             await events.put(
-                DoneEvent(finish_reason=state.get("finish_reason", "stop"))
+                DoneEvent(
+                    finish_reason="tool_limit"
+                    if limited
+                    else state.get("finish_reason", "stop")
+                )
             )
             return {}
 
         def next_step(state: _State) -> str:
-            """The one branch in the turn: did the model ask for a tool?"""
+            """The one branch in the turn: did the model ask for a tool, and may it still?"""
             last = state["messages"][-1]
-            return "tools" if getattr(last, "tool_calls", None) else "finish"
+            wants_tools = bool(getattr(last, "tool_calls", None))
+            allowed = state.get("rounds", 0) < request.project.max_tool_iterations
+            return "tools" if wants_tools and allowed else "finish"
 
         graph = StateGraph(_State)  # ty: ignore[invalid-argument-type]  a TypedDict with reducers is what LangGraph documents
         graph.add_node("retrieve", retrieve_node)

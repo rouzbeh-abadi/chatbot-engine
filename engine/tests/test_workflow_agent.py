@@ -13,6 +13,7 @@ from chatbot_engine.models.events import (
     DoneEvent,
     TokenEvent,
     ToolCallFinishedEvent,
+    ToolCallStartedEvent,
     UsageEvent,
 )
 
@@ -70,6 +71,36 @@ async def test_a_cut_reply_ends_the_turn_with_length():
     )
     assert isinstance(events[-1], DoneEvent)
     assert events[-1].finish_reason == "length"
+
+
+async def test_a_tool_step_reports_timing_and_failure_like_a_model_call():
+    """The Tool Call step goes through the engine's runner: a started and a
+    finished event with a real duration, and a failure that fills the variable
+    with nothing rather than ending the turn."""
+    spec = {
+        "start": "lookup",
+        "nodes": [
+            {
+                "id": "lookup",
+                "type": "tool",
+                "tool": "get_booking_status",
+                "arguments": {"ref": "{{message}}"},
+                "var": "status",
+            },
+            {"id": "say", "type": "reply", "text": "Status: {{vars.status}}"},
+        ],
+        "edges": [{"from": "lookup", "to": "say"}],
+    }
+    events = await _run(spec, ScriptedModel(rounds=[], seen=[]))
+    started = [e for e in events if isinstance(e, ToolCallStartedEvent)]
+    finished = [e for e in events if isinstance(e, ToolCallFinishedEvent)]
+    assert [e.tool for e in started] == ["get_booking_status"]
+    assert (
+        finished[0].ok
+        and finished[0].duration_ms >= 0
+        and finished[0].call_id == "wf-lookup"
+    )
+    assert _text(events).startswith("Status: ")
 
 
 async def test_a_reply_node_speaks_a_template_and_ends():

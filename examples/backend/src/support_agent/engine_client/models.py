@@ -214,9 +214,7 @@ class DoneEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["done"] = "done"
-    finish_reason: Literal["stop", "length", "tool_limit", "error", "cancelled"] = (
-        "stop"
-    )
+    finish_reason: Literal["stop", "length", "tool_limit", "error"] = "stop"
 
 
 # One chat turn arrives as a sequence of these events. Pydantic uses the `type`

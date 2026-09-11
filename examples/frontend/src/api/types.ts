@@ -66,7 +66,7 @@ export interface ErrorEvent {
 
 export interface DoneEvent {
   type: "done";
-  finish_reason: "stop" | "length" | "tool_limit" | "error" | "cancelled";
+  finish_reason: "stop" | "length" | "tool_limit" | "error";
 }
 
 export type ChatEvent =

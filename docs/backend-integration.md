@@ -230,7 +230,7 @@ Read it line by line and switch on `type`.
 | `tool_call_finished` | `call_id`, `tool`, `ok`, `duration_ms`, `error` | Pair with `started` by `call_id` |
 | `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model` | Display cost. Tokens cover every model call in the turn; `cost_usd` is null unless the engine's `ENGINE_PRICING` lists the model |
 | `error` | `code`, `message` | The turn failed after the response started |
-| `done` | `finish_reason` | Always last. `stop`, or `length` when `max_output_tokens` cut the answer; show the visitor the answer was shortened |
+| `done` | `finish_reason` | Always last. `stop`; `length` when `max_output_tokens` cut the answer (show the visitor it was shortened); `tool_limit` when the model was still asking for tools after `max_tool_iterations` rounds (what it said so far has streamed); `error` after an `error` event |
 
 Each `sources[]` entry has `doc_id`, `source`, `score`, and optionally
 `heading`, `page` and `excerpt`. `heading` is present when the document was

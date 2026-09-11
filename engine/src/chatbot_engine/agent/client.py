@@ -11,9 +11,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -307,10 +307,10 @@ async def stream_completion(
                 # A tool started/finished event, on its way to the UI.
                 yield item
 
-    raise EngineError(
-        f"the model was still calling tools after "
-        f"{request.project.max_tool_iterations} rounds"
-    )
+    # The model was still asking for tools when the rounds ran out. What it
+    # said so far has streamed; the turn ends and says why, rather than
+    # failing after the client has shown text.
+    yield price_usage(totals, model.model_name, finish_reason="tool_limit")
 
 
 #: Seconds before the first retry; doubles each attempt.
@@ -342,21 +342,40 @@ async def stream_round(
     backoff_s: float = RETRY_BACKOFF_S,
     config: RunnableConfig | None = None,
 ) -> AsyncIterator[AIMessageChunk]:
+    """One call of a prompt chain, streamed with `stream_reply`'s retry."""
+    async for chunk in stream_reply(
+        lambda: chain.astream({"messages": messages}, config=config),
+        retries=retries,
+        backoff_s=backoff_s,
+    ):
+        yield chunk
+
+
+async def stream_reply(
+    open_stream: Callable[[], AsyncIterator[BaseMessage]],
+    *,
+    retries: int,
+    backoff_s: float = RETRY_BACKOFF_S,
+) -> AsyncIterator[AIMessageChunk]:
     """One model call, streamed, retried while nothing has reached the caller.
 
-    The provider client already retries a request that fails outright. This
+    `open_stream` starts the call; it is invoked again on each retry. The
+    provider client already retries a request that fails outright. This
     covers the stream that opens and then breaks before its first token,
     which the client cannot retry because the response has started. Once a
     token has been yielded the failure is passed on: the caller has shown
-    text that a replay would duplicate.
+    text that a replay would duplicate. Every agent streams through here, so
+    they all get the same retry.
     """
     for attempt in range(retries + 1):
         emitted = False
         try:
-            async for chunk in chain.astream({"messages": messages}, config=config):
+            async for chunk in open_stream():
                 if chunk.text:
                     emitted = True
-                yield chunk
+                # A chat model streams AIMessageChunks; the client library's
+                # annotation is the base message, so narrow here once.
+                yield cast(AIMessageChunk, chunk)
             return
         except Exception as exc:
             if emitted or attempt >= retries or not is_transient(exc):
@@ -373,7 +392,7 @@ async def stream_round(
 
 
 #: The reasons a reply can end that `price_usage` passes on to the `done` event.
-FinishReason = Literal["stop", "length"]
+FinishReason = Literal["stop", "length", "tool_limit"]
 
 
 def finish_reason_of(reply: AIMessageChunk) -> FinishReason:

@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import re
 from collections.abc import AsyncIterator, Hashable
-from typing import Annotated, Any, TypedDict, cast
+from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import (
     AIMessageChunk,
@@ -28,6 +28,7 @@ from chatbot_engine.agent.client import (
     build_chat_model,
     finish_reason_of,
     run_tool_calls,
+    stream_reply,
     to_messages,
 )
 from chatbot_engine.agent.retriever import (
@@ -44,7 +45,6 @@ from chatbot_engine.models.events import (
     RetrievalEvent,
     TokenEvent,
     ToolCallFinishedEvent,
-    ToolCallStartedEvent,
 )
 from chatbot_engine.models.workflow import (
     ConditionNode,
@@ -56,8 +56,10 @@ from chatbot_engine.models.workflow import (
     WorkflowSpec,
 )
 from chatbot_engine.ports.agent import ToolProvider
+from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
-from langgraph_agent.agent import _DONE, _merge_usage, _usage_event, _usage_of
+from langgraph_agent.agent import _merge_usage, _usage_event, _usage_of
+from langgraph_agent.runner import run_graph
 
 DEFAULT_WORKFLOW = WorkflowSpec.model_validate(
     {
@@ -98,30 +100,17 @@ class WorkflowAgent:
         spec = request.project.workflow or DEFAULT_WORKFLOW
         events: asyncio.Queue[Any] = asyncio.Queue()
         graph = self._build(spec, request, events)
-
-        async def drive() -> None:
-            try:
-                await graph.ainvoke(
-                    {"messages": [], "usage": {}, "vars": {}, "context": ""},
-                    {
-                        **run_config(request, name="workflow"),
-                        "recursion_limit": spec.max_steps + 2,
-                    },
-                )
-            finally:
-                await events.put(_DONE)
-
-        task = asyncio.create_task(drive())
-        try:
-            while True:
-                item = await events.get()
-                if item is _DONE:
-                    break
-                yield item
-            await task
-        finally:
-            if not task.done():
-                task.cancel()
+        config = {
+            **run_config(request, name="workflow"),
+            "recursion_limit": spec.max_steps + 2,
+        }
+        async for event in run_graph(
+            graph,
+            {"messages": [], "usage": {}, "vars": {}, "context": ""},
+            config,
+            events,
+        ):
+            yield event
 
     # --- nodes --------------------------------------------------------------
 
@@ -159,6 +148,30 @@ class WorkflowAgent:
 
             return re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}", sub, template)
 
+        async def call_one(
+            tool: str,
+            arguments: dict[str, str],
+            call_id: str,
+            server_for: dict[str, str],
+        ) -> tuple[str, ToolMessage]:
+            """One tool call through the engine's runner: the same started and
+            finished events, timing and failure handling as the model's own
+            calls. Returns the result text (empty on failure) and the message."""
+            ok, message = False, ToolMessage(content="", tool_call_id=call_id)
+            async for item in run_tool_calls(
+                [{"name": tool, "args": arguments, "id": call_id}],
+                request,
+                self._tools,
+                server_for,
+            ):
+                if isinstance(item, ToolMessage):
+                    message = item  # arrives after the finished event
+                else:
+                    if isinstance(item, ToolCallFinishedEvent):
+                        ok = item.ok
+                    await events.put(item)
+            return (str(message.content) if ok else ""), message
+
         def prompt_messages(state: _State, extra: str = "") -> list[BaseMessage]:
             system = project.system_prompt + (f"\n\n{extra}" if extra else "")
             return [
@@ -184,20 +197,23 @@ class WorkflowAgent:
                 new: list[BaseMessage] = []
                 usage: dict[str, int] = {}
                 text = ""
+                finish: FinishReason = "stop"
+                retries = get_settings().provider_max_retries
 
                 for _ in range(project.max_tool_iterations):
                     reply: AIMessageChunk | None = None
-                    async for chunk in bound.astream(messages + new):
+                    async for chunk in stream_reply(
+                        lambda: bound.astream(messages + new), retries=retries
+                    ):
                         if chunk.text and node.var is None:
                             await events.put(TokenEvent(text=chunk.text))
-                        reply = cast(
-                            AIMessageChunk, chunk if reply is None else reply + chunk
-                        )
+                        reply = chunk if reply is None else reply + chunk
                     if reply is None:
                         break
                     usage = _merge_usage(usage, _usage_of(reply))
                     new.append(reply)
                     text = reply.text or ""
+                    finish = finish_reason_of(reply)
                     if not reply.tool_calls:
                         break
                     async for item in run_tool_calls(
@@ -208,9 +224,9 @@ class WorkflowAgent:
                         else:
                             await events.put(item)
                 else:
-                    raise EngineError(
-                        f"the model was still calling tools after {project.max_tool_iterations} rounds"
-                    )
+                    # Still asking for tools when the rounds ran out: end the
+                    # turn and say why, as the loop agent does.
+                    finish = "tool_limit"
 
                 out: _State = {
                     "messages": new,
@@ -219,10 +235,8 @@ class WorkflowAgent:
                 }
                 if node.var is not None:
                     out["vars"] = {node.var: text}
-                elif new:
-                    out["finish_reason"] = finish_reason_of(
-                        cast(AIMessageChunk, new[-1])
-                    )
+                else:
+                    out["finish_reason"] = finish
                 return out
 
             return step
@@ -245,8 +259,11 @@ class WorkflowAgent:
                 # Streamed like every other call, so a streaming-only model
                 # (the test double included) is enough.
                 reply: AIMessageChunk | None = None
-                async for chunk in model.astream(
-                    prompt, config=run_config(request, name=f"condition:{node.id}")
+                async for chunk in stream_reply(
+                    lambda: model.astream(
+                        prompt, config=run_config(request, name=f"condition:{node.id}")
+                    ),
+                    retries=get_settings().provider_max_retries,
                 ):
                     reply = chunk if reply is None else reply + chunk
                 if reply is None:
@@ -284,46 +301,10 @@ class WorkflowAgent:
                         f"workflow node {node.id!r} names a tool the assistant does not allow: {node.tool!r}"
                     )
                 arguments = {k: render(v, state) for k, v in node.arguments.items()}
-                call_id = f"wf-{node.id}"
-                await events.put(
-                    ToolCallStartedEvent(
-                        call_id=call_id,
-                        tool=node.tool,
-                        server=server,
-                        arguments=arguments,
-                    )
+                result, message = await call_one(
+                    node.tool, arguments, f"wf-{node.id}", {node.tool: server}
                 )
-                loop = asyncio.get_running_loop()
-                started = loop.time()
-                try:
-                    result = await self._tools.call_tool(
-                        config=project,
-                        server=server,
-                        name=node.tool,
-                        arguments=arguments,
-                        user_id=request.user_id,
-                        session_id=request.session_id,
-                    )
-                    ok, error = True, None
-                except Exception as exc:
-                    result, ok, error = "", False, str(exc)
-                await events.put(
-                    ToolCallFinishedEvent(
-                        call_id=call_id,
-                        tool=node.tool,
-                        ok=ok,
-                        duration_ms=int((loop.time() - started) * 1000),
-                        error=error,
-                    )
-                )
-                return {
-                    "vars": {node.var: result},
-                    "messages": [
-                        ToolMessage(
-                            content=result or (error or ""), tool_call_id=call_id
-                        )
-                    ],
-                }
+                return {"vars": {node.var: result}, "messages": [message]}
 
             return step
 
@@ -349,46 +330,16 @@ class WorkflowAgent:
                         (t["server"] for t in tools if t["name"] == node.tool), None
                     )
                     if server:
-                        call_id = f"wf-{node.id}"
                         transcript = (
                             "\n".join(f"{t.role}: {t.content}" for t in request.history)
                             + f"\nuser: {request.message}"
                         )
-                        await events.put(
-                            ToolCallStartedEvent(
-                                call_id=call_id,
-                                tool=node.tool,
-                                server=server,
-                                arguments={"transcript": transcript},
-                            )
+                        await call_one(
+                            node.tool,
+                            {"transcript": transcript},
+                            f"wf-{node.id}",
+                            {node.tool: server},
                         )
-                        try:
-                            await self._tools.call_tool(
-                                config=project,
-                                server=server,
-                                name=node.tool,
-                                arguments={"transcript": transcript},
-                                user_id=request.user_id,
-                                session_id=request.session_id,
-                            )
-                            await events.put(
-                                ToolCallFinishedEvent(
-                                    call_id=call_id,
-                                    tool=node.tool,
-                                    ok=True,
-                                    duration_ms=0,
-                                )
-                            )
-                        except Exception as exc:
-                            await events.put(
-                                ToolCallFinishedEvent(
-                                    call_id=call_id,
-                                    tool=node.tool,
-                                    ok=False,
-                                    duration_ms=0,
-                                    error=str(exc),
-                                )
-                            )
                 return out
 
             return step

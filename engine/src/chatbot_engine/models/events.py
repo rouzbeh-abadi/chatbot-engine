@@ -105,9 +105,11 @@ class DoneEvent(_Event):
     """Always last. `finish_reason` says why the turn ended."""
 
     type: Literal["done"] = "done"
-    finish_reason: Literal["stop", "length", "tool_limit", "error", "cancelled"] = (
-        "stop"
-    )
+    #: `stop`: the model finished. `length`: cut at `max_output_tokens`.
+    #: `tool_limit`: the model was still asking for tools after
+    #: `max_tool_iterations` rounds; the answer so far was streamed. `error`:
+    #: the turn failed after the response started (an `error` event precedes).
+    finish_reason: Literal["stop", "length", "tool_limit", "error"] = "stop"
 
 
 Event = Annotated[

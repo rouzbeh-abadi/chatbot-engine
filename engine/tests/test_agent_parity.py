@@ -123,7 +123,11 @@ def _rounds_with_a_tool_call() -> list:
 
 
 async def _run(
-    which: str, rounds: list, tools: FakeTools, model: ScriptedModel | None = None
+    which: str,
+    rounds: list,
+    tools: FakeTools,
+    model: ScriptedModel | None = None,
+    request: ChatRequest | None = None,
 ) -> list:
     """Drive one agent through a scripted conversation and collect its events."""
     model = model or ScriptedModel(rounds=rounds, seen=[])
@@ -147,7 +151,7 @@ async def _run(
         ]
 
     with targets[0], targets[1]:
-        return [event async for event in agent.run(_request())]
+        return [event async for event in agent.run(request or _request())]
 
 
 # --- each agent on its own -----------------------------------------------------
@@ -212,6 +216,28 @@ async def test_a_reply_that_stopped_to_call_a_tool_is_not_length(which: str) -> 
 
     assert isinstance(events[-1], DoneEvent)
     assert events[-1].finish_reason == "stop"
+
+
+@pytest.mark.parametrize("which", AGENTS)
+async def test_running_out_of_tool_rounds_ends_the_turn_with_tool_limit(
+    which: str,
+) -> None:
+    """The model keeps asking; after `max_tool_iterations` rounds the turn
+    ends and says why, instead of failing after text has streamed."""
+    asks = _rounds_with_a_tool_call()[0]
+    rounds = [asks, asks, asks]  # one more than allowed, never a final answer
+    request = _request()
+    request.project = request.project.model_copy(update={"max_tool_iterations": 2})
+
+    events = await _run(which, rounds, FakeTools(), request=request)
+
+    assert isinstance(events[-1], DoneEvent)
+    assert events[-1].finish_reason == "tool_limit"
+    assert sum(isinstance(e, UsageEvent) for e in events) == 1
+    assert [e.tool for e in events if isinstance(e, ToolCallFinishedEvent)] == [
+        "get_booking_status",
+        "get_booking_status",
+    ]
 
 
 @pytest.mark.parametrize("which", AGENTS)
