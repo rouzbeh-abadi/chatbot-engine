@@ -113,7 +113,7 @@ depend on it.
 | `token` | repeatedly, as the answer streams |
 | `tool_call_started`, `tool_call_finished` | around each tool call |
 | `usage` | once, after the answer |
-| `done` | last |
+| `done` | last; `finish_reason` is `stop`, `length` (cut at `max_output_tokens`) or `tool_limit` (still asking for tools after `max_tool_iterations` rounds) |
 
 **System prompt.** Send `request.project.system_prompt` to the model ahead of
 the conversation. This is not visible in the event stream: an agent that omits
@@ -121,11 +121,23 @@ it still emits a well-formed stream, and only the content of the answer
 changes. The persona, the grounding rules and any notes the backend appended
 to the prompt are all lost.
 
+**Model calls.** Stream through `chatbot_engine.agent.client.stream_reply`
+(or `stream_round` for a prompt chain). It retries a stream that fails before
+its first token on rate limits, provider 5xx and dropped connections, and
+passes the failure on once text has been shown. Build the model with
+`build_chat_model`, which applies the assistant's `max_output_tokens`, and
+read the reason a reply ended with `finish_reason_of`.
+
 **Tool execution.** Use `chatbot_engine.agent.client.run_tool_calls`. It
 forwards the caller's `user_id` and `session_id` to the tool server, reports a
 failed tool as `ok=false` rather than ending the turn, and feeds the result back
 as a `ToolMessage`. Two agents that ran tools differently would report them
 differently.
+
+**Tool rounds.** After `max_tool_iterations` rounds with the model still
+asking for tools, end the turn with `usage` and `done` saying `tool_limit`.
+What the model said so far has streamed; failing at that point would leave
+the caller with text and an error.
 
 **Cost.** Retrieve with `retrieve_with_usage()`, which returns the hits and
 the token counts of retrieval's own model calls, and pass those counts to
@@ -133,8 +145,9 @@ the token counts of retrieval's own model calls, and pass those counts to
 it made. Price with `chatbot_engine.agent.client.price_usage`, so both agents
 price a turn identically.
 
-`engine/tests/test_agent_parity.py` asserts all four points for `loop` and
-`graph`.
+`engine/tests/test_agent_parity.py` asserts these points for `loop` and
+`graph`, including the `length` and `tool_limit` endings;
+`engine/tests/test_workflow_agent.py` covers the same for `workflow`.
 
 ## The bundled plugin
 
@@ -142,18 +155,30 @@ price a turn identically.
 
 ```text
 examples/langgraph-agent/
-├── pyproject.toml                    the entry point
+├── pyproject.toml                    the entry points
 └── langgraph_agent/
     ├── __init__.py
-    └── agent.py                      the graph
+    ├── agent.py                      the fixed graph: retrieve, model, tools
+    ├── workflow.py                   a graph built per request from the assistant's workflow
+    └── runner.py                     runs a compiled graph and streams what its nodes emit
 ```
 
-The entry point is the only connection to the engine:
+The entry points are the only connection to the engine:
 
 ```toml
 [project.entry-points."chatbot_engine.agents"]
 graph = "langgraph_agent.agent:build"
+workflow = "langgraph_agent.workflow:build"
 ```
+
+What the plugin does not do is reimplement the engine. Its nodes call the
+engine's helpers: `stream_reply` for every model call (so the first-token
+retry applies), `run_tool_calls` for every tool call (so timing, failure
+handling and the started and finished events are the engine's), `retrieve_with_usage`
+and `price_usage`. The plugin's own code is the graph shape and `runner.py`,
+which runs the compiled graph as a task and drains the queue its nodes push
+events onto. Two agents that streamed, retried or ran tools differently
+would be a bug, and the parity tests would catch it.
 
 The graph it builds:
 
@@ -238,11 +263,11 @@ other agent, so the caller's UI needs nothing new.
 | Node | Does |
 | --- | --- |
 | `retrieve` | searches the knowledge base; later model steps see the passages |
-| `model` | calls the assistant's model with the prompt, the conversation and the retrieved passages, streams the reply as the answer, and runs the tools it asks for, up to `max_tool_iterations` rounds (`tools: false` disables them); `prompt` appends instructions for this step; `var` stores the reply in a variable instead of speaking it |
+| `model` | calls the assistant's model with the prompt, the conversation and the retrieved passages, streams the reply as the answer, and runs the tools it asks for, up to `max_tool_iterations` rounds (`tools: false` disables them; running out ends the turn with `tool_limit`); the reply is capped by `max_output_tokens`; `prompt` appends instructions for this step; `var` stores the reply in a variable instead of speaking it |
 | `condition` | asks the utility model (`ENGINE_UTILITY_MODEL`, temperature 0) one question, expecting one of the branch labels, and follows that branch; the answer is matched exactly, then as a whole word, and the first label is the fallback |
-| `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, and stores the result text in `var`; the call is reported as `tool_call_started` and `tool_call_finished` events like any other |
+| `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the result text in `var` (empty when the call failed); reported as `tool_call_started` and `tool_call_finished` with the real duration |
 | `reply` | streams a fixed, templated text as the answer |
-| `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with the transcript so a ticket or an email can be raised |
+| `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with the transcript through the same runner, so a ticket or an email can be raised and the call shows in the log |
 | `end` | finishes the turn; the same as a node with no outgoing edge |
 
 Templates in `prompt`, `text`, `message` and tool arguments may use

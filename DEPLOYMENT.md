@@ -33,12 +33,13 @@ docker build -f engine/Dockerfile .
 docker build -f examples/backend/Dockerfile .
 ```
 
-**The published engine image carries no agent plugins.** It runs the built-in
-`loop` agent only. The demo stack in `docker-compose.yml` does not use it; it
-builds `docker/engine-with-plugins.Dockerfile`, which installs
-`examples/langgraph-agent` on top of the engine, so that `agent: graph` is
-selectable. A deployment that needs a plugin builds its own image the same way;
-see [docs/agents.md](docs/agents.md).
+**Which engine image.** `engine` runs the built-in `loop` agent only.
+`engine-langgraph` is built from `docker/engine-with-plugins.Dockerfile`,
+which installs `examples/langgraph-agent` on top of the engine; it is what
+the demo stack in `docker-compose.yml` builds locally, and what a deployment
+that names `agent: graph` or `agent: workflow` should pull. A deployment with
+its own plugin builds its own image the same way; see
+[docs/agents.md](docs/agents.md).
 
 To run the published images, replace each service's `build:` block with the
 corresponding `image:`.
@@ -323,3 +324,10 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   startup check found but did not block on is logged as a warning at boot.
 - **Streaming.** Chat is server-sent events. A proxy in front must not buffer
   `/api/chat`; the bundled nginx config shows the three settings involved.
+- **Provider retries and timeouts.** A model stream that fails before its
+  first token (rate limit, provider 5xx, dropped connection) is retried up
+  to `ENGINE_PROVIDER_MAX_RETRIES` times (default 3), doubling from half a
+  second; a call that has streamed text is not retried, and the failure
+  reaches the caller as an `error` event. `ENGINE_PROVIDER_TIMEOUT_S`
+  (default 60) bounds one provider call. Set the retries to 0 if a proxy in
+  front of OpenRouter already retries, or the two will compound.

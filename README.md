@@ -30,7 +30,13 @@ replace all of it.
 - **Tool calling over MCP.** The model calls the backend's own tools when it
   needs live data; the engine only ever sees the tools a request allowlists.
 - **Streaming.** The answer appears token by token, with tool activity and token
-  cost shown as they happen.
+  cost shown as they happen. A stream that breaks before its first token is
+  retried; one that breaks after it reports the error in the stream, so the
+  caller never sees a duplicated answer.
+- **Bounded turns.** `max_output_tokens` caps one reply and
+  `max_tool_iterations` caps the tool rounds; the `done` event says which
+  bound ended the turn (`length`, `tool_limit`) so the UI can tell the reader,
+  instead of the turn failing after text has streamed.
 - **Multi-model.** The model is chosen per request (OpenAI, Anthropic, Google,
   and more), all through OpenRouter.
 - **Multi-language.** Ask in any language and the assistant replies in the same
@@ -57,13 +63,6 @@ replace all of it.
 - **Chunking strategies.** Cut documents by fixed size, by Markdown heading, or
   by page. Chosen per project, so PDFs can carry page numbers into their
   citations. See [docs/chunking.md](docs/chunking.md).
-- **Long-term memory.** The assistant keeps notes about a customer and uses them
-  in later conversations. Scoped to the person, so a new chat does not lose
-  them, and visible and erasable from the UI. See
-  [docs/memory.md](docs/memory.md).
-- **Conversation export.** Download a transcript as JSON, CSV, or PDF.
-- **Admin dashboard.** Inspect the application data and run the evaluation from
-  the browser, behind a shared operator key (`BACKEND_ADMIN_KEY`).
 - **Deployable.** Rate limits on the routes that cost money, one seam for real
   authentication, and a startup check that refuses to serve a production
   deployment with development defaults. See [DEPLOYMENT.md](DEPLOYMENT.md).
@@ -72,6 +71,17 @@ replace all of it.
   answer relevancy, context precision and recall).
 - **Guardrails.** A tool allowlist, prompt-injection handling, and untrusted
   document and tool text treated as data, never as instructions.
+
+The example application under `examples/` adds what a product adds on top,
+and shows where each belongs:
+
+- **Long-term memory.** The backend keeps notes about a customer and uses
+  them in later conversations, scoped to the person. The engine has no
+  memory concept; see [docs/memory.md](docs/memory.md) for one way to build
+  it in a backend.
+- **Conversation export.** Download a transcript as JSON, CSV, or PDF.
+- **Admin dashboard.** Inspect the application data and run the evaluation
+  from the browser, behind a shared operator key (`BACKEND_ADMIN_KEY`).
 
 ## Architecture
 
@@ -121,10 +131,51 @@ model, and sideways over MCP only when the model needs live data.
 
 ## Running it
 
-You need an [OpenRouter API key](https://openrouter.ai/keys) and either Docker
-(easiest) or Python 3.13 plus Node plus a local Postgres.
+You need an [OpenRouter API key](https://openrouter.ai/keys). For the engine
+alone, Docker is enough. For the example application as well, either Docker or
+Python 3.13 plus Node plus a local Postgres.
 
-### One-time setup
+### Just the engine
+
+The published image, one key, one volume for its data (the three directory
+settings point the vector store, the document registry and the uploads at
+that volume; images after 0.1.7 default to them):
+
+```bash
+docker run -d --name engine -p 8100:8100 \
+  -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
+  -e ENGINE_CHROMA_DIR=/var/lib/chatbot-engine/chroma \
+  -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
+  -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
+  -v engine-data:/var/lib/chatbot-engine \
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.7
+curl localhost:8100/health/ready
+```
+
+Give it a document, then ask about it. The assistant is described in the
+request; the engine stores nothing about it:
+
+```bash
+curl -X PUT localhost:8100/documents \
+  -F project_id=docs -F external_id=baggage.md \
+  -F "file=@examples/backend/knowledge/baggage.md;type=text/markdown"
+
+curl -N -X POST localhost:8100/chat -H 'Content-Type: application/json' -d '{
+  "project": {"project_id": "docs", "name": "Docs",
+              "system_prompt": "Answer from the documents, briefly."},
+  "message": "What is the cabin baggage allowance?"
+}'
+```
+
+The answer streams back as one JSON event per line: the sources it used, the
+tokens, the usage, then `done`. That is the whole contract; the rest of this
+README is the example application that wraps it, and
+[docs/backend-integration.md](docs/backend-integration.md) is the guide to
+wrapping it yourself. Without an `ENGINE_API_KEY` the engine is open, which is
+fine on a laptop and refused in production mode; see
+[DEPLOYMENT.md](DEPLOYMENT.md).
+
+### One-time setup for the example application
 
 ```bash
 make setup          # install dependencies and create .env
@@ -222,8 +273,11 @@ dropdown. No fork, no change to engine code.
 `examples/langgraph-agent/` is a complete working one. It registers two
 agents: `graph`, a fixed LangGraph state machine of four nodes and one
 conditional edge, and `workflow`, which assembles a LangGraph per request from
-the `workflow` block in the assistant config. The demo stack installs it the
-same way yours would be installed, so `agent: graph` in the picker really is an
+the `workflow` block in the assistant config. Both reuse the engine's own
+pieces (the streaming retry, the tool runner, the pricing), so a turn through
+them is reported exactly as a turn through the loop, and their own code is the
+graph and one small runner. The demo stack installs the plugin the same way
+yours would be installed, so `agent: graph` in the picker really is an
 injected plugin rather than something built in. Copy it as your starting
 point, and see **[docs/agents.md](docs/agents.md)** for the contract your
 agent owes.
@@ -286,9 +340,10 @@ all of it.
 - **[docs/agents.md](docs/agents.md)** covers the agent contract, the bundled
   LangGraph plugin, workflows described in the request, and how to install
   your own agent.
-- **[docs/memory.md](docs/memory.md)** covers long-term memory: what is stored,
-  why reading is injected rather than a tool, and why the unauthenticated owner
-  id partitions notes without protecting them.
+- **[docs/memory.md](docs/memory.md)** covers the example backend's long-term
+  memory: what is stored, why reading is injected rather than a tool, and why
+  the unauthenticated owner id partitions notes without protecting them. The
+  engine itself has no memory concept; this is a pattern for the backend.
 - **[docs/retrieval.md](docs/retrieval.md)** covers retrieval: hybrid search,
   rank fusion, reranking, and how to evaluate a change.
 - **[docs/chunking.md](docs/chunking.md)** explains the chunking strategies:

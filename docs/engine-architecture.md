@@ -73,9 +73,13 @@ flowchart LR
    and the numbered context. See [retrieval.md](retrieval.md).
 6. **`agent/client.py`** runs the model-and-tool loop: discover the MCP tools,
    call the model, execute any requested tool through the `ToolProvider`, return
-   the result to the model, and repeat until it produces a final answer. This is
-   the densest file in the engine, reflecting the inherent complexity of the tool
-   loop.
+   the result to the model, and repeat until it produces a final answer or the
+   rounds run out (`tool_limit`). Its helpers are what every agent shares:
+   `stream_reply` retries a stream that breaks before its first token,
+   `run_tool_calls` narrates and times each tool call, `finish_reason_of`
+   reads why a reply ended, `price_usage` prices the turn. The bundled
+   LangGraph plugin calls the same helpers from its nodes. This is the densest
+   file in the engine, reflecting the inherent complexity of the tool loop.
 
 ## Document ingestion path
 

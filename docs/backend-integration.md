@@ -34,16 +34,34 @@ tools that run in the backend, against the backend's data.
 
 ## 1. Prerequisites
 
-The engine must be running and reachable.
+The engine must be running and reachable. From a checkout of this repository:
 
 ```bash
 make engine          # http://localhost:8100
+```
+
+Or the published image, with no checkout at all (see
+[DEPLOYMENT.md](../DEPLOYMENT.md#published-images) for the choice of image):
+
+```bash
+docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
+  -e ENGINE_CHROMA_DIR=/var/lib/chatbot-engine/chroma \
+  -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
+  -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
+  -v engine-data:/var/lib/chatbot-engine \
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.7
+```
+
+```bash
 curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.0"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.7"}
 ```
+
+`GET /health/ready` says whether a turn can be served: it reports a provider
+key, a vector store that answers, and the installed agents.
 
 Two settings on the backend side:
 
@@ -140,7 +158,7 @@ request carries the whole assistant definition:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply, and the `done` event says `length` when it did |
+| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out |
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
@@ -242,6 +260,12 @@ chunked by headings, `page` when it was chunked by page; see
 **A run always ends with `done`,** including on failure. A failure after the
 response has started arrives as an `error` event followed by `done` with
 `finish_reason: "error"`, because the `200` status has already been sent.
+
+**Read `finish_reason`.** `stop` is a normal end. `length` means the reply
+was cut at `max_output_tokens`: show the reader the answer was shortened, or
+raise the cap. `tool_limit` means the model was still asking for tools after
+`max_tool_iterations` rounds: what it said so far has streamed, and the
+sources and usage are correct for it. Both are complete turns, not errors.
 
 **Ignore an unrecognised `type`.** Event types will be added.
 
@@ -362,6 +386,17 @@ The `501` body names the variable to set:
 Perform validation, authentication and configuration lookup first, so a bad
 field is still a `422` and an unknown project is still a `404` when the engine
 is down.
+
+### Retries
+
+The engine retries a model stream that fails before its first token, on a
+rate limit, a provider 5xx or a dropped connection, up to
+`ENGINE_PROVIDER_MAX_RETRIES` times (default 3) with a doubling delay from
+half a second. Once a token has reached you the failure is passed on as an
+`error` event instead, because a replay would duplicate text you have shown.
+Every agent streams through the same helper, so this holds for the bundled
+LangGraph agents too. The backend therefore need not retry a chat request
+itself; retrying one that already streamed text would repeat the answer.
 
 ### Streaming
 
