@@ -1,7 +1,7 @@
 """Which agents this engine can run, including ones it did not ship with.
 
-An agent is the thing that runs a chat turn. The engine ships two, but the
-interesting case is the third one: an adopter who wants their own graph, their
+An agent is the thing that runs a chat turn. The engine ships one, but the
+interesting case is the second one: an adopter who wants their own graph, their
 own tool loop, or a different framework entirely, without forking the engine.
 
 They register it as a Python entry point. In their own package:

@@ -238,6 +238,35 @@ async def test_running_out_of_tool_rounds_ends_the_turn_with_tool_limit(
         "get_booking_status",
         "get_booking_status",
     ]
+    # Two tool rounds, three model calls: the last round's results reach the
+    # model before the cut, and both agents count the same way.
+    usage = next(e for e in events if isinstance(e, UsageEvent))
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (
+        90,
+        30,
+        120,
+    )
+
+
+@pytest.mark.parametrize("which", AGENTS)
+async def test_tools_are_discovered_once_per_turn(which: str) -> None:
+    """Every model and tool step reads one discovery; a turn with a tool round
+    must not ask the servers again for each step."""
+
+    class CountingTools(FakeTools):
+        def __init__(self) -> None:
+            super().__init__()
+            self.listed = 0
+
+        async def list_tools(self, config):
+            self.listed += 1
+            return await super().list_tools(config)
+
+    tools = CountingTools()
+
+    await _run(which, _rounds_with_a_tool_call(), tools)
+
+    assert tools.listed == 1
 
 
 @pytest.mark.parametrize("which", AGENTS)

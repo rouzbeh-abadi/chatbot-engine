@@ -5,6 +5,10 @@ library (see the engine's models/workflow.py). This module turns that into a
 StateGraph for each request, runs it, and streams the same events the other
 agents do. An assistant without a workflow gets the same graph the `graph`
 agent runs: retrieve, model, end.
+
+Like `agent.py`, the steps call the engine's helpers for everything that is
+not the graph's shape: prompt assembly, tool discovery, the model stream with
+its retry, the tool runner, usage arithmetic and pricing.
 """
 
 from __future__ import annotations
@@ -25,11 +29,17 @@ from langgraph.graph import END, START, StateGraph
 
 from chatbot_engine.agent.client import (
     FinishReason,
+    add_totals,
     build_chat_model,
+    discover_tools,
     finish_reason_of,
+    price_usage,
+    prompt_messages,
     run_tool_calls,
     stream_reply,
-    to_messages,
+    transcript,
+    usage_event,
+    usage_of,
 )
 from chatbot_engine.agent.retriever import (
     retrieve_with_usage,
@@ -58,7 +68,6 @@ from chatbot_engine.models.workflow import (
 from chatbot_engine.ports.agent import ToolProvider
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
-from langgraph_agent.agent import _merge_usage, _usage_event, _usage_of
 from langgraph_agent.runner import run_graph
 
 DEFAULT_WORKFLOW = WorkflowSpec.model_validate(
@@ -80,7 +89,7 @@ def _merge_vars(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
 class _State(TypedDict, total=False):
     #: This turn's model replies and tool results, in order.
     messages: Annotated[list[BaseMessage], lambda a, b: [*a, *b]]
-    usage: Annotated[dict[str, int], _merge_usage]
+    usage: Annotated[dict[str, int], add_totals]
     #: Why the last spoken reply ended; `length` when `max_output_tokens` cut it.
     finish_reason: FinishReason
     vars: Annotated[dict[str, str], _merge_vars]
@@ -121,15 +130,10 @@ class WorkflowAgent:
         discovered: list[dict[str, Any]] | None = None
 
         async def tools_of() -> list[dict[str, Any]]:
+            """The assistant's tools, discovered once per turn."""
             nonlocal discovered
             if discovered is None:
-                try:
-                    discovered = [
-                        dict(t) for t in await self._tools.list_tools(project)
-                    ]
-                except Exception as exc:
-                    urls = ", ".join(s.url for s in project.mcp_servers)
-                    raise EngineError(f"could not discover tools from {urls}") from exc
+                discovered = await discover_tools(self._tools, project)
             return discovered
 
         def render(template: str, state: _State) -> str:
@@ -172,14 +176,6 @@ class WorkflowAgent:
                     await events.put(item)
             return (str(message.content) if ok else ""), message
 
-        def prompt_messages(state: _State, extra: str = "") -> list[BaseMessage]:
-            system = project.system_prompt + (f"\n\n{extra}" if extra else "")
-            return [
-                SystemMessage(content=system),
-                *to_messages(request, state.get("context", "")),
-                *state.get("messages", []),
-            ]
-
         async def retrieve(_: _State) -> _State:
             hits, spent = await retrieve_with_usage(request)
             await events.put(
@@ -193,14 +189,23 @@ class WorkflowAgent:
                 server_for = {t["name"]: t["server"] for t in tools}
                 model = build_chat_model(project)
                 bound = model.bind_tools(tools) if tools else model
-                messages = prompt_messages(state, node.prompt)
+                messages = prompt_messages(
+                    request,
+                    state.get("context", ""),
+                    extra_system=node.prompt,
+                    prior=state.get("messages", []),
+                )
                 new: list[BaseMessage] = []
                 usage: dict[str, int] = {}
                 text = ""
                 finish: FinishReason = "stop"
                 retries = get_settings().provider_max_retries
 
-                for _ in range(project.max_tool_iterations):
+                # One model call more than the tool rounds allowed, as the
+                # loop agent counts: the last round's results reach the model,
+                # and only a request for another round ends as `tool_limit`.
+                limit = project.max_tool_iterations
+                for rounds_done in range(limit + 1):
                     reply: AIMessageChunk | None = None
                     async for chunk in stream_reply(
                         lambda: bound.astream(messages + new), retries=retries
@@ -210,11 +215,14 @@ class WorkflowAgent:
                         reply = chunk if reply is None else reply + chunk
                     if reply is None:
                         break
-                    usage = _merge_usage(usage, _usage_of(reply))
+                    usage = add_totals(usage, usage_of(reply))
                     new.append(reply)
                     text = reply.text or ""
                     finish = finish_reason_of(reply)
                     if not reply.tool_calls:
+                        break
+                    if rounds_done == limit:
+                        finish = "tool_limit"
                         break
                     async for item in run_tool_calls(
                         reply.tool_calls, request, self._tools, server_for
@@ -223,10 +231,6 @@ class WorkflowAgent:
                             new.append(item)
                         else:
                             await events.put(item)
-                else:
-                    # Still asking for tools when the rounds ran out: end the
-                    # turn and say why, as the loop agent does.
-                    finish = "tool_limit"
 
                 out: _State = {
                     "messages": new,
@@ -282,10 +286,13 @@ class WorkflowAgent:
                         labels[0],
                     ),
                 )
+                # No `model_name`: the condition runs on the utility model, and
+                # the turn is priced at the answer model's rate (see
+                # `price_usage`), so it must not overwrite the answer's name.
                 return {
                     "route": picked,
                     "vars": {f"condition_{node.id}": picked},
-                    "usage": _usage_of(reply),
+                    "usage": usage_of(reply),
                 }
 
             return step
@@ -330,13 +337,14 @@ class WorkflowAgent:
                         (t["server"] for t in tools if t["name"] == node.tool), None
                     )
                     if server:
-                        transcript = (
-                            "\n".join(f"{t.role}: {t.content}" for t in request.history)
-                            + f"\nuser: {request.message}"
-                        )
+                        # The reason and the conversation so far, so a ticket
+                        # tool or a hand-off email has both.
                         await call_one(
                             node.tool,
-                            {"transcript": transcript},
+                            {
+                                "reason": render(node.reason, state),
+                                "transcript": transcript(request, include_message=True),
+                            },
                             f"wf-{node.id}",
                             {node.tool: server},
                         )
@@ -349,10 +357,14 @@ class WorkflowAgent:
             return {}
 
         async def finish(state: _State) -> _State:
+            # A turn with no model step (condition and reply nodes only) still
+            # names the model the turn is priced at, resolved as
+            # `build_chat_model` does, so the caller can price it.
+            model_name = (
+                state.get("model_name") or project.model or get_settings().chat_model
+            )
             await events.put(
-                _usage_event(
-                    state.get("usage", {}), state.get("model_name") or project.model
-                )
+                usage_event(price_usage(state.get("usage", {}), model_name))
             )
             await events.put(
                 DoneEvent(finish_reason=state.get("finish_reason", "stop"))

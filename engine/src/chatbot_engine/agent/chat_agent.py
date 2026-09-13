@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
-from chatbot_engine.agent.client import FinishReason, Usage, stream_completion
+from chatbot_engine.agent.client import (
+    FinishReason,
+    Usage,
+    stream_completion,
+    usage_event,
+)
 from chatbot_engine.agent.retriever import (
     retrieve_with_usage,
     to_context,
@@ -16,7 +21,6 @@ from chatbot_engine.models.events import (
     Event,
     RetrievalEvent,
     TokenEvent,
-    UsageEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
 
@@ -48,13 +52,7 @@ class ChatAgent:
         ):
             if isinstance(item, Usage):
                 finish_reason = item.finish_reason
-                yield UsageEvent(
-                    input_tokens=item.input_tokens,
-                    output_tokens=item.output_tokens,
-                    total_tokens=item.total_tokens,
-                    cost_usd=item.cost_usd,
-                    model=item.model,
-                )
+                yield usage_event(item)
             elif isinstance(item, str):
                 yield TokenEvent(text=item)
             else:

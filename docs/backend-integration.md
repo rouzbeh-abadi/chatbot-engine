@@ -49,7 +49,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.7
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.8
 ```
 
 ```bash
@@ -57,7 +57,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.7"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.8"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider

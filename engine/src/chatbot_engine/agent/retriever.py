@@ -33,12 +33,13 @@ from chatbot_engine.agent.client import (
     add_usage,
     build_chat_model,
     empty_totals,
+    transcript,
 )
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import SourceRef
 from chatbot_engine.rag import sparse
 from chatbot_engine.rag.rerank import rerank
-from chatbot_engine.rag.vector_store import load_vector_store
+from chatbot_engine.rag.vector_store import open_vector_store
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
 
@@ -98,7 +99,7 @@ async def rewrite_queries(
     if not request.history:
         return [request.message]
 
-    history = "\n".join(f"{turn.role}: {turn.content}" for turn in request.history)
+    history = transcript(request)
     model = build_chat_model(utility_config(request.project))
     reply = await model.ainvoke(
         [
@@ -132,8 +133,10 @@ async def retrieve_with_usage(
     The `project_id` filter is not optional: without it one project's documents
     would answer another project's questions, with no error to notice.
 
-    Uses `load_vector_store`, so an unseeded engine raises instead of answering
-    from an empty store.
+    A project with no documents yet gets no hits, and the agent answers without
+    context, rather than the turn failing: the engine serves many projects, and
+    one that has not uploaded anything is a normal state, not a broken engine.
+    (The CLI seed path still checks with `load_vector_store`.)
 
     `queries` are the search queries to run, for a caller that has already
     rewritten the message with `rewrite_queries` and wants to reuse the result
@@ -146,7 +149,7 @@ async def retrieve_with_usage(
     candidates = project.retrieval_candidates or settings.retrieval_candidates
     do_rerank = project.rerank if project.rerank is not None else settings.rerank
 
-    store = load_vector_store(project.embedding_model)
+    store = open_vector_store(project.embedding_model)
     if queries is None:
         queries = await rewrite_queries(request, totals)
 

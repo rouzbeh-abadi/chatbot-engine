@@ -21,6 +21,11 @@ Events are pushed onto a queue by the nodes rather than reconstructed from
 LangGraph's stream. The nodes know exactly what happened; a stream of graph
 updates has to be interpreted, and the interpretation changes between LangGraph
 versions. The queue keeps this agent's output identical to `ChatAgent`'s.
+
+The nodes do not reimplement the engine. Prompt assembly, tool discovery, the
+model stream with its retry, the tool runner, usage arithmetic and pricing are
+all the engine's helpers from `chatbot_engine.agent.client`; this module owns
+only the graph's shape.
 """
 
 from __future__ import annotations
@@ -30,50 +35,38 @@ import operator
 from collections.abc import AsyncIterator
 from typing import Annotated, Any, TypedDict
 
-from langchain_core.messages import (
-    AIMessageChunk,
-    BaseMessage,
-    SystemMessage,
-    ToolMessage,
-)
+from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 
 from chatbot_engine.agent.client import (
     FinishReason,
+    add_totals,
     build_chat_model,
+    discover_tools,
     finish_reason_of,
     price_usage,
+    prompt_messages,
     run_tool_calls,
     stream_reply,
-    to_messages,
+    usage_event,
+    usage_of,
 )
 from chatbot_engine.agent.retriever import (
     retrieve_with_usage,
     to_context,
     to_source_refs,
 )
-from chatbot_engine.errors import EngineError
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import (
     DoneEvent,
     Event,
     RetrievalEvent,
     TokenEvent,
-    UsageEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
 from langgraph_agent.runner import run_graph
-
-
-def _merge_usage(left: dict[str, int], right: dict[str, int]) -> dict[str, int]:
-    """Add token counts as the turn goes round.
-
-    A turn with tool calls is several model calls, and reporting only the last
-    one would understate the total.
-    """
-    return {key: left.get(key, 0) + right.get(key, 0) for key in {*left, *right}}
 
 
 class _State(TypedDict, total=False):
@@ -84,7 +77,7 @@ class _State(TypedDict, total=False):
     """
 
     messages: Annotated[list[BaseMessage], lambda a, b: [*a, *b]]
-    usage: Annotated[dict[str, int], _merge_usage]
+    usage: Annotated[dict[str, int], add_totals]
     #: Why the last reply ended; `length` when `max_output_tokens` cut it.
     finish_reason: FinishReason
     #: Tool rounds run so far, against `max_tool_iterations`.
@@ -115,8 +108,9 @@ class LangGraphAgent:
         config = {
             # The tracer and the ids; the nodes' model calls inherit them.
             **run_config(request, name="graph"),
-            # Each tool round is a model step and a tool step, plus retrieval,
-            # the final model step and finish.
+            # Retrieval, a model step and a tool step per allowed round, the
+            # final model step and finish make 2N + 3; one more so the limit
+            # is never what stops a legal turn.
             "recursion_limit": 2 * request.project.max_tool_iterations + 4,
         }
         async for event in run_graph(
@@ -128,6 +122,16 @@ class LangGraphAgent:
             yield event
 
     def _build(self, request: ChatRequest, events: asyncio.Queue[Any]) -> Any:
+        discovered: list[dict[str, Any]] | None = None
+
+        async def tools_of() -> list[dict[str, Any]]:
+            """The assistant's tools, discovered once per turn and reused by
+            every model and tool step."""
+            nonlocal discovered
+            if discovered is None:
+                discovered = await discover_tools(self._tools, request.project)
+            return discovered
+
         async def retrieve_node(state: _State) -> _State:
             hits, spent = await retrieve_with_usage(request)
             # Before the answer, so the UI can show what it was based on while
@@ -136,14 +140,9 @@ class LangGraphAgent:
                 RetrievalEvent(query=request.message, sources=to_source_refs(hits))
             )
             context = to_context(hits)
-            # The system prompt leads, exactly as it does in the engine's loop
-            # agent. Without it the model has no persona, no grounding rules,
-            # and none of the notes the backend recalled for this customer.
             return {
-                "messages": [
-                    SystemMessage(content=request.project.system_prompt),
-                    *to_messages(request, context),
-                ],
+                # The system prompt leads, exactly as in the engine's loop agent.
+                "messages": prompt_messages(request, context),
                 "context": context,
                 # What retrieval's own model calls cost, so the turn's usage
                 # is the whole turn's, as it is for the loop agent.
@@ -151,9 +150,9 @@ class LangGraphAgent:
             }
 
         async def model_node(state: _State) -> _State:
-            tools = await self._discover(request)
+            tools = await tools_of()
             model = build_chat_model(request.project)
-            bound = model.bind_tools([dict(t) for t in tools]) if tools else model
+            bound = model.bind_tools(tools) if tools else model
 
             reply: AIMessageChunk | None = None
             async for chunk in stream_reply(
@@ -167,7 +166,7 @@ class LangGraphAgent:
             assert reply is not None
             return {
                 "messages": [reply],
-                "usage": _usage_of(reply),
+                "usage": usage_of(reply),
                 "model_name": model.model_name,
                 "finish_reason": finish_reason_of(reply),
             }
@@ -181,7 +180,7 @@ class LangGraphAgent:
             yields the started and finished events and the `ToolMessage` that
             answers each call.
             """
-            tools = await self._discover(request)
+            tools = await tools_of()
             server_for = {tool["name"]: tool["server"] for tool in tools}
             calls = getattr(state["messages"][-1], "tool_calls", []) or []
 
@@ -196,7 +195,9 @@ class LangGraphAgent:
 
         async def finish_node(state: _State) -> _State:
             await events.put(
-                _usage_event(state.get("usage", {}), state.get("model_name"))
+                usage_event(
+                    price_usage(state.get("usage", {}), state.get("model_name"))
+                )
             )
             # Arriving here with a tool request still open means the rounds
             # ran out: the same `tool_limit` the loop agent reports.
@@ -233,49 +234,6 @@ class LangGraphAgent:
         graph.add_edge("finish", END)
 
         return graph.compile()
-
-    async def _discover(self, request: ChatRequest) -> list[dict[str, Any]]:
-        """The tools this assistant allows, named in the error if unreachable."""
-        try:
-            return [
-                dict(tool) for tool in await self._tools.list_tools(request.project)
-            ]
-        except Exception as exc:
-            urls = ", ".join(server.url for server in request.project.mcp_servers)
-            raise EngineError(f"could not discover tools from {urls}") from exc
-
-
-def _usage_of(reply: AIMessageChunk) -> dict[str, int]:
-    """Token counts off one model reply, or nothing when it reported none."""
-    usage = getattr(reply, "usage_metadata", None) or {}
-    return {
-        "input_tokens": usage.get("input_tokens", 0),
-        "output_tokens": usage.get("output_tokens", 0),
-        "total_tokens": usage.get("total_tokens", 0),
-    }
-
-
-def _usage_event(totals: dict[str, int], model_name: str | None) -> UsageEvent:
-    """The turn's total spend, priced by the same helper the loop agent uses.
-
-    Shared on purpose: two agents that disagree about what a turn cost would be
-    worse than one agent.
-    """
-    usage = price_usage(
-        {
-            "input_tokens": totals.get("input_tokens", 0),
-            "output_tokens": totals.get("output_tokens", 0),
-            "total_tokens": totals.get("total_tokens", 0),
-        },
-        model_name,
-    )
-    return UsageEvent(
-        input_tokens=usage.input_tokens,
-        output_tokens=usage.output_tokens,
-        total_tokens=usage.total_tokens,
-        cost_usd=usage.cost_usd,
-        model=usage.model,
-    )
 
 
 def build(tools: ToolProvider) -> LangGraphAgent:

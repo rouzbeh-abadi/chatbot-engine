@@ -78,6 +78,12 @@ class HandoffNode(_Node):
     message: str = Field(min_length=1, max_length=2000)
     #: A tool to call with the transcript, when the assistant has one for it.
     tool: str | None = Field(default=None, max_length=80)
+    #: Why a person is needed, passed to `tool` as `reason` beside the
+    #: transcript; templated like `message`.
+    reason: str = Field(
+        default="The assistant's workflow routed this conversation to a person.",
+        max_length=500,
+    )
 
 
 class EndNode(_Node):

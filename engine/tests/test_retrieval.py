@@ -94,6 +94,24 @@ async def test_the_engine_default_applies_when_the_config_says_nothing(
     reset_dependency_cache()
 
 
+async def test_a_project_without_documents_gets_no_hits_rather_than_an_error(
+    client: TestClient,
+) -> None:
+    """The engine serves many projects; one that has uploaded nothing yet is a
+    normal state. Its turn answers without context instead of failing."""
+    assert await retrieve(_request(retrieval="hybrid")) == []
+    assert await retrieve(_request(retrieval="vector")) == []
+
+    # Another project's documents do not leak in, and do not change the answer.
+    for name, text in CHUNKS.items():
+        client.put(
+            "/documents",
+            data={"project_id": "other", "external_id": name},
+            files={"file": (name, text.encode(), "text/markdown")},
+        )
+    assert await retrieve(_request(retrieval="hybrid")) == []
+
+
 # --- fusion ---------------------------------------------------------------------
 
 

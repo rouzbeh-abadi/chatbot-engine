@@ -13,7 +13,7 @@ import logging
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from langchain_core.messages import (
     AIMessage,
@@ -24,8 +24,6 @@ from langchain_core.messages import (
     ToolCall,
     ToolMessage,
 )
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
-from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 
 from chatbot_engine.errors import EngineError
@@ -33,6 +31,7 @@ from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import (
     ToolCallFinishedEvent,
     ToolCallStartedEvent,
+    UsageEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
 from chatbot_engine.settings import Settings, get_settings
@@ -62,6 +61,22 @@ def add_usage(totals: Totals, message: BaseMessage) -> None:
         totals[key] += metadata.get(key, 0)
 
 
+def usage_of(message: BaseMessage) -> Totals:
+    """One model reply's token counts as fresh totals; zeros when it reported none."""
+    totals = empty_totals()
+    add_usage(totals, message)
+    return totals
+
+
+def add_totals(left: Mapping[str, int], right: Mapping[str, int]) -> Totals:
+    """The sum of two token totals; a missing key counts as zero.
+
+    What a graph agent reduces its `usage` channel with, so a turn of several
+    model calls reports the whole turn, as the loop agent does.
+    """
+    return {key: left.get(key, 0) + right.get(key, 0) for key in empty_totals()}
+
+
 @dataclass(frozen=True)
 class Usage:
     """Token totals and cost for a turn, summed across every model call it made.
@@ -76,8 +91,9 @@ class Usage:
     model: str | None = None
     #: USD cost at OpenRouter's listed prices, or None for an unpriced model.
     cost_usd: float | None = None
-    #: Why the last reply ended: `stop`, or `length` when `max_output_tokens`
-    #: cut it. What the turn's `done` event reports.
+    #: Why the last reply ended: `stop`; `length` when `max_output_tokens` cut
+    #: it; `tool_limit` when the model was still asking for tools after
+    #: `max_tool_iterations` rounds. What the turn's `done` event reports.
     finish_reason: FinishReason = "stop"
 
 
@@ -132,6 +148,58 @@ def to_messages(request: ChatRequest, context: str = "") -> list[BaseMessage]:
     messages.append(HumanMessage(request.message))
 
     return messages
+
+
+def prompt_messages(
+    request: ChatRequest,
+    context: str = "",
+    *,
+    extra_system: str = "",
+    prior: Sequence[BaseMessage] = (),
+) -> list[BaseMessage]:
+    """What a model call starts from: the system prompt, then the conversation.
+
+    Every agent builds its prompt here, so the persona, the grounding rules and
+    the notes the backend appended to the prompt reach the model the same way
+    whichever agent runs the turn. `extra_system` is appended to the system
+    prompt (a workflow step's own instructions); `prior` is what this turn has
+    already produced -- replies and tool results -- and follows the conversation.
+    """
+    system = request.project.system_prompt
+    if extra_system:
+        system = f"{system}\n\n{extra_system}"
+
+    return [SystemMessage(content=system), *to_messages(request, context), *prior]
+
+
+def transcript(request: ChatRequest, *, include_message: bool = False) -> str:
+    """The conversation as `role: content` lines, one per turn.
+
+    What the query rewrite reads, and what a hand-off passes to the tool that
+    raises the ticket or sends the email; `include_message` adds the message
+    being answered as the last line.
+    """
+    lines = [f"{turn.role}: {turn.content}" for turn in request.history]
+    if include_message:
+        lines.append(f"user: {request.message}")
+
+    return "\n".join(lines)
+
+
+async def discover_tools(
+    tools_provider: ToolProvider, project: AssistantConfig
+) -> list[dict[str, Any]]:
+    """The tools the assistant allows, as plain dicts, or an error naming the servers.
+
+    `bind_tools` wants plain dicts, not the Mapping views the provider returns.
+    Named servers, because the underlying failure is usually a bare "All
+    connection attempts failed" with no hint of which host.
+    """
+    try:
+        return [dict(tool) for tool in await tools_provider.list_tools(project)]
+    except Exception as exc:
+        urls = ", ".join(server.url for server in project.mcp_servers)
+        raise EngineError(f"could not discover tools from {urls}") from exc
 
 
 async def run_tool_calls(
@@ -214,7 +282,8 @@ async def stream_completion(
     3. Call the model and stream its response.
     4. If the model requests a tool, execute it and add the result to the conversation.
     5. Call the model again with the tool result.
-    6. Repeat until the model produces a normal answer with no more tool calls.
+    6. Repeat until the model produces a normal answer with no more tool calls,
+       or asks for tools again once `max_tool_iterations` rounds have run.
 
     Args:
         request: The chat turn to answer. Supplies the assistant config
@@ -232,35 +301,19 @@ async def stream_completion(
         The final answer text in pieces, as the model generates it, followed by a
         single `Usage` (tokens and cost) once the turn is complete. Rounds that
         only call tools yield no text; the yielded text is the last round's prose.
+        The `Usage` says `tool_limit` when the rounds ran out.
 
     Raises:
-        EngineError: If tool discovery fails, or if the model is still calling
-            tools after `max_tool_iterations` rounds.
+        EngineError: If tool discovery fails.
     """
-    try:
-        tools = await tools_provider.list_tools(request.project)
-    except Exception as exc:
-        # Name the servers: the underlying failure is usually a bare
-        # "All connection attempts failed" with no hint of which host.
-        urls = ", ".join(server.url for server in request.project.mcp_servers)
-        raise EngineError(f"could not discover tools from {urls}") from exc
-
+    tools = await discover_tools(tools_provider, request.project)
     server_for = {tool["name"]: tool["server"] for tool in tools}
 
-    # The prompt is the system prompt followed by the running conversation; the
-    # model is bound to the tools when there are any. This used to live in a
-    # one-function module -- it is small enough to read in place.
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            SystemMessage(content=request.project.system_prompt),
-            MessagesPlaceholder("messages"),
-        ]
-    )
+    # The system prompt leads, then the running conversation; the model is
+    # bound to the tools when there are any.
     model = build_chat_model(request.project)
-    # bind_tools wants plain dicts, not the Mapping views the provider returns.
-    bound = model.bind_tools([dict(tool) for tool in tools]) if tools else model
-    chain = prompt | bound
-    messages = to_messages(request, context)
+    bound = model.bind_tools(tools) if tools else model
+    messages = prompt_messages(request, context)
 
     # Tokens accumulate across rounds: a turn with tool calls is several model
     # calls, and reporting only the last one would understate the total.
@@ -269,11 +322,15 @@ async def stream_completion(
     retries = get_settings().provider_max_retries
     config = run_config(request, name="answer")
 
-    for _ in range(request.project.max_tool_iterations):
+    # One model call more than the tool rounds allowed, so the last round's
+    # results still reach the model; only a request for yet another round ends
+    # the turn as `tool_limit`. The graph agents count the same way.
+    limit = request.project.max_tool_iterations
+    for rounds_done in range(limit + 1):
         reply: AIMessageChunk | None = None
 
-        async for chunk in stream_round(
-            chain, messages, retries=retries, config=config
+        async for chunk in stream_reply(
+            lambda: bound.astream(messages, config=config), retries=retries
         ):
             if chunk.text:
                 yield chunk.text
@@ -297,6 +354,9 @@ async def stream_completion(
                 totals, model.model_name, finish_reason=finish_reason_of(reply)
             )
             return
+
+        if rounds_done == limit:
+            break
 
         async for item in run_tool_calls(
             reply.tool_calls, request, tools_provider, server_for
@@ -332,23 +392,6 @@ def is_transient(exc: BaseException) -> bool:
     if isinstance(exc, openai.APIStatusError):
         return exc.status_code >= 500
     return False
-
-
-async def stream_round(
-    chain,
-    messages: Sequence[BaseMessage],
-    *,
-    retries: int,
-    backoff_s: float = RETRY_BACKOFF_S,
-    config: RunnableConfig | None = None,
-) -> AsyncIterator[AIMessageChunk]:
-    """One call of a prompt chain, streamed with `stream_reply`'s retry."""
-    async for chunk in stream_reply(
-        lambda: chain.astream({"messages": messages}, config=config),
-        retries=retries,
-        backoff_s=backoff_s,
-    ):
-        yield chunk
 
 
 async def stream_reply(
@@ -429,6 +472,8 @@ def price_usage(
     """
     table = pricing if pricing is not None else get_settings().pricing
     prices = table.get(model_name or "")
+    # A graph agent's usage channel starts empty; a missing count is zero.
+    totals = {**empty_totals(), **totals}
     cost = (
         (totals["input_tokens"] * prices[0] + totals["output_tokens"] * prices[1])
         / 1_000_000
@@ -436,3 +481,14 @@ def price_usage(
         else None
     )
     return Usage(model=model_name, cost_usd=cost, finish_reason=finish_reason, **totals)
+
+
+def usage_event(usage: Usage) -> UsageEvent:
+    """The `usage` event for a priced turn. Every agent emits it through here."""
+    return UsageEvent(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        total_tokens=usage.total_tokens,
+        cost_usd=usage.cost_usd,
+        model=usage.model,
+    )

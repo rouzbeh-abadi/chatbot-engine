@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.7
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.8
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -121,8 +121,8 @@ it still emits a well-formed stream, and only the content of the answer
 changes. The persona, the grounding rules and any notes the backend appended
 to the prompt are all lost.
 
-**Model calls.** Stream through `chatbot_engine.agent.client.stream_reply`
-(or `stream_round` for a prompt chain). It retries a stream that fails before
+**Model calls.** Stream through `chatbot_engine.agent.client.stream_reply`.
+It retries a stream that fails before
 its first token on rate limits, provider 5xx and dropped connections, and
 passes the failure on once text has been shown. Build the model with
 `build_chat_model`, which applies the assistant's `max_output_tokens`, and
@@ -267,7 +267,7 @@ other agent, so the caller's UI needs nothing new.
 | `condition` | asks the utility model (`ENGINE_UTILITY_MODEL`, temperature 0) one question, expecting one of the branch labels, and follows that branch; the answer is matched exactly, then as a whole word, and the first label is the fallback |
 | `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the result text in `var` (empty when the call failed); reported as `tool_call_started` and `tool_call_finished` with the real duration |
 | `reply` | streams a fixed, templated text as the answer |
-| `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with the transcript through the same runner, so a ticket or an email can be raised and the call shows in the log |
+| `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with `reason` (templated, with a default) and the transcript through the same runner, so a ticket or an email can be raised and the call shows in the log |
 | `end` | finishes the turn; the same as a node with no outgoing edge |
 
 Templates in `prompt`, `text`, `message` and tool arguments may use

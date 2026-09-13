@@ -7,7 +7,7 @@ import openai
 import pytest
 from langchain_core.messages import AIMessageChunk
 
-from chatbot_engine.agent.client import is_transient, stream_round
+from chatbot_engine.agent.client import is_transient, stream_reply
 
 
 def _rate_limited() -> openai.RateLimitError:
@@ -41,7 +41,12 @@ class FlakyChain:
 
 async def _collect(chain, retries: int) -> str:
     return "".join(
-        [c.text async for c in stream_round(chain, [], retries=retries, backoff_s=0.0)]
+        [
+            c.text
+            async for c in stream_reply(
+                lambda: chain.astream([]), retries=retries, backoff_s=0.0
+            )
+        ]
     )
 
 
