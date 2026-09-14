@@ -42,7 +42,7 @@ async def chat(
     Left to surface lazily, the key would first be needed during retrieval,
     inside a stream that has already committed to 200.
     """
-    settings.require_openrouter_key()
+    settings.require_provider_key(request.project.provider_api_key)
     events = record_turn(
         service.stream(request),
         caller=caller.name,

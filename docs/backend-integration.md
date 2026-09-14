@@ -49,7 +49,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.8
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.9
 ```
 
 ```bash
@@ -57,7 +57,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.8"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.9"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -136,6 +136,7 @@ request carries the whole assistant definition:
     "max_output_tokens": 800,
     "top_k": 5,
     "max_tool_iterations": 6,
+    "provider_api_key": null,
     "mcp_servers": [
       {
         "name": "support-tools",
@@ -158,7 +159,7 @@ request carries the whole assistant definition:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out |
+| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank` and `retrieval_candidates` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out; `provider_api_key` is the caller's own OpenRouter key, billed for every model call in the request instead of the engine's, and it satisfies the engine's key requirement on its own |
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |

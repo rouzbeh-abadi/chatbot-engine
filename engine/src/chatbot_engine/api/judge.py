@@ -23,5 +23,5 @@ async def score_run(
     request: JudgeRequest, judge: JudgeDep, settings: SettingsDep
 ) -> JudgeReport:
     """Score every case in the transcript."""
-    settings.require_openrouter_key()
+    settings.require_provider_key(request.project.provider_api_key)
     return await judge(request)

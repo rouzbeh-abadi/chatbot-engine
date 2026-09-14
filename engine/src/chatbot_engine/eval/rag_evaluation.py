@@ -101,8 +101,11 @@ def _by_category(results: list[RagCaseResult]) -> list[RagCategorySummary]:
     return summaries
 
 
-def _build_metrics() -> tuple:
+def _build_metrics(provider_api_key: str | None = None) -> tuple:
     """The four RAGAS metrics, wired to the judge model over OpenRouter.
+
+    `provider_api_key` is the caller's own key when the request carries one,
+    so the judge calls and the relevancy embeddings are billed to them.
 
     Collections metrics take a ragas-native LLM built from an OpenAI client, so
     we point one at OpenRouter rather than reusing the LangChain chat model.
@@ -126,7 +129,7 @@ def _build_metrics() -> tuple:
     # otherwise exhaust the client's default two retries and leave metric cells
     # blank. More retries let the SDK back off and wait it out.
     client = AsyncOpenAI(
-        api_key=settings.require_openrouter_key(),
+        api_key=settings.require_provider_key(provider_api_key),
         base_url=settings.openrouter_base_url,
         max_retries=6,
     )
@@ -200,7 +203,9 @@ async def _score(metric, /, **kwargs) -> float | None:
 
 async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
     """Answer every case, then score its retrieval with RAGAS."""
-    faithfulness, answer_relevancy, precision, recall = _build_metrics()
+    faithfulness, answer_relevancy, precision, recall = _build_metrics(
+        request.project.provider_api_key
+    )
 
     results: list[RagCaseResult] = []
     total = len(request.cases)

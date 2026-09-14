@@ -100,7 +100,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.8
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.9
 ```
 
 The readiness endpoint reports whether a provider key is set, whether the
@@ -151,7 +151,11 @@ curl -N -X POST localhost:8100/chat -H 'Content-Type: application/json' -d '{
 
 The `project` block also accepts `model`, `temperature`, `top_k` (how many
 passages reach the model), `retrieval` (`vector` or `hybrid`), `rerank`,
-`max_output_tokens` and `max_tool_iterations`. Previous turns go in `history`
+`max_output_tokens` and `max_tool_iterations`. It may also carry
+`provider_api_key`, the caller's own OpenRouter key, in which case every
+model call in the request is billed to that key instead of the engine's; an
+application can use it to let each customer pay for their own evaluations.
+Previous turns go in `history`
 as a list of `role` and `content` objects. `session_id` and `user_id` identify
 the conversation and the person, and both are forwarded to your tool server.
 
@@ -267,7 +271,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_LANGFUSE_PUBLIC_KEY=pk-lf-... \
   -e ENGINE_LANGFUSE_SECRET_KEY=sk-lf-... \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.8
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.9
 ```
 
 [DEPLOYMENT.md](DEPLOYMENT.md) covers the remaining topics, including rate

@@ -324,6 +324,15 @@ class Settings(BaseSettings):
 
         return problems
 
+    def require_provider_key(self, override: str | None = None) -> str:
+        """The key a request's model calls use: the caller's own, else the engine's.
+
+        A request that brings its own key (`AssistantConfig.provider_api_key`)
+        is served even when the engine has none, so the 501 below is only for
+        requests that rely on the engine's.
+        """
+        return override or self.require_openrouter_key()
+
     def require_openrouter_key(self) -> str:
         """The provider credential, or a 501 naming the variable to set.
 

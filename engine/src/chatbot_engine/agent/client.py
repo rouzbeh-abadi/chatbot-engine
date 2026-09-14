@@ -108,7 +108,7 @@ def build_chat_model(
         model=config.model or settings.chat_model,
         temperature=config.temperature,
         max_tokens=config.max_output_tokens,
-        api_key=settings.require_openrouter_key(),
+        api_key=settings.require_provider_key(config.provider_api_key),
         base_url=settings.openrouter_base_url,
         stream_usage=True,
         max_retries=settings.provider_max_retries,

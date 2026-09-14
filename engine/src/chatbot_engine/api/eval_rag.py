@@ -22,5 +22,5 @@ async def score_retrieval(
     request: RagEvalRequest, evaluator: RagEvaluatorDep, settings: SettingsDep
 ) -> RagReport:
     """Answer and score every retrieval case."""
-    settings.require_openrouter_key()
+    settings.require_provider_key(request.project.provider_api_key)
     return await evaluator(request)

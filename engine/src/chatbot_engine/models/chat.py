@@ -109,6 +109,15 @@ class AssistantConfig(BaseModel):
     workflow: WorkflowSpec | None = None
     #: Bounds the tool-calling loop, so a misbehaving model cannot spin.
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
+    #: The caller's own OpenRouter key for this request. Every model call the
+    #: request makes -- the answer, the rewrite, the rerank, a judge -- is
+    #: billed to it instead of the engine's key, so an application can let
+    #: each of its customers pay for their own evaluations or traffic. Set,
+    #: it also satisfies the engine's own key requirement: an engine with no
+    #: key of its own still serves the request. Embedding the question at
+    #: query time stays on the engine's key, since the collection is keyed by
+    #: the embedding model, not by who paid. Never logged or traced.
+    provider_api_key: str | None = Field(default=None, repr=False, min_length=1)
 
 
 class ChatRequest(BaseModel):

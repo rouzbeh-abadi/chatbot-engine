@@ -108,3 +108,23 @@ def test_a_score_outside_the_rubric_is_refused() -> None:
 
     with pytest.raises(ValueError):
         GradedVerdict(id="x", score=11, reason="too high")
+
+
+def test_a_request_with_its_own_key_is_served_without_an_engine_key(
+    client: TestClient, project: dict[str, object], monkeypatch
+) -> None:
+    """Bring-your-own-key: the 501 for a missing engine key does not apply."""
+    monkeypatch.setenv("ENGINE_OPENROUTER_API_KEY", "")
+    dependencies.reset_dependency_cache()
+    stub = _StubJudge()
+    _with_judge(client, stub)
+
+    without = client.post("/judge", json=_body(project))
+    with_key = client.post(
+        "/judge", json=_body(project | {"provider_api_key": "caller-key"})
+    )
+
+    assert without.status_code == 501
+    assert with_key.status_code == 200
+    assert stub.seen is not None
+    assert stub.seen.project.provider_api_key == "caller-key"

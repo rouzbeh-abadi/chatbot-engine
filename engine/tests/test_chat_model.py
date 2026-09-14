@@ -149,3 +149,38 @@ def test_provider_calls_retry_transient_failures_with_a_deadline() -> None:
     embedder = build_embeddings(settings)
     assert embedder.max_retries == 5
     assert embedder.request_timeout == 12.5
+
+
+# --- a caller's own key ------------------------------------------------------
+
+
+def test_a_request_key_wins_over_the_engine_key() -> None:
+    """Bring-your-own-key: the request's key is the one the provider sees."""
+    settings = Settings(openrouter_api_key="engine-key")
+
+    model = build_chat_model(_config(provider_api_key="caller-key"), settings)
+
+    assert model.openai_api_key.get_secret_value() == "caller-key"
+
+
+def test_a_request_key_stands_in_for_a_missing_engine_key() -> None:
+    """An engine with no key of its own still serves a request that brings one."""
+    model = build_chat_model(
+        _config(provider_api_key="caller-key"), Settings(openrouter_api_key=None)
+    )
+
+    assert model.openai_api_key.get_secret_value() == "caller-key"
+
+
+def test_the_request_key_never_shows_in_the_config_repr() -> None:
+    """A secret in a repr ends up in a log line sooner or later."""
+    config = _config(provider_api_key="caller-key")
+
+    assert "caller-key" not in repr(config)
+    assert "caller-key" not in str(config)
+
+
+def test_a_blank_request_key_is_refused() -> None:
+    """`""` would otherwise mean "use the engine's key" by accident."""
+    with pytest.raises(ValueError):
+        _config(provider_api_key="")

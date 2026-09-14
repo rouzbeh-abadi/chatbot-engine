@@ -98,6 +98,9 @@ class AssistantConfig(BaseModel):
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
     #: This assistant's own trace destination. Unset, the engine's setting applies.
     tracing: TracingConfig | None = None
+    #: The caller's own OpenRouter key for this request; every model call is
+    #: billed to it instead of the engine's. Never logged.
+    provider_api_key: str | None = Field(default=None, repr=False, min_length=1)
     #: The turn as a graph of steps, run by the engine's `workflow` agent.
     workflow: WorkflowSpec | None = None
 
