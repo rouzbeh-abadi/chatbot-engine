@@ -38,7 +38,8 @@ ENV PATH="/app/.venv/bin:$PATH" PYTHONUNBUFFERED=1
 # The engine's data lives on one path, so a single volume mount keeps it.
 ENV ENGINE_CHROMA_DIR=/var/lib/chatbot-engine/chroma \
     ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
-    ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs
+    ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
+    ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3
 EXPOSE 8100
 
 CMD ["uvicorn", "chatbot_engine.app:app", \

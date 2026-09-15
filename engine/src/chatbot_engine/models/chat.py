@@ -164,6 +164,19 @@ class AssistantConfig(BaseModel):
     provider_api_key: str | None = Field(default=None, repr=False, min_length=1)
 
 
+class ResumeInput(BaseModel):
+    """The answer to a question a paused turn asked (`input_required`)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: From the `input_required` event.
+    thread_id: str = Field(min_length=1, max_length=200)
+    #: The answer: the text typed, or the chosen option's `value`.
+    value: str | None = Field(default=None, max_length=2000)
+    #: The visitor skipped an optional question.
+    skipped: bool = False
+
+
 class ChatRequest(BaseModel):
     """The body of `POST /chat`.
 
@@ -181,3 +194,8 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, max_length=256)
     user_id: str | None = Field(default=None, max_length=256)
     history: list[Message] = Field(default_factory=list, max_length=200)
+    #: Continue a turn that paused on a question, with the answer. `message`
+    #: is still required: it is how the answer reads in the conversation (the
+    #: typed text, or the chosen option's label). Agents that never pause
+    #: ignore it.
+    resume: ResumeInput | None = None

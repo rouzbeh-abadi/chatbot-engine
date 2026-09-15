@@ -93,6 +93,37 @@ class ToolCallFinishedEvent(_Event):
     error: str | None = None
 
 
+class AskOption(BaseModel):
+    """One option of a question the turn paused on."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: str
+    label: str
+
+
+class InputRequiredEvent(_Event):
+    """The turn paused to ask the visitor something, and is waiting for the answer.
+
+    Comes just before `done` (`input_required`). The question's words have
+    already streamed as tokens; this says how to answer. Send the answer as a
+    new request with `resume: {thread_id, value}` (or `skipped: true` when
+    `optional`), and the turn continues from the step that asked. `error` is
+    set when the previous answer was refused and the question is asked again.
+    """
+
+    type: Literal["input_required"] = "input_required"
+    thread_id: str
+    node: str
+    prompt: str
+    input: Literal["text", "phone", "email", "url", "choice"]
+    options: list[AskOption] = Field(default_factory=list)
+    optional: bool = False
+    skip_label: str | None = None
+    placeholder: str | None = None
+    error: str | None = None
+
+
 class ErrorEvent(_Event):
     """May arrive mid-stream, once the 200 status has already been sent."""
 
@@ -109,7 +140,11 @@ class DoneEvent(_Event):
     #: `tool_limit`: the model was still asking for tools after
     #: `max_tool_iterations` rounds; the answer so far was streamed. `error`:
     #: the turn failed after the response started (an `error` event precedes).
-    finish_reason: Literal["stop", "length", "tool_limit", "error"] = "stop"
+    #: `input_required`: the turn paused on a question (an `input_required`
+    #: event precedes) and continues when the answer is sent with `resume`.
+    finish_reason: Literal[
+        "stop", "length", "tool_limit", "error", "input_required"
+    ] = "stop"
 
 
 Event = Annotated[
@@ -118,6 +153,7 @@ Event = Annotated[
     | ToolCallStartedEvent
     | ToolCallFinishedEvent
     | UsageEvent
+    | InputRequiredEvent
     | ErrorEvent
     | DoneEvent,
     Field(discriminator="type"),

@@ -23,17 +23,23 @@ async def run_graph(
     state: dict[str, Any],
     config: dict[str, Any],
     events: asyncio.Queue[Any],
+    outcome: dict[str, Any] | None = None,
 ) -> AsyncIterator[Event]:
     """Invoke `graph` with `state` and `config`, yielding what its nodes put on `events`.
 
     The graph runs as a task while this drains the queue, so events reach the
     caller as they happen. Once drained, anything the graph raised is raised
-    here, after the events that preceded it have been delivered.
+    here, after the events that preceded it have been delivered. `outcome`,
+    when given, receives the graph's final values under `values`, which is
+    where LangGraph reports a pause (`__interrupt__`). `state` may also be a
+    `Command`, to resume a paused graph.
     """
 
     async def drive() -> None:
         try:
-            await graph.ainvoke(state, config)
+            result = await graph.ainvoke(state, config)
+            if outcome is not None:
+                outcome["values"] = result
         finally:
             await events.put(_DONE)
 

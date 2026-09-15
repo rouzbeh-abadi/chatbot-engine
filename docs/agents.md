@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.12
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.13
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -268,6 +268,7 @@ other agent, so the caller's UI needs nothing new.
 | `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the result text in `var` (empty when the call failed); reported as `tool_call_started` and `tool_call_finished` with the real duration |
 | `reply` | streams a fixed, templated text as the answer |
 | `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with `reason` (templated, with a default) and the transcript through the same runner, so a ticket or an email can be raised and the call shows in the log |
+| `ask` | pauses the turn to ask the visitor one thing (`input`: `text`, `phone`, `email`, `url`, or `choice` with `options` or `options_from` a variable holding a JSON list), and continues with the answer in `var` (and a choice's label in `<var>_label`); `optional` allows skipping, which leaves both empty. See "Asking the visitor" below |
 | `end` | finishes the turn; the same as a node with no outgoing edge |
 
 Templates in `prompt`, `text`, `message` and tool arguments may use
@@ -279,3 +280,43 @@ unreachable nodes, a condition with edges, and a node with two outgoing
 edges; `max_steps` (default 30) caps the visits in one turn. Every node
 appears as a step in the trace when tracing is on. Without a `workflow`, the
 agent runs retrieve then model, the same shape as the `graph` agent.
+
+A tool argument that renders empty (a skipped question, an unset variable) is
+left out of the call, so the tool sees it as not given.
+
+### Asking the visitor
+
+The `ask` step is LangGraph's human-in-the-loop. Inside the step,
+`interrupt()` stops the graph; a checkpointer (SQLite, at
+`ENGINE_CHECKPOINT_DB`) keeps its state; the response ends with an
+`input_required` event describing the question. The visitor's answer arrives
+as a new request carrying `resume`, the agent rebuilds the same graph, and
+`Command(resume=...)` continues it: the step runs again from the top,
+`interrupt()` returns the answer this time, and the graph goes on.
+
+```json
+{"id": "phone", "type": "ask", "prompt": "What number should we call?", "input": "phone", "var": "phone"},
+{"id": "slots", "type": "tool", "tool": "list_callback_slots", "var": "slots"},
+{"id": "when", "type": "ask", "prompt": "When suits you?", "input": "choice", "options_from": "slots", "var": "slot"},
+{"id": "book", "type": "tool", "tool": "request_callback",
+ "arguments": {"phone": "{{vars.phone}}", "slot": "{{vars.slot}}", "reason": "{{message}}"}, "var": "ticket"}
+```
+
+What the step guarantees:
+
+- **The answer is checked where it is used.** A phone number must have 6 to
+  15 digits (spaces, dashes and brackets are dropped), an email must look
+  like one, a web address gains `https://` when it has no scheme, and a
+  choice must be one of the options offered. A refused answer asks again with
+  `error` set.
+- **Nothing is counted twice.** Usage up to the pause is reported when the
+  turn pauses; the resumed part reports only its own.
+- **`{{message}}` stays the message that started the turn,** not the answer.
+  A model step after the pause reads the conversation the resumed request
+  sends, plus only what the graph produced after the pause.
+- **A resume is scoped.** It must come from the same project and session,
+  within `ENGINE_PAUSE_TTL_S`, and for the same workflow; a finished turn's
+  state is deleted, and a workflow with no `ask` step never touches the
+  checkpointer.
+- **A choice with no options is skipped,** leaving the variable empty, so a
+  tool that found no slots does not produce an empty question.

@@ -25,6 +25,7 @@ def offline_vectors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator
     monkeypatch.setenv("ENGINE_CHROMA_DIR", str(tmp_path / "chroma"))
     monkeypatch.setenv("ENGINE_REGISTRY_DB", str(tmp_path / "documents.sqlite3"))
     monkeypatch.setenv("ENGINE_BLOB_DIR", str(tmp_path / "blobs"))
+    monkeypatch.setenv("ENGINE_CHECKPOINT_DB", str(tmp_path / "checkpoints.sqlite3"))
     monkeypatch.setenv("ENGINE_OPENROUTER_API_KEY", "sk-or-fake-for-tests")
     # The engine ships no prices. The suite runs with the demo's table, so a
     # test can assert a cost the way the demo shows one.

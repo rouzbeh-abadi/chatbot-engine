@@ -48,8 +48,9 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_CHROMA_DIR=/var/lib/chatbot-engine/chroma \
   -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
+  -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.12
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.13
 ```
 
 ```bash
@@ -57,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.12"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.13"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -165,6 +166,7 @@ request carries the whole assistant definition:
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
 | `history` | no | Earlier turns, oldest first |
+| `resume` | no | `{ thread_id, value?, skipped? }`: the answer to a question a workflow turn paused on (`input_required`). `message` is still sent, as the answer reads in the conversation (the typed text, or the chosen option's label). See "A turn that asks" below |
 
 ### Tracing per assistant
 
@@ -189,11 +191,46 @@ Traces carry the request, project, session and user ids either way.
 
 With `agent: workflow` (the LangGraph plugin, in the `engine-langgraph`
 image), `project.workflow` describes the turn as nodes and edges from a fixed
-library: retrieve, model, condition, tool, reply, handoff, end. The schema is
+library: retrieve, model, condition, tool, reply, handoff, ask, end. The schema is
 validated at the API boundary, so a malformed graph is a `422` before anything
 runs; a tool step may only name a tool that one of `mcp_servers` allowlists.
 Without a `workflow`, the agent runs retrieve then model. The node table and
 an example are in the Workflows section of [agents.md](agents.md).
+
+### A turn that asks
+
+A workflow's `ask` step pauses the turn to ask the visitor one thing: a
+choice, a phone number, an email or web address, or free text. The response
+streams the question as `token`s, then an `input_required` event, then `done`
+with `finish_reason: "input_required"`. Show the question's control, and send
+the answer as the next request, with the same `project`, `session_id` and a
+`history` that includes the question:
+
+```json
+{
+  "project": { "...": "the same assistant" },
+  "session_id": "c-123",
+  "message": "Wed 14:00",
+  "history": [
+    {"role": "user", "content": "Can someone call me?"},
+    {"role": "assistant", "content": "When suits you?"}
+  ],
+  "resume": {"thread_id": "support:3f9c...", "value": "2026-09-16T14:00"}
+}
+```
+
+The turn continues from the step that asked. An answer the step refuses (not
+a phone number, an option not offered) comes back at once as another
+`input_required` with `error` set and no new tokens. `skipped: true` answers
+an `optional` question with nothing. A `thread_id` from another project or
+session, one older than `ENGINE_PAUSE_TTL_S` (a day by default), or one whose
+workflow was edited since is refused with an `error` event (`resume_expired`
+or `resume_changed`); ask the visitor again. A new message without `resume`
+simply starts a new turn, and the unanswered one is forgotten in time.
+
+The paused state lives in `ENGINE_CHECKPOINT_DB`, a SQLite file on the
+engine's volume, and is deleted when the turn finishes. With several engine
+replicas, send the answer to the replica that asked.
 
 ### Why the whole configuration is sent every time
 
@@ -249,8 +286,9 @@ Read it line by line and switch on `type`.
 | `tool_call_started` | `call_id`, `tool`, `server`, `arguments` | Show progress |
 | `tool_call_finished` | `call_id`, `tool`, `ok`, `duration_ms`, `error` | Pair with `started` by `call_id` |
 | `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model` | Display cost. Tokens cover every model call in the turn; `cost_usd` is null unless the engine's `ENGINE_PRICING` lists the model |
+| `input_required` | `thread_id`, `node`, `prompt`, `input`, `options[]`, `optional`, `skip_label`, `placeholder`, `error` | A workflow turn paused on a question. Show the control for `input` (`text`, `phone`, `email`, `url`, or `choice` with `options[]` of `{value, label}`); answer with `resume` |
 | `error` | `code`, `message` | The turn failed after the response started |
-| `done` | `finish_reason` | Always last. `stop`; `length` when `max_output_tokens` cut the answer (show the visitor it was shortened); `tool_limit` when the model was still asking for tools after `max_tool_iterations` rounds (what it said so far has streamed); `error` after an `error` event |
+| `done` | `finish_reason` | Always last. `stop`; `length` when `max_output_tokens` cut the answer (show the visitor it was shortened); `tool_limit` when the model was still asking for tools after `max_tool_iterations` rounds (what it said so far has streamed); `input_required` after an `input_required` event; `error` after an `error` event |
 
 Each `sources[]` entry has `doc_id`, `source`, `score`, and optionally
 `heading`, `page` and `excerpt`. `heading` is present when the document was

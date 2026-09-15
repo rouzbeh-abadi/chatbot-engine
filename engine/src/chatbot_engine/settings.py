@@ -197,6 +197,15 @@ class Settings(BaseSettings):
     #: See agent/registry.py.
     agent: str = "loop"
 
+    #: Where a turn that paused on a question keeps its state until the answer
+    #: arrives. Used by agents that pause (the `workflow` agent's ask step).
+    #: One file per engine; replicas behind a load balancer need the answer
+    #: routed to the engine that asked.
+    checkpoint_db: Path = Path("var/checkpoints.sqlite3")
+
+    #: How long a paused turn waits for its answer before it is forgotten.
+    pause_ttl_s: int = 86_400
+
     # --- everything else ----------------------------------------------------
 
     #: Seconds to wait on an MCP server before giving up.

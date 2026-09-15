@@ -111,6 +111,16 @@ class AssistantConfig(BaseModel):
     workflow: WorkflowSpec | None = None
 
 
+class ResumeInput(BaseModel):
+    """The answer to a paused turn's question."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    thread_id: str = Field(min_length=1, max_length=200)
+    value: str | None = Field(default=None, max_length=2000)
+    skipped: bool = False
+
+
 class EngineChatRequest(BaseModel):
     """The body of the engine's `POST /chat`."""
 
@@ -123,6 +133,8 @@ class EngineChatRequest(BaseModel):
     # authorization. User identity remains the backend's responsibility.
     user_id: str | None = Field(default=None, max_length=256)
     history: list[Message] = Field(default_factory=list, max_length=200)
+    # The answer to a question a paused workflow turn asked (`input_required`).
+    resume: ResumeInput | None = None
 
 
 # --- what we read back ------------------------------------------------------
@@ -207,6 +219,30 @@ class ToolCallFinishedEvent(BaseModel):
     error: str | None = None
 
 
+class AskOption(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    value: str
+    label: str
+
+
+class InputRequiredEvent(BaseModel):
+    """A workflow turn paused on a question; resume with the answer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["input_required"] = "input_required"
+    thread_id: str
+    node: str
+    prompt: str
+    input: Literal["text", "phone", "email", "url", "choice"]
+    options: list[AskOption] = Field(default_factory=list)
+    optional: bool = False
+    skip_label: str | None = None
+    placeholder: str | None = None
+    error: str | None = None
+
+
 class ErrorEvent(BaseModel):
     """A failure reported mid-stream, after the 200 response has already begun."""
 
@@ -223,7 +259,9 @@ class DoneEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["done"] = "done"
-    finish_reason: Literal["stop", "length", "tool_limit", "error"] = "stop"
+    finish_reason: Literal[
+        "stop", "length", "tool_limit", "error", "input_required"
+    ] = "stop"
 
 
 # One chat turn arrives as a sequence of these events. Pydantic uses the `type`
@@ -234,6 +272,7 @@ ChatEvent = Annotated[
     | ToolCallStartedEvent
     | ToolCallFinishedEvent
     | UsageEvent
+    | InputRequiredEvent
     | ErrorEvent
     | DoneEvent,
     Field(discriminator="type"),

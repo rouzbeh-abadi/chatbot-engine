@@ -60,6 +60,7 @@ services:
       ENGINE_CHROMA_DIR: /var/lib/chatbot-engine/chroma
       ENGINE_REGISTRY_DB: /var/lib/chatbot-engine/documents.sqlite3
       ENGINE_BLOB_DIR: /var/lib/chatbot-engine/blobs
+      ENGINE_CHECKPOINT_DB: /var/lib/chatbot-engine/checkpoints.sqlite3
     volumes:
       # Vectors cost money to produce. Without this they are re-embedded from
       # scratch on every `docker compose up`.
