@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 from datetime import UTC, datetime
+from typing import TypedDict
 
 from langchain_core.documents import Document
 
@@ -38,6 +39,39 @@ def doc_id_for(project_id: str, external_id: str) -> str:
     seed = f"{project_id}\x00{external_id}".encode()
 
     return hashlib.sha256(seed).hexdigest()[:32]
+
+
+class _Chunking(TypedDict):
+    chunking_strategy: ChunkStrategy
+    chunk_size: int
+    chunk_overlap: int
+
+
+def _settings_of(chunker: DocumentChunker) -> _Chunking:
+    """The chunking a record stores: what the chunker actually uses."""
+    return {
+        "chunking_strategy": chunker.strategy,
+        "chunk_size": chunker.size,
+        "chunk_overlap": chunker.overlap,
+    }
+
+
+def _cut_the_same(
+    record: DocumentRecord, chunker: DocumentChunker, *, requested: bool
+) -> bool:
+    """Whether `record` was chunked the way `chunker` would chunk it.
+
+    A record from before chunking was recorded says nothing either way; it
+    counts as current unless the caller asks for chunking explicitly, so an
+    engine upgrade alone never re-embeds a knowledge base.
+    """
+    if record.chunking_strategy is None:
+        return not requested
+    return (record.chunking_strategy, record.chunk_size, record.chunk_overlap) == (
+        chunker.strategy,
+        chunker.size,
+        chunker.overlap,
+    )
 
 
 class DocumentIngestPipeline:
@@ -88,10 +122,27 @@ class DocumentIngestPipeline:
         content_hash = hashlib.sha256(data).hexdigest()
         current = await self._registry.get(project_id=project_id, doc_id=doc_id)
 
+        # Only when the request actually specifies chunking. Otherwise the
+        # chunker this pipeline was wired with stands, which is what keeps it
+        # injectable. Built before the unchanged check: settings that cannot
+        # work together are refused even for bytes already indexed.
+        requested = (chunking_strategy, chunk_size, chunk_overlap) != (None, None, None)
+        chunker = (
+            DocumentChunker(
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+                strategy=chunking_strategy,
+            )
+            if requested
+            else None
+        )
+        effective = chunker or self._chunker
+
         if (
             current is not None
             and current.content_hash == content_hash
             and current.status is not IngestStatus.FAILED
+            and _cut_the_same(current, effective, requested=requested)
         ):
             # `unchanged` describes this call, not the document, so the stored
             # record keeps the status it earned last time.
@@ -109,18 +160,8 @@ class DocumentIngestPipeline:
             status=IngestStatus.RECEIVED,
             created_at=current.created_at if current is not None else now,
             updated_at=now,
+            **_settings_of(effective),
         )
-
-        # Only when the request actually specifies chunking. Otherwise the
-        # chunker this pipeline was wired with stands, which is what keeps it
-        # injectable.
-        chunker = None
-        if (chunking_strategy, chunk_size, chunk_overlap) != (None, None, None):
-            chunker = DocumentChunker(
-                chunk_size=chunk_size,
-                chunk_overlap=chunk_overlap,
-                strategy=chunking_strategy,
-            )
 
         return await self._index(
             record,
@@ -131,16 +172,30 @@ class DocumentIngestPipeline:
             chunker=chunker,
         )
 
-    async def reindex(self, *, project_id: str, doc_id: str) -> DocumentRecord:
+    async def reindex(
+        self,
+        *,
+        project_id: str,
+        doc_id: str,
+        embedding_model: str | None = None,
+        chunking_strategy: ChunkStrategy | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+    ) -> DocumentRecord:
         """Re-chunk and re-embed one document from the bytes already stored.
 
         What the blob store is for: after changing `chunk_size` or the embedding
         model, every document has to be rebuilt, and asking the backend to upload
         them all again is the wrong way to do it.
 
+        Settings work as on upload: none given, the chunker this pipeline was
+        wired with (the engine's current defaults) applies; any given, the
+        ones left out take the engine's defaults.
+
         Raises:
             NotConfiguredError: No blob store, so the original was never kept.
             LookupError: No such document in the registry.
+            ChunkingError: The settings cannot work together.
         """
         if self._blobs is None:
             raise NotConfiguredError(
@@ -152,10 +207,34 @@ class DocumentIngestPipeline:
         if record is None:
             raise LookupError(f"no document {doc_id!r} in project {project_id!r}")
 
+        requested = (chunking_strategy, chunk_size, chunk_overlap) != (None, None, None)
+        chunker = (
+            DocumentChunker(
+                strategy=chunking_strategy,
+                chunk_size=chunk_size,
+                chunk_overlap=chunk_overlap,
+            )
+            if requested
+            else self._chunker
+        )
         data = await self._blobs.read(doc_id=doc_id)
         extractor = select_extractor(record.mimetype)
+        rebuilt = record.model_copy(
+            update={
+                "status": IngestStatus.RECEIVED,
+                "updated_at": datetime.now(UTC),
+                **_settings_of(chunker),
+            }
+        )
 
-        return await self._index(record, extractor, data, keep_original=False)
+        return await self._index(
+            rebuilt,
+            extractor,
+            data,
+            keep_original=False,
+            embedding_model=embedding_model,
+            chunker=chunker,
+        )
 
     async def _index(
         self,

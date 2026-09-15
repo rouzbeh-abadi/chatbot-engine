@@ -33,18 +33,30 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     error        TEXT,
     created_at   TIMESTAMPTZ,
     updated_at   TIMESTAMPTZ,
+    chunking_strategy TEXT,
+    chunk_size        INTEGER,
+    chunk_overlap     INTEGER,
     PRIMARY KEY (project_id, doc_id)
 )
 """
 
 _COLUMNS = (
     "project_id, doc_id, external_id, filename, mimetype, size_bytes, "
-    "content_hash, status, chunk_count, error, created_at, updated_at"
+    "content_hash, status, chunk_count, error, created_at, updated_at, "
+    "chunking_strategy, chunk_size, chunk_overlap"
+)
+
+#: Columns added after the table first shipped, added in place on start so an
+#: existing registry keeps its rows. Their values are null for older documents.
+_ADDED = (
+    ("chunking_strategy", "TEXT"),
+    ("chunk_size", "INTEGER"),
+    ("chunk_overlap", "INTEGER"),
 )
 
 _UPSERT = f"""
 INSERT INTO {TABLE} ({_COLUMNS})
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (project_id, doc_id) DO UPDATE SET
     external_id = EXCLUDED.external_id,
     filename = EXCLUDED.filename,
@@ -55,7 +67,10 @@ ON CONFLICT (project_id, doc_id) DO UPDATE SET
     chunk_count = EXCLUDED.chunk_count,
     error = EXCLUDED.error,
     created_at = EXCLUDED.created_at,
-    updated_at = EXCLUDED.updated_at
+    updated_at = EXCLUDED.updated_at,
+    chunking_strategy = EXCLUDED.chunking_strategy,
+    chunk_size = EXCLUDED.chunk_size,
+    chunk_overlap = EXCLUDED.chunk_overlap
 """
 
 
@@ -73,6 +88,9 @@ def _to_row(record: DocumentRecord) -> tuple[object, ...]:
         record.error,
         record.created_at,
         record.updated_at,
+        record.chunking_strategy,
+        record.chunk_size,
+        record.chunk_overlap,
     )
 
 
@@ -80,6 +98,7 @@ def _to_record(row: tuple) -> DocumentRecord:
     (
         project_id, doc_id, external_id, filename, mimetype, size_bytes,
         content_hash, status, chunk_count, error, created_at, updated_at,
+        chunking_strategy, chunk_size, chunk_overlap,
     ) = row  # fmt: skip
     return DocumentRecord(
         project_id=project_id,
@@ -94,6 +113,9 @@ def _to_record(row: tuple) -> DocumentRecord:
         error=error,
         created_at=_aware(created_at),
         updated_at=_aware(updated_at),
+        chunking_strategy=chunking_strategy,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
     )
 
 
@@ -121,6 +143,10 @@ class PostgresDocumentRegistry(DocumentRegistry):
         if not self._ready:
             async with connection.cursor() as cursor:
                 await cursor.execute(_SCHEMA)
+                for name, kind in _ADDED:
+                    await cursor.execute(
+                        f"ALTER TABLE {TABLE} ADD COLUMN IF NOT EXISTS {name} {kind}"
+                    )
             await connection.commit()
             self._ready = True
         return connection

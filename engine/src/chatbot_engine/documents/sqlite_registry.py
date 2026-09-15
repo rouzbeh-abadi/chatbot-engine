@@ -34,13 +34,25 @@ CREATE TABLE IF NOT EXISTS documents (
     error        TEXT,
     created_at   TEXT,
     updated_at   TEXT,
+    chunking_strategy TEXT,
+    chunk_size        INTEGER,
+    chunk_overlap     INTEGER,
     PRIMARY KEY (project_id, doc_id)
 );
 """
 
 _COLUMNS = (
     "project_id, doc_id, external_id, filename, mimetype, size_bytes, "
-    "content_hash, status, chunk_count, error, created_at, updated_at"
+    "content_hash, status, chunk_count, error, created_at, updated_at, "
+    "chunking_strategy, chunk_size, chunk_overlap"
+)
+
+#: Columns added after the table first shipped, added in place on start so an
+#: existing registry keeps its rows. Their values are null for older documents.
+_ADDED = (
+    ("chunking_strategy", "TEXT"),
+    ("chunk_size", "INTEGER"),
+    ("chunk_overlap", "INTEGER"),
 )
 
 
@@ -58,6 +70,9 @@ def _to_row(record: DocumentRecord) -> tuple[object, ...]:
         record.error,
         record.created_at.isoformat() if record.created_at else None,
         record.updated_at.isoformat() if record.updated_at else None,
+        record.chunking_strategy,
+        record.chunk_size,
+        record.chunk_overlap,
     )
 
 
@@ -79,6 +94,9 @@ def _to_record(row: sqlite3.Row) -> DocumentRecord:
         updated_at=(
             datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None
         ),
+        chunking_strategy=row["chunking_strategy"],
+        chunk_size=row["chunk_size"],
+        chunk_overlap=row["chunk_overlap"],
     )
 
 
@@ -91,6 +109,15 @@ class SqliteDocumentRegistry(DocumentRegistry):
 
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            present = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(documents)")
+            }
+            for name, kind in _ADDED:
+                if name not in present:
+                    connection.execute(
+                        f"ALTER TABLE documents ADD COLUMN {name} {kind}"
+                    )
 
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._path)
@@ -103,7 +130,7 @@ class SqliteDocumentRegistry(DocumentRegistry):
 
         def write() -> None:
             with self._connect() as connection:
-                placeholders = ", ".join("?" * 12)
+                placeholders = ", ".join("?" * 15)
                 connection.execute(
                     f"INSERT OR REPLACE INTO documents ({_COLUMNS}) "
                     f"VALUES ({placeholders})",

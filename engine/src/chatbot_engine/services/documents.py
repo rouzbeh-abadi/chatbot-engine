@@ -58,6 +58,25 @@ class DocumentService:
             chunk_overlap=chunk_overlap,
         )
 
+    async def reindex(
+        self,
+        *,
+        project_id: str,
+        doc_id: str,
+        embedding_model: str | None = None,
+        chunking_strategy: ChunkStrategy | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+    ) -> DocumentRecord:
+        return await self._pipeline.reindex(
+            project_id=project_id,
+            doc_id=doc_id,
+            embedding_model=embedding_model,
+            chunking_strategy=chunking_strategy,
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+        )
+
     async def list(self, *, project_id: str) -> Sequence[DocumentRecord]:
         return await self._registry.list(project_id=project_id)
 

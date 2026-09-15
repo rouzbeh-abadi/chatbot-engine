@@ -124,3 +124,77 @@ async def test_a_changed_document_keeps_its_original_created_at() -> None:
     assert second.updated_at is not None
     assert first.updated_at is not None
     assert second.updated_at >= first.updated_at
+
+
+# --- chunking is part of what "unchanged" means -------------------------------
+
+
+async def test_the_record_says_how_the_document_was_cut() -> None:
+    """After defaults, so a caller can compare with its own settings."""
+    pipeline, _, _ = _pipeline()
+
+    record = await _ingest(pipeline)
+
+    assert (record.chunking_strategy, record.chunk_size, record.chunk_overlap) == (
+        "size",
+        80,
+        10,
+    )
+
+
+async def test_identical_bytes_with_new_chunking_are_cut_again() -> None:
+    """Same file, new settings: skipping it would keep the old boundaries."""
+    pipeline, _, _ = _pipeline()
+    await _ingest(pipeline)
+
+    again = await pipeline.ingest(
+        project_id="support",
+        external_id="policies/baggage.md",
+        filename="baggage.md",
+        mimetype="text/markdown",
+        data=TEXT,
+        chunk_size=200,
+        chunk_overlap=20,
+    )
+
+    assert again.status != "unchanged"
+    assert (again.chunk_size, again.chunk_overlap) == (200, 20)
+
+
+async def test_a_record_from_before_chunking_was_recorded_stays_current() -> None:
+    """An engine upgrade alone must not re-embed a knowledge base."""
+    pipeline, chunker, registry = _pipeline()
+    stored = await _ingest(pipeline)
+    await registry.upsert(
+        stored.model_copy(
+            update={
+                "chunking_strategy": None,
+                "chunk_size": None,
+                "chunk_overlap": None,
+            }
+        )
+    )
+    chunker.produced = []
+
+    second = await _ingest(pipeline)
+
+    assert second.status == "unchanged"
+    assert chunker.produced == []
+
+
+async def test_an_overlap_as_long_as_the_chunk_is_refused() -> None:
+    import pytest
+
+    from chatbot_engine.rag.splitter import ChunkingError
+
+    pipeline, _, _ = _pipeline()
+    with pytest.raises(ChunkingError, match="chunk_overlap"):
+        await pipeline.ingest(
+            project_id="support",
+            external_id="policies/baggage.md",
+            filename="baggage.md",
+            mimetype="text/markdown",
+            data=TEXT,
+            chunk_size=300,
+            chunk_overlap=300,
+        )

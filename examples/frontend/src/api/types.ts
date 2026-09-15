@@ -98,6 +98,10 @@ export interface DocumentRecord {
   chunk_count: number;
   error?: string | null;
   updated_at?: string | null;
+  /** How the document was cut when last indexed; null before engine 0.1.10. */
+  chunking_strategy?: "size" | "headings" | "page" | null;
+  chunk_size?: number | null;
+  chunk_overlap?: number | null;
 }
 
 /** A tool call as the UI tracks it: started, then possibly finished. */

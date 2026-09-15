@@ -90,3 +90,58 @@ def test_documents_still_listed_after_the_engine_restarts(
 
     assert [record["doc_id"] for record in listed] == [uploaded["doc_id"]]
     assert count_chunks() == uploaded["chunk_count"]
+
+
+async def test_chunking_settings_survive_a_restart(tmp_path: Path) -> None:
+    path = tmp_path / "documents.sqlite3"
+    await SqliteDocumentRegistry(path).upsert(
+        _record(chunking_strategy="page", chunk_size=1200, chunk_overlap=100)
+    )
+
+    restored = await SqliteDocumentRegistry(path).get(
+        project_id="support", doc_id="doc-1"
+    )
+
+    assert restored is not None
+    assert (
+        restored.chunking_strategy,
+        restored.chunk_size,
+        restored.chunk_overlap,
+    ) == ("page", 1200, 100)
+
+
+async def test_a_registry_from_before_chunking_columns_is_upgraded_in_place(
+    tmp_path: Path,
+) -> None:
+    """An existing file keeps its rows; the new columns arrive empty."""
+    import sqlite3
+
+    path = tmp_path / "documents.sqlite3"
+    with sqlite3.connect(path) as old:
+        old.executescript(
+            """
+            CREATE TABLE documents (
+                project_id TEXT NOT NULL, doc_id TEXT NOT NULL, external_id TEXT NOT NULL,
+                filename TEXT NOT NULL, mimetype TEXT NOT NULL, size_bytes INTEGER NOT NULL,
+                content_hash TEXT NOT NULL, status TEXT NOT NULL, chunk_count INTEGER NOT NULL DEFAULT 0,
+                error TEXT, created_at TEXT, updated_at TEXT, PRIMARY KEY (project_id, doc_id)
+            );
+            INSERT INTO documents VALUES ('support', 'doc-1', 'baggage.md', 'baggage.md', 'text/markdown', 42, 'abc123', 'indexed', 3, NULL, NULL, NULL);
+            """
+        )
+
+    registry = SqliteDocumentRegistry(path)
+    kept = await registry.get(project_id="support", doc_id="doc-1")
+
+    assert kept is not None and kept.chunk_count == 3
+    assert kept.chunking_strategy is None
+    await registry.upsert(
+        kept.model_copy(
+            update={
+                "chunking_strategy": "size",
+                "chunk_size": 1000,
+                "chunk_overlap": 200,
+            }
+        )
+    )
+    assert (await registry.get(project_id="support", doc_id="doc-1")).chunk_size == 1000

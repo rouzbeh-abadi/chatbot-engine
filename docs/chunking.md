@@ -77,20 +77,45 @@ An unknown strategy is rejected with `422`, and nothing is stored. It is not
 quietly reinterpreted as `size`: a document indexed differently than requested
 fails silently at upload and only shows up later as poor retrieval.
 
+## What a document remembers
+
+Every document record carries the settings it was indexed with,
+`chunking_strategy`, `chunk_size` and `chunk_overlap`, after the engine's
+defaults filled in what the caller left out. `GET /documents` returns them, so
+a caller can compare each document with its current settings and list the
+ones that are out of date.
+
+Re-uploading identical bytes answers `unchanged` and does no work only when
+the settings match too. The same file sent with a different size or strategy
+is cut again. A document indexed by an engine before 0.1.10 has no recorded
+settings; it counts as current unless the upload names chunking explicitly,
+so upgrading the engine never re-embeds a knowledge base by itself.
+
 ## Changing the strategy means re-indexing
 
 Chunking is applied when a document is ingested, so changing any of these
 settings has no effect on documents already indexed. The existing vectors keep
 whatever boundaries they were built with.
 
-Re-index to apply a change:
+Re-index a document from the original the engine kept, without uploading it
+again:
 
 ```bash
-make seed          # re-ingest the example knowledge base
+curl -X POST "localhost:8100/documents/$DOC_ID/reindex?project_id=support" \
+  -H 'content-type: application/json' \
+  -d '{"chunking_strategy": "headings", "chunk_size": 800, "chunk_overlap": 100}'
 ```
 
-The originals are kept in the blob store, so this is a rebuild rather than a
-re-upload from the source system.
+Settings work as on upload. An empty body rebuilds with the engine's current
+defaults, after a change to `ENGINE_CHUNK_SIZE` for example, and a field left
+out takes the engine's default. The response is the rebuilt record. `404`
+means no such document, `501` means the engine keeps no originals, and `422`
+means settings that cannot work together: `chunk_size` runs from 100 to 8000
+characters, `chunk_overlap` from 0 to 2000 and must be smaller than the size.
+Both routes answer `422` for those, and nothing is stored.
+
+To rebuild the example knowledge base from source instead, `make seed`
+re-ingests it.
 
 ## Choosing one
 

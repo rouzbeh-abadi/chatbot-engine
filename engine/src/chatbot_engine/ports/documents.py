@@ -40,6 +40,17 @@ class IngestPipeline(Protocol):
         chunk_overlap: int | None = None,
     ) -> DocumentRecord: ...
 
+    async def reindex(
+        self,
+        *,
+        project_id: str,
+        doc_id: str,
+        embedding_model: str | None = None,
+        chunking_strategy: ChunkStrategy | None = None,
+        chunk_size: int | None = None,
+        chunk_overlap: int | None = None,
+    ) -> DocumentRecord: ...
+
 
 class BlobStore(Protocol):
     """Where original uploads live. `uri_for` is what lets a document be read

@@ -37,6 +37,12 @@ from chatbot_engine.settings import get_settings
 #: The same values at runtime, to check a string that came off the wire.
 CHUNK_STRATEGIES: frozenset[str] = frozenset(("size", "headings", "page"))
 
+
+class ChunkingError(ValueError):
+    """Chunking settings that cannot work together, such as an overlap as
+    long as the chunk. The caller's mistake: the routes answer 422."""
+
+
 #: The heading levels `headings` splits on. Deeper levels stay inside the
 #: section: splitting on every `####` would produce chunks of a sentence or two.
 _HEADERS = [("#", "h1"), ("##", "h2"), ("###", "h3")]
@@ -62,17 +68,34 @@ class DocumentChunker:
                 f"unknown chunking strategy {self._strategy!r}; "
                 f"expected one of {sorted(CHUNK_STRATEGIES)}"
             )
+        self._size = chunk_size if chunk_size is not None else settings.chunk_size
+        self._overlap = (
+            chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
+        )
+        if self._overlap >= self._size:
+            raise ChunkingError(
+                f"chunk_overlap ({self._overlap}) must be smaller than "
+                f"chunk_size ({self._size})"
+            )
         self._splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size if chunk_size is not None else settings.chunk_size,
-            chunk_overlap=(
-                chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
-            ),
+            chunk_size=self._size,
+            chunk_overlap=self._overlap,
             add_start_index=True,
         )
 
     @property
     def strategy(self) -> ChunkStrategy:
         return self._strategy
+
+    @property
+    def size(self) -> int:
+        """The size cap in characters, after defaults."""
+        return self._size
+
+    @property
+    def overlap(self) -> int:
+        """The overlap between neighbouring chunks in characters, after defaults."""
+        return self._overlap
 
     def chunk(
         self,

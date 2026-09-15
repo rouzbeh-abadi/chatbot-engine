@@ -260,6 +260,10 @@ class DocumentRecord(BaseModel):
     error: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
+    #: How the document was cut when last indexed; null before engine 0.1.10.
+    chunking_strategy: Literal["size", "headings", "page"] | None = None
+    chunk_size: int | None = None
+    chunk_overlap: int | None = None
 
 
 class DeleteResult(BaseModel):
