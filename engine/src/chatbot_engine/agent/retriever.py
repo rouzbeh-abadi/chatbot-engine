@@ -6,6 +6,7 @@ Retrieval is a pipeline with two configurable stages:
       -> for each query: vector search, and keyword search when `hybrid`
       -> fuse the rankings (reciprocal rank fusion)
       -> merge across queries, best score per chunk
+      -> drop chunks below `min_score`, and everything when nothing clears it
       -> rerank with the model, when enabled
       -> keep the top `top_k`
 
@@ -156,12 +157,23 @@ async def retrieve_with_usage(
     # Across queries, a chunk keeps its best score. Keyed by content: the same
     # chunk can come back from both searches and from several queries.
     best: dict[str, Hit] = {}
+    # The best vector similarity each chunk reached, for `min_score`. Fused
+    # scores are relative to the result set (the top one is always 1.0), so
+    # only the similarity says whether anything is actually close.
+    similarity: dict[str, float] = {}
+    # Each query's best keyword match, which `min_score` keeps regardless.
+    matched: set[str] = set()
     for query in queries:
         dense = await _dense(store, project.project_id, query, candidates)
+        for document, score in dense:
+            key = document.page_content
+            similarity[key] = max(score, similarity.get(key, 0.0))
         if mode == "hybrid":
             keyword = sparse.sparse_index(store, project.project_id).search(
                 query, candidates
             )
+            if keyword:
+                matched.add(keyword[0][0].page_content)
             fused = _fuse(dense, keyword)
         else:
             fused = _normalise(dense)
@@ -171,10 +183,13 @@ async def retrieve_with_usage(
             if key not in best or score > best[key][1]:
                 best[key] = (document, score)
 
+    if project.min_score is not None:
+        best = _above(best, similarity, matched, project.min_score)
+
     ranked = sorted(best.values(), key=lambda hit: hit[1], reverse=True)
     ranked = ranked[: max(candidates, project.top_k)]
 
-    if do_rerank:
+    if do_rerank and ranked:
         # The reranker orders; the fused score stays as the evidence for each
         # chunk, so a citation's confidence is not an artefact of its position.
         by_content = {document.page_content: score for document, score in ranked}
@@ -184,6 +199,31 @@ async def retrieve_with_usage(
         ranked = [(document, by_content[document.page_content]) for document in ordered]
 
     return ranked[: project.top_k], totals
+
+
+def _above(
+    best: dict[str, Hit],
+    similarity: dict[str, float],
+    matched: set[str],
+    min_score: float,
+) -> dict[str, Hit]:
+    """The chunks close enough to the question to be worth the model's context.
+
+    Nothing, when no chunk's vector similarity reaches `min_score`: the message
+    is not about the knowledge base, and a keyword hit on a common word ("my
+    name is ...") is no reason to send chunks. Otherwise every chunk that
+    reaches it, plus each query's best keyword match, since exact terms the
+    embedding blurs are what hybrid retrieval is for. Only the best: nearly
+    every chunk shares some word with a question ("is", "the"), so keeping all
+    keyword matches would keep nearly everything.
+    """
+    if not any(score >= min_score for score in similarity.values()):
+        return {}
+    return {
+        key: hit
+        for key, hit in best.items()
+        if key in matched or similarity.get(key, 0.0) >= min_score
+    }
 
 
 async def _dense(

@@ -46,7 +46,13 @@ def _seed(client: TestClient) -> None:
 
 def _request(**config: object) -> ChatRequest:
     project = AssistantConfig(
-        project_id="support", name="S", system_prompt="s", top_k=2, **config
+        **{
+            "project_id": "support",
+            "name": "S",
+            "system_prompt": "s",
+            "top_k": 2,
+            **config,
+        }
     )
     return ChatRequest(project=project, message="is the Basic fare refundable?")
 
@@ -385,3 +391,73 @@ def test_an_unbounded_message_is_refused_by_the_engine(
     response = client.post("/chat", json={"project": project, "message": "x" * 32_001})
 
     assert response.status_code == 422
+
+
+# --- the minimum score --------------------------------------------------------
+
+
+def _scored(**similarities: float):
+    """A `_dense` that gives each seeded chunk the similarity named for its file."""
+
+    async def dense(store, project_id, query, k):
+        found = await original(store, project_id, query, k)
+        return sorted(
+            (
+                (document, similarities.get(document.metadata["source"], 0.1))
+                for document, _ in found
+            ),
+            key=lambda hit: hit[1],
+            reverse=True,
+        )
+
+    original = retriever._dense
+    return patch.object(retriever, "_dense", dense)
+
+
+async def test_nothing_reaches_the_model_when_no_chunk_is_close(
+    client: TestClient,
+) -> None:
+    """Small talk: even a keyword hit is dropped when no vector is near."""
+    _seed(client)
+
+    with (
+        _scored(),
+        patch.object(
+            rerank_module, "rerank", side_effect=AssertionError("reranked nothing")
+        ),
+    ):
+        hits = await retrieve(_request(retrieval="hybrid", min_score=0.4, rerank=True))
+
+    assert hits == []
+
+
+async def test_only_chunks_that_clear_the_bar_are_kept(client: TestClient) -> None:
+    _seed(client)
+
+    with _scored(**{"baggage.md": 0.7, "checkin.md": 0.35}):
+        hits = await retrieve(_request(retrieval="vector", min_score=0.4, top_k=4))
+
+    assert _sources(hits) == ["baggage.md"]
+
+
+async def test_with_hybrid_a_keyword_hit_joins_a_question_that_is_on_topic(
+    client: TestClient,
+) -> None:
+    """ "Basic fare" is matched by keyword alone, and kept once something is close."""
+    _seed(client)
+
+    with _scored(**{"baggage.md": 0.7, "fares.md": 0.2}):
+        hits = await retrieve(_request(retrieval="hybrid", min_score=0.4, top_k=4))
+
+    assert set(_sources(hits)) == {"baggage.md", "fares.md"}
+
+
+async def test_without_a_minimum_every_chunk_is_kept_as_before(
+    client: TestClient,
+) -> None:
+    _seed(client)
+
+    with _scored():
+        hits = await retrieve(_request(retrieval="vector", top_k=4))
+
+    assert len(hits) == 4

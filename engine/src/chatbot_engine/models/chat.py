@@ -135,6 +135,15 @@ class AssistantConfig(BaseModel):
     #: How many candidates each search returns before fusion and reranking.
     #: More improves recall at the cost of a longer rerank prompt.
     retrieval_candidates: int | None = Field(default=None, ge=1, le=200)
+    #: The least vector similarity (0 to 1, about the cosine of the two
+    #: embeddings) a chunk needs to reach the model. A message nothing in the
+    #: knowledge base is close to ("hi", "thanks") then gets no chunks at all,
+    #: so the answer's prompt carries no context and no rerank call is made.
+    #: With `hybrid`, the best keyword match is kept alongside, but only when
+    #: at least one chunk clears the bar. What a good value is
+    #: depends on the embedding model; around 0.4 suits
+    #: text-embedding-3-small. None keeps every chunk, as before.
+    min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     #: This assistant's own trace destination. Unset, the engine's
     #: `ENGINE_TRACING` setting applies.

@@ -10,6 +10,7 @@ question
   -> per query: vector search, and keyword search under `hybrid`
   -> rankings fused (reciprocal rank fusion)
   -> merged across queries, best score per chunk
+  -> dropped below `min_score`, when set
   -> reranked by the model, when `rerank` is on
   -> the top `top_k` reach the model
 ```
@@ -65,6 +66,35 @@ A rerank can degrade but cannot lose a turn or a candidate: a reply that is
 not a ranking, or a failed call, keeps the fused order, with a warning in the
 log.
 
+## A minimum score
+
+Every turn searches, and without a bar the top `top_k` chunks reach the model
+however far they are from the message. For "hi" or "thanks" that is a few
+thousand characters of unrelated context in the answer's prompt, a rerank
+call when reranking is on, and sources shown for small talk.
+
+`min_score` sets that bar on vector similarity, which is close to the cosine
+of the two embeddings. The fused score cannot serve: it is relative to the
+result set, so its best chunk is always 1.0.
+
+- When no chunk reaches `min_score`, nothing is retrieved: no context, no
+  rerank call, no sources. The model answers from the conversation alone.
+- Otherwise the chunks that reach it are kept, and under `hybrid` so is each
+  query's best keyword match, since an exact term the embedding blurs is what
+  hybrid retrieval is for. Only the best match: nearly every chunk shares a
+  common word with a question.
+
+The rewrite still runs on a turn with history, since the rewritten query is
+what is compared.
+
+A good value depends on the embedding model. Measured with
+`openai/text-embedding-3-small` on a product help centre: small talk ("hi",
+"thanks", "tell me a joke") scored 0.22 to 0.31 at best; product questions
+scored 0.56 to 0.68. About 0.4 separates the two. A message that names
+something the documents mention (a person, a product) will clear it, as it
+should. Unset, every chunk is kept, as before. Check a new value with
+`POST /eval/rag`, since a bar set too high shows up as lost context recall.
+
 ## Configuration
 
 Per assistant, in the project configuration:
@@ -74,6 +104,7 @@ top_k: 5                   # chunks that reach the model
 retrieval: hybrid          # vector | hybrid
 rerank: false              # one extra model call per turn when true
 retrieval_candidates: 20   # per search, before fusion and reranking
+min_score: 0.4             # least vector similarity; unset keeps every chunk
 ```
 
 Omitted fields fall back to the engine's `ENGINE_RETRIEVAL`, `ENGINE_RERANK`

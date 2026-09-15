@@ -97,6 +97,9 @@ class AssistantConfig(BaseModel):
     retrieval: Literal["vector", "hybrid"] | None = None
     rerank: bool | None = None
     retrieval_candidates: int | None = Field(default=None, ge=1, le=200)
+    #: The least vector similarity a chunk needs to reach the model; none when
+    #: nothing clears it. Unset keeps every chunk.
+    min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
     #: This assistant's own trace destination. Unset, the engine's setting applies.
