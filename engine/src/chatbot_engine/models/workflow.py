@@ -62,6 +62,10 @@ class ToolNode(_Node):
     #: Values are templates: `{{message}}`, `{{user_id}}`, `{{vars.<name>}}`.
     arguments: dict[str, str] = Field(default_factory=dict, max_length=20)
     var: str = Field(max_length=40, pattern=r"^[a-z][a-z0-9_]*$")
+    #: When the call fails or the tool is unavailable: `stop` tells the visitor
+    #: the assistant's `unavailable_message` and ends the turn; `continue` goes
+    #: on with the variable empty, for a workflow that handles that itself.
+    on_error: Literal["stop", "continue"] = "stop"
 
 
 class ReplyNode(_Node):

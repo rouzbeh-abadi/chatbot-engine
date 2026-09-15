@@ -43,6 +43,8 @@ from chatbot_engine.agent.client import (
     run_tool_calls,
     stream_reply,
     transcript,
+    unavailable_message,
+    unavailable_note,
     usage_event,
     usage_of,
 )
@@ -52,7 +54,6 @@ from chatbot_engine.agent.retriever import (
     to_source_refs,
     utility_config,
 )
-from chatbot_engine.errors import EngineError
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import (
     AskOption,
@@ -63,6 +64,7 @@ from chatbot_engine.models.events import (
     RetrievalEvent,
     TokenEvent,
     ToolCallFinishedEvent,
+    ToolCallStartedEvent,
 )
 from chatbot_engine.models.workflow import (
     AskNode,
@@ -107,6 +109,8 @@ class _State(TypedDict, total=False):
     model_name: str
     #: Set by a condition node; read by its routing function.
     route: str
+    #: Set by a tool step that failed with `on_error: stop`: the turn ends there.
+    halted: bool
     #: The message that started the turn. A resumed request carries the
     #: answer as its message, so `{{message}}` reads this instead.
     message: str
@@ -343,10 +347,11 @@ class WorkflowAgent:
             arguments: dict[str, str],
             call_id: str,
             server_for: dict[str, str],
-        ) -> tuple[str, ToolMessage]:
+        ) -> tuple[bool, str, ToolMessage]:
             """One tool call through the engine's runner: the same started and
             finished events, timing and failure handling as the model's own
-            calls. Returns the result text (empty on failure) and the message."""
+            calls. Returns whether it worked, the result text (empty on failure)
+            and the message."""
             ok, message = False, ToolMessage(content="", tool_call_id=call_id)
             async for item in run_tool_calls(
                 [{"name": tool, "args": arguments, "id": call_id}],
@@ -360,7 +365,7 @@ class WorkflowAgent:
                     if isinstance(item, ToolCallFinishedEvent):
                         ok = item.ok
                     await events.put(item)
-            return (str(message.content) if ok else ""), message
+            return ok, (str(message.content) if ok else ""), message
 
         async def retrieve(_: _State) -> _State:
             hits, spent = await retrieve_with_usage(request)
@@ -375,10 +380,13 @@ class WorkflowAgent:
                 server_for = {t["name"]: t["server"] for t in tools}
                 model = build_chat_model(project)
                 bound = model.bind_tools(tools) if tools else model
+                # Tools this step may use that could not be reached: the model
+                # is told, so it says it cannot help with that now.
+                note = unavailable_note(project, tools) if node.tools else ""
                 messages = prompt_messages(
                     request,
                     state.get("context", ""),
-                    extra_system=node.prompt,
+                    extra_system="\n\n".join(p for p in (node.prompt, note) if p),
                     prior=state.get("messages", [])[state.get("since", 0) :],
                 )
                 new: list[BaseMessage] = []
@@ -489,10 +497,6 @@ class WorkflowAgent:
                 server = next(
                     (t["server"] for t in tools if t["name"] == node.tool), None
                 )
-                if server is None:
-                    raise EngineError(
-                        f"workflow node {node.id!r} names a tool the assistant does not allow: {node.tool!r}"
-                    )
                 # An argument that renders empty (a skipped question, say) is
                 # left out, so the tool sees it as not given.
                 arguments = {
@@ -501,15 +505,50 @@ class WorkflowAgent:
                     if (rendered := render(v, state)) != ""
                 }
                 call_id = f"wf-{node.id}"
-                result, message = await call_one(
-                    node.tool, arguments, call_id, {node.tool: server}
-                )
+                if server is None:
+                    # Not offered right now: its server is down, no longer has
+                    # it, or does not allow it. Reported like a failed call, so
+                    # the log shows it, and handled like one.
+                    await events.put(
+                        ToolCallStartedEvent(
+                            call_id=call_id, tool=node.tool, arguments=dict(arguments)
+                        )
+                    )
+                    await events.put(
+                        ToolCallFinishedEvent(
+                            call_id=call_id,
+                            tool=node.tool,
+                            ok=False,
+                            duration_ms=0,
+                            error="tool unavailable: its server could not be reached, does not offer it, or does not allow it",
+                        )
+                    )
+                    ok, result = False, ""
+                    message = ToolMessage(
+                        content=f"Tool {node.tool!r} is unavailable right now.",
+                        tool_call_id=call_id,
+                    )
+                else:
+                    ok, result, message = await call_one(
+                        node.tool, arguments, call_id, {node.tool: server}
+                    )
                 # The call as well as its result, so a model step later in the
                 # turn reads a tool result that answers a call, as providers require.
                 call = AIMessage(
                     content="",
                     tool_calls=[{"name": node.tool, "args": arguments, "id": call_id}],
                 )
+                if not ok and node.on_error == "stop":
+                    # The visitor hears that this cannot be done now, and the
+                    # steps that assumed the call worked do not run.
+                    text = unavailable_message(project)
+                    await events.put(TokenEvent(text=text))
+                    return {
+                        "vars": {node.var: ""},
+                        "messages": [call, message, AIMessageChunk(content=text)],
+                        "halted": True,
+                        "finish_reason": "stop",
+                    }
                 return {"vars": {node.var: result}, "messages": [call, message]}
 
             return step
@@ -642,6 +681,13 @@ class WorkflowAgent:
             if isinstance(node, ConditionNode):
                 routes: dict[Hashable, str] = dict(node.branches.items())
                 graph.add_conditional_edges(node.id, lambda s: s["route"], routes)
+            elif isinstance(node, ToolNode) and node.on_error == "stop":
+                after = spec.next_of(node.id) or "__finish__"
+                graph.add_conditional_edges(
+                    node.id,
+                    lambda s, after=after: "__finish__" if s.get("halted") else after,
+                    {after: after, "__finish__": "__finish__"},
+                )
             else:
                 graph.add_edge(node.id, spec.next_of(node.id) or "__finish__")
         graph.add_edge("__finish__", END)

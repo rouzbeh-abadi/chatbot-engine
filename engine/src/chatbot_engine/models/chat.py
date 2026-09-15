@@ -145,6 +145,10 @@ class AssistantConfig(BaseModel):
     #: text-embedding-3-small. None keeps every chunk, as before.
     min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
+    #: What the visitor is told when a tool the turn needs is unavailable or
+    #: fails: a workflow's tool step says it and ends the turn, and a model is
+    #: told to say it. None uses the engine's default sentence.
+    unavailable_message: str | None = Field(default=None, min_length=1, max_length=500)
     #: This assistant's own trace destination. Unset, the engine's
     #: `ENGINE_TRACING` setting applies.
     tracing: TracingConfig | None = None

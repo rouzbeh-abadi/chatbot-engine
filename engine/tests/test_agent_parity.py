@@ -24,7 +24,8 @@ from langchain_core.messages import AIMessageChunk
 from langchain_core.outputs import ChatGenerationChunk
 
 from chatbot_engine.agent.chat_agent import ChatAgent
-from chatbot_engine.models.chat import AssistantConfig, ChatRequest
+from chatbot_engine.agent.client import DEFAULT_UNAVAILABLE_MESSAGE
+from chatbot_engine.models.chat import AssistantConfig, ChatRequest, McpServerConfig
 from chatbot_engine.models.events import (
     DoneEvent,
     TokenEvent,
@@ -292,6 +293,45 @@ async def test_a_failing_tool_does_not_end_the_turn(which: str) -> None:
     finished = next(e for e in events if isinstance(e, ToolCallFinishedEvent))
     assert finished.ok is False
     assert isinstance(events[-1], DoneEvent)
+
+
+@pytest.mark.parametrize("which", AGENTS)
+async def test_an_unavailable_tool_is_named_in_the_prompt_and_its_failure_says_what_to_tell(
+    which: str,
+) -> None:
+    """A tool server that is down does not fail the turn. The model is told which
+    tools are unavailable, and a call that cannot reach its tool comes back
+    telling the model what to say, not a stack trace."""
+
+    class HalfDown(FakeTools):
+        async def list_tools(self, config):
+            raise ConnectionError("All connection attempts failed")
+
+    model = ScriptedModel(rounds=[[AIMessageChunk(content="Sorry.")]], seen=[])
+    request = _request()
+    request.project.mcp_servers = [
+        McpServerConfig(name="s", url="http://s", allowed_tools=["get_booking_status"])
+    ]
+    events = await _run(which, [], HalfDown(), model=model, request=request)
+
+    assert isinstance(events[-1], DoneEvent) and events[-1].finish_reason == "stop"
+    system = str(model.seen[0][0].content)
+    assert "unavailable right now: get_booking_status" in system
+    assert DEFAULT_UNAVAILABLE_MESSAGE in system
+
+
+def test_a_failed_call_reads_differently_when_the_product_refused() -> None:
+    from chatbot_engine.agent.client import failed_tool_text
+    from chatbot_engine.ports.agent import ToolError
+
+    project = _request().project
+    refused = failed_tool_text(
+        "create_project", ToolError("plan limit reached"), project
+    )
+    down = failed_tool_text("create_project", ConnectionError("refused"), project)
+    assert refused == "Tool 'create_project' failed: plan limit reached"
+    assert "unavailable right now" in down and DEFAULT_UNAVAILABLE_MESSAGE in down
+    assert "refused" not in down, "connection details stay out of the model's context"
 
 
 # --- the two against each other ------------------------------------------------

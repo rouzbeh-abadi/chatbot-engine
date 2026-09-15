@@ -81,6 +81,43 @@ async def test_discovery_drops_tools_outside_the_allowlist() -> None:
     assert [tool["name"] for tool in tools] == ["get_booking_status"]
 
 
+async def test_a_server_that_is_down_is_left_out_and_the_others_still_serve() -> None:
+    """One product's server failing must not take the whole assistant down."""
+    config = CONFIG.model_copy(
+        update={
+            "mcp_servers": [
+                McpServerConfig(
+                    name="down", url="http://down/mcp", allowed_tools=["book"]
+                ),
+                McpServerConfig(
+                    name="up", url="http://up/mcp", allowed_tools=["get_booking_status"]
+                ),
+            ]
+        }
+    )
+
+    class Session:
+        async def list_tools(self):
+            return SimpleNamespace(
+                tools=[
+                    SimpleNamespace(
+                        name="get_booking_status", description="", input_schema={}
+                    )
+                ]
+            )
+
+    @asynccontextmanager
+    async def session(target, **kwargs):
+        if target.name == "down":
+            raise ConnectionError("All connection attempts failed")
+        yield Session()
+
+    with patch.object(mcp_client, "_session", session):
+        tools = await McpToolProvider(timeout_s=1).list_tools(config)
+
+    assert [(t["server"], t["name"]) for t in tools] == [("up", "get_booking_status")]
+
+
 async def test_a_call_outside_the_allowlist_is_refused_before_any_network() -> None:
     """Checked again at call time, since by then the name came from the model."""
     with pytest.raises(McpToolNotAllowedError, match="delete_all_bookings"):

@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.14
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.15
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.14"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.15"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -161,7 +161,7 @@ request carries the whole assistant definition:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank`, `retrieval_candidates` and `min_score` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out; `provider_api_key` is the caller's own OpenRouter key, billed for every model call in the request instead of the engine's, and it satisfies the engine's key requirement on its own |
+| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank`, `retrieval_candidates` and `min_score` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out; `provider_api_key` is the caller's own OpenRouter key, billed for every model call in the request instead of the engine's, and it satisfies the engine's key requirement on its own; `unavailable_message` is what the visitor is told when a tool the turn needs is unavailable or fails (see Failures, below) |
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
@@ -521,9 +521,26 @@ number, which lets the model call `get_flight_status` in the same turn.
 
 ### Failures
 
-A tool that raises, or returns an MCP result flagged `isError`, does not end
-the turn. The engine reports it as a `tool_call_finished` with `ok: false` and
-feeds the error text back to the model, which can explain or try another way.
+A tool server that is down never ends the turn. A server that cannot be
+reached, or fails to list its tools, is left out (and logged), and the turn
+goes on with the tools the other servers offer. The model's system prompt then
+names the allowlisted tools that were not found, and tells it to say the
+assistant's `unavailable_message` when the visitor needs one of them, rather
+than guess.
+
+A tool call that fails does not end the turn either; it is reported as a
+`tool_call_finished` with `ok: false`. What the model reads depends on why:
+
+- **The tool refused** (an MCP result flagged `isError`): its own text, so the
+  model can explain the refusal ("plan limit reached") or try another way.
+- **The tool is unavailable** (a timeout, a connection failure, anything else
+  raised): no technical detail, only that the tool is unavailable, not to call
+  it again or invent a result, and the words to tell the visitor.
+
+`project.unavailable_message` sets those words; the default is "I can't
+handle this request right now. Please try again later. Is there anything else
+I can help you with?". A workflow's tool step uses the same words when it
+stops (see agents.md).
 
 ### Caller context
 

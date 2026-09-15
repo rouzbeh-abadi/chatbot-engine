@@ -101,6 +101,8 @@ class AssistantConfig(BaseModel):
     #: nothing clears it. Unset keeps every chunk.
     min_score: float | None = Field(default=None, ge=0.0, le=1.0)
     mcp_servers: list[McpServerConfig] = Field(default_factory=list)
+    # What the visitor is told when a tool the turn needs is unavailable or fails.
+    unavailable_message: str | None = Field(default=None, min_length=1, max_length=500)
     max_tool_iterations: int = Field(default=6, ge=1, le=50)
     #: This assistant's own trace destination. Unset, the engine's setting applies.
     tracing: TracingConfig | None = None

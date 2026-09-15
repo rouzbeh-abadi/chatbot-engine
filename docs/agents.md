@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.14
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.15
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -265,7 +265,7 @@ other agent, so the caller's UI needs nothing new.
 | `retrieve` | searches the knowledge base; later model steps see the passages |
 | `model` | calls the assistant's model with the prompt, the conversation and the retrieved passages, streams the reply as the answer, and runs the tools it asks for, up to `max_tool_iterations` rounds (`tools: false` disables them; running out ends the turn with `tool_limit`); the reply is capped by `max_output_tokens`; `prompt` appends instructions for this step; `var` stores the reply in a variable instead of speaking it |
 | `condition` | asks the utility model (`ENGINE_UTILITY_MODEL`, temperature 0) one question, expecting one of the branch labels, and follows that branch; the answer is matched exactly, then as a whole word, and the first label is the fallback |
-| `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the result text in `var` (empty when the call failed); reported as `tool_call_started` and `tool_call_finished` with the real duration |
+| `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the result text in `var`; reported as `tool_call_started` and `tool_call_finished` with the real duration. When the call fails or the tool is not offered right now (its server is down, or no longer has it), `on_error: "stop"` (the default) streams the assistant's `unavailable_message` and ends the turn, so steps that assume the call worked never run; `on_error: "continue"` goes on with `var` empty |
 | `reply` | streams a fixed, templated text as the answer |
 | `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with `reason` (templated, with a default) and the transcript through the same runner, so a ticket or an email can be raised and the call shows in the log |
 | `ask` | pauses the turn to ask the visitor one thing (`input`: `text`, `phone`, `email`, `url`, or `choice` with `options` or `options_from` a variable holding a JSON list), and continues with the answer in `var` (and a choice's label in `<var>_label`); `optional` allows skipping, which leaves both empty. See "Asking the visitor" below |

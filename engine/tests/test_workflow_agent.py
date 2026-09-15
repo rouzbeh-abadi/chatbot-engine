@@ -13,6 +13,7 @@ from test_agent_parity import (
     _rounds_with_a_tool_call,
 )
 
+from chatbot_engine.agent.client import DEFAULT_UNAVAILABLE_MESSAGE
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest, McpServerConfig
 from chatbot_engine.models.events import (
     DoneEvent,
@@ -85,8 +86,9 @@ async def test_a_cut_reply_ends_the_turn_with_length():
 
 async def test_a_tool_step_reports_timing_and_failure_like_a_model_call():
     """The Tool Call step goes through the engine's runner: a started and a
-    finished event with a real duration, and a failure that fills the variable
-    with nothing rather than ending the turn."""
+    finished event with a real duration. A failure ends the turn with the
+    unavailable message, or with `on_error: continue` fills the variable with
+    nothing and carries on."""
     spec = {
         "start": "lookup",
         "nodes": [
@@ -119,8 +121,51 @@ async def test_a_tool_step_reports_timing_and_failure_like_a_model_call():
     events = await _run(spec, ScriptedModel(rounds=[], seen=[]), tools=BrokenTools())
     finished = [e for e in events if isinstance(e, ToolCallFinishedEvent)]
     assert finished[0].ok is False and "tool server down" in (finished[0].error or "")
+    assert _text(events) == DEFAULT_UNAVAILABLE_MESSAGE, "the steps after it do not run"
+    assert isinstance(events[-1], DoneEvent) and events[-1].finish_reason == "stop"
+
+    carry_on = {
+        **spec,
+        "nodes": [{**spec["nodes"][0], "on_error": "continue"}, spec["nodes"][1]],
+    }
+    events = await _run(
+        carry_on, ScriptedModel(rounds=[], seen=[]), tools=BrokenTools()
+    )
     assert _text(events) == "Status: ", "a failed call leaves the variable empty"
     assert isinstance(events[-1], DoneEvent)
+
+
+async def test_a_tool_that_is_not_offered_says_so_instead_of_failing_the_turn():
+    """Its server is down, or no longer has it: the visitor hears the
+    assistant's own words for that, and the log shows the call as failed."""
+    spec = {
+        "start": "slots",
+        "nodes": [
+            {
+                "id": "slots",
+                "type": "tool",
+                "tool": "list_callback_slots",
+                "var": "slots",
+            },
+            {"id": "say", "type": "reply", "text": "Times: {{vars.slots}}"},
+        ],
+        "edges": [{"from": "slots", "to": "say"}],
+    }
+    request = _request(spec)
+    request.project.unavailable_message = (
+        "Not possible right now, sorry. What else can I do?"
+    )
+
+    events = await _run(spec, ScriptedModel(rounds=[], seen=[]), request=request)
+
+    finished = [e for e in events if isinstance(e, ToolCallFinishedEvent)]
+    assert (
+        finished
+        and finished[0].ok is False
+        and "unavailable" in (finished[0].error or "")
+    )
+    assert _text(events) == "Not possible right now, sorry. What else can I do?"
+    assert isinstance(events[-1], DoneEvent) and events[-1].finish_reason == "stop"
 
 
 async def test_a_model_step_that_runs_out_of_tool_rounds_ends_with_tool_limit():

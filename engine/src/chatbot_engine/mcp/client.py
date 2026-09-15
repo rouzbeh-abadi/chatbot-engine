@@ -11,6 +11,7 @@ The configuration side - which servers, which tools are allowed - lives in
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -24,9 +25,13 @@ from mcp.client.streamable_http import (
 )
 from mcp.types import TextContent
 
+from chatbot_engine.api.streaming import describe
 from chatbot_engine.mcp.config import McpTarget, resolve_targets
 from chatbot_engine.models.chat import AssistantConfig
 from chatbot_engine.observability import REQUEST_ID_HEADER, request_id
+from chatbot_engine.ports.agent import ToolError
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -103,7 +108,7 @@ class McpToolNotAllowedError(ValueError):
     """Raised when the requested MCP tool is not allowlisted."""
 
 
-class McpToolError(RuntimeError):
+class McpToolError(ToolError):
     """The tool ran and reported failure.
 
     MCP carries a tool's own error as a result flagged `isError`, not as a
@@ -152,8 +157,18 @@ class McpToolProvider:
             timeout_s=self._timeout_s,
         )
 
+        # A server that cannot be reached, or fails to list, is left out rather
+        # than failing the turn: the assistant carries on with the tools the
+        # other servers offer, and is told which are unavailable.
         for target in targets:
-            tools.extend(await self._tools_of(target))
+            try:
+                tools.extend(await self._tools_of(target))
+            except Exception as exc:
+                logger.warning(
+                    "MCP server %r unavailable, its tools are left out: %s",
+                    target.name,
+                    describe(exc),
+                )
 
         return tools
 

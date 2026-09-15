@@ -54,6 +54,15 @@ class Agent(Protocol):
         ...
 
 
+class ToolError(RuntimeError):
+    """The tool ran and reported failure: the product answered, with a refusal.
+
+    Distinct from any other exception out of `call_tool` (a server that cannot
+    be reached, a timeout, a tool that is not there), which means the tool is
+    unavailable. The two read differently to the model.
+    """
+
+
 class ToolProvider(Protocol):
     """Define discovery and invocation of external application-owned tools."""
 

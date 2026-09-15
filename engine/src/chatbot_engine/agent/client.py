@@ -26,14 +26,13 @@ from langchain_core.messages import (
 )
 from langchain_openai import ChatOpenAI
 
-from chatbot_engine.errors import EngineError
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import (
     ToolCallFinishedEvent,
     ToolCallStartedEvent,
     UsageEvent,
 )
-from chatbot_engine.ports.agent import ToolProvider
+from chatbot_engine.ports.agent import ToolError, ToolProvider
 from chatbot_engine.settings import Settings, get_settings
 from chatbot_engine.tracing import run_config
 
@@ -186,20 +185,74 @@ def transcript(request: ChatRequest, *, include_message: bool = False) -> str:
     return "\n".join(lines)
 
 
+#: What the visitor is told when a tool the turn needs is unavailable or fails,
+#: unless the assistant sets its own `unavailable_message`.
+DEFAULT_UNAVAILABLE_MESSAGE = (
+    "I can't handle this request right now. Please try again later. "
+    "Is there anything else I can help you with?"
+)
+
+
+def unavailable_message(project: AssistantConfig) -> str:
+    return project.unavailable_message or DEFAULT_UNAVAILABLE_MESSAGE
+
+
 async def discover_tools(
     tools_provider: ToolProvider, project: AssistantConfig
 ) -> list[dict[str, Any]]:
-    """The tools the assistant allows, as plain dicts, or an error naming the servers.
+    """The tools the assistant allows that can be reached now, as plain dicts.
 
     `bind_tools` wants plain dicts, not the Mapping views the provider returns.
-    Named servers, because the underlying failure is usually a bare "All
-    connection attempts failed" with no hint of which host.
+    A tool server that is down never fails the turn: the MCP provider leaves
+    that server's tools out, and a provider that fails outright gives none.
+    `unavailable_note` then tells the model what is missing.
     """
     try:
         return [dict(tool) for tool in await tools_provider.list_tools(project)]
     except Exception as exc:
         urls = ", ".join(server.url for server in project.mcp_servers)
-        raise EngineError(f"could not discover tools from {urls}") from exc
+        logger.warning("could not discover tools from %s: %s", urls, exc)
+        return []
+
+
+def missing_tools(
+    project: AssistantConfig, tools: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    """The tools the assistant allows that were not found: their server is down,
+    or no longer offers them."""
+    found = {tool["name"] for tool in tools}
+    allowed = [name for server in project.mcp_servers for name in server.allowed_tools]
+    return [name for name in dict.fromkeys(allowed) if name not in found]
+
+
+def unavailable_note(
+    project: AssistantConfig, tools: Sequence[Mapping[str, Any]]
+) -> str:
+    """A line for the system prompt when some tools could not be reached, so the
+    model says it cannot help with that now instead of guessing a result."""
+    missing = missing_tools(project, tools)
+    if not missing:
+        return ""
+    return (
+        f"These tools are unavailable right now: {', '.join(missing)}. When the "
+        "visitor needs what one of them does, do not guess or make up a result; "
+        f'tell the visitor, in their language: "{unavailable_message(project)}"'
+    )
+
+
+def failed_tool_text(name: str, exc: Exception, project: AssistantConfig) -> str:
+    """What the model reads when a tool call fails.
+
+    A tool's own refusal (`ToolError`) is the product's answer, passed on as it
+    is. Anything else means the tool is unavailable: the model is told not to
+    retry or invent a result, and what to tell the visitor.
+    """
+    if isinstance(exc, ToolError):
+        return f"Tool {name!r} failed: {exc}"
+    return (
+        f"Tool {name!r} is unavailable right now. Do not call it again or make up "
+        f'a result; tell the visitor, in their language: "{unavailable_message(project)}"'
+    )
 
 
 async def run_tool_calls(
@@ -253,7 +306,8 @@ async def run_tool_calls(
             )
             ok, error = True, None
         except Exception as exc:
-            result, ok, error = f"Tool {name!r} failed: {exc}", False, str(exc)
+            result = failed_tool_text(name, exc, request.project)
+            ok, error = False, str(exc)
 
         yield ToolCallFinishedEvent(
             call_id=call_id,
@@ -302,18 +356,17 @@ async def stream_completion(
         single `Usage` (tokens and cost) once the turn is complete. Rounds that
         only call tools yield no text; the yielded text is the last round's prose.
         The `Usage` says `tool_limit` when the rounds ran out.
-
-    Raises:
-        EngineError: If tool discovery fails.
     """
     tools = await discover_tools(tools_provider, request.project)
     server_for = {tool["name"]: tool["server"] for tool in tools}
 
     # The system prompt leads, then the running conversation; the model is
-    # bound to the tools when there are any.
+    # bound to the tools when there are any, and told which could not be reached.
     model = build_chat_model(request.project)
     bound = model.bind_tools(tools) if tools else model
-    messages = prompt_messages(request, context)
+    messages = prompt_messages(
+        request, context, extra_system=unavailable_note(request.project, tools)
+    )
 
     # Tokens accumulate across rounds: a turn with tool calls is several model
     # calls, and reporting only the last one would understate the total.

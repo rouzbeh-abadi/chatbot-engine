@@ -48,6 +48,7 @@ from chatbot_engine.agent.client import (
     prompt_messages,
     run_tool_calls,
     stream_reply,
+    unavailable_note,
     usage_event,
     usage_of,
 )
@@ -140,9 +141,12 @@ class LangGraphAgent:
                 RetrievalEvent(query=request.message, sources=to_source_refs(hits))
             )
             context = to_context(hits)
+            # Tools that could not be reached are named in the prompt, as the
+            # loop agent does, so both agents send the same system prompt.
+            note = unavailable_note(request.project, await tools_of())
             return {
                 # The system prompt leads, exactly as in the engine's loop agent.
-                "messages": prompt_messages(request, context),
+                "messages": prompt_messages(request, context, extra_system=note),
                 "context": context,
                 # What retrieval's own model calls cost, so the turn's usage
                 # is the whole turn's, as it is for the loop agent.
