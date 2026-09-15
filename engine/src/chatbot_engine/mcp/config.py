@@ -10,7 +10,7 @@ Configuration only -- no network calls, no tool execution. Two rules matter here
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from chatbot_engine.models.chat import AssistantConfig, McpServerConfig
 
@@ -23,6 +23,9 @@ class McpTarget:
     url: str
     allowed_tools: frozenset[str]
     timeout_s: float
+    #: Headers for this server only (see `McpServerConfig.headers`). Kept out
+    #: of the repr, since a value is usually a secret.
+    headers: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
     def allows(self, tool_name: str) -> bool:
         """Whether this tool is allowlisted, so it may be shown to the model.
@@ -45,4 +48,5 @@ def _target(server: McpServerConfig, *, timeout_s: float) -> McpTarget:
         url=server.url,
         allowed_tools=frozenset(server.allowed_tools),
         timeout_s=timeout_s,
+        headers=tuple(server.headers.items()),
     )

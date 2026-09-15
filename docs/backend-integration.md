@@ -49,7 +49,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.10
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.11
 ```
 
 ```bash
@@ -57,7 +57,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.10"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.11"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -493,6 +493,26 @@ Every tool call carries `X-User-Id` and `X-Session-Id`, taken from the chat
 request. The engine attaches no meaning to either; a tool that scopes what it
 reads or writes takes them from the headers, never from an argument the model
 supplies. See [memory.md](memory.md) for a tool built on this.
+
+A server entry may also carry `headers`, sent to that server only, with
+discovery and every call. They win over `X-User-Id` and `X-Session-Id`, so
+one server can receive its own identity, such as a token the embedding site
+signed for the signed-in user, while every other server, the traces and the
+logs keep the request's `user_id`:
+
+```json
+{
+  "name": "site-tools",
+  "url": "https://example.com/mcp",
+  "allowed_tools": ["get_account"],
+  "headers": { "X-User-Id": "<token the site signed>" }
+}
+```
+
+At most ten headers; names are HTTP tokens, values a single line up to 4096
+characters, and `X-Request-Id` is the engine's own. Header values are never
+logged, traced or shown in a repr, and a server with headers is not held in
+the discovered-tools cache.
 
 ### Tool results are untrusted
 

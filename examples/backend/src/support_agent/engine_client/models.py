@@ -58,6 +58,9 @@ class McpServerConfig(BaseModel):
     name: str
     url: str
     allowed_tools: list[str] = Field(min_length=1)
+    #: Headers sent to this server only; they win over X-User-Id and
+    #: X-Session-Id. Never logged.
+    headers: dict[str, str] = Field(default_factory=dict, repr=False)
 
 
 class AssistantConfig(BaseModel):

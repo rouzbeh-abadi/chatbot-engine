@@ -210,3 +210,103 @@ async def test_an_expired_list_is_fetched_again() -> None:
         await provider.list_tools(CONFIG)
 
     assert len(opened) == 2
+
+
+# --- headers for one server ------------------------------------------------------
+
+
+def test_a_servers_own_headers_win_for_that_server_only() -> None:
+    """One server may get its own identity; the others keep the request's."""
+    from chatbot_engine.mcp.client import headers_for
+    from chatbot_engine.mcp.config import resolve_targets
+
+    config = AssistantConfig(
+        project_id="p",
+        name="n",
+        system_prompt="s",
+        mcp_servers=[
+            McpServerConfig(
+                name="site",
+                url="http://site/mcp",
+                allowed_tools=["t"],
+                headers={"x-user-id": "signed-token", "Authorization": "Bearer abc"},
+            ),
+            McpServerConfig(name="other", url="http://other/mcp", allowed_tools=["t"]),
+        ],
+    )
+    site, other = resolve_targets(config, timeout_s=1)
+
+    to_site = headers_for(site, "visitor:1", "conv-1")
+    to_other = headers_for(other, "visitor:1", "conv-1")
+
+    assert to_site["x-user-id"] == "signed-token"
+    assert "X-User-Id" not in to_site, "replaced whatever the case, not sent twice"
+    assert to_site["Authorization"] == "Bearer abc"
+    assert to_site["X-Session-Id"] == "conv-1"
+    assert to_other["X-User-Id"] == "visitor:1"
+    assert "Authorization" not in to_other
+
+
+def test_header_values_never_show_in_a_repr() -> None:
+    server = McpServerConfig(
+        name="site",
+        url="http://site/mcp",
+        allowed_tools=["t"],
+        headers={"X-User-Id": "secret-token"},
+    )
+    from chatbot_engine.mcp.config import resolve_targets
+
+    config = AssistantConfig(
+        project_id="p", name="n", system_prompt="s", mcp_servers=[server]
+    )
+    assert "secret-token" not in repr(server)
+    assert "secret-token" not in repr(config)
+    assert "secret-token" not in repr(resolve_targets(config, timeout_s=1)[0])
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Bad Name": "SECRETVALUE"},
+        {"X-Request-Id": "SECRETVALUE"},
+        {"X-User-Id": "SECRET\nVALUE"},
+        {"X-User-Id": "SECRETVALUE" * 500},
+        {f"H{i}": "SECRETVALUE" for i in range(11)},
+    ],
+)
+def test_unsafe_headers_are_refused_without_echoing_the_value(
+    headers: dict[str, str],
+) -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as caught:
+        McpServerConfig(
+            name="site", url="http://site/mcp", allowed_tools=["t"], headers=headers
+        )
+    messages = " ".join(str(e["msg"]) for e in caught.value.errors())
+    assert "SECRET" not in messages
+
+
+async def test_a_server_with_its_own_headers_is_not_cached() -> None:
+    """Its list may depend on the credential, and the cache would hold it."""
+    config = AssistantConfig(
+        project_id="p",
+        name="n",
+        system_prompt="s",
+        mcp_servers=[
+            McpServerConfig(
+                name="s",
+                url="http://x/mcp",
+                allowed_tools=["get_booking_status"],
+                headers={"X-User-Id": "token"},
+            )
+        ],
+    )
+    serving, opened = _serving(tools=["get_booking_status"])
+    provider = McpToolProvider(timeout_s=1, tools_ttl_s=60)
+
+    with serving:
+        await provider.list_tools(config)
+        await provider.list_tools(config)
+
+    assert len(opened) == 2

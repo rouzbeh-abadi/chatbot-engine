@@ -8,9 +8,10 @@ anything.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from chatbot_engine.models.workflow import WorkflowSpec
 
@@ -41,6 +42,15 @@ class TracingConfig(BaseModel):
     host: str = "https://cloud.langfuse.com"
 
 
+#: An HTTP header name (RFC 9110 token characters).
+_HEADER_NAME = re.compile(r"[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}")
+#: Headers a server entry may not replace: the engine's own request id, which
+#: lines the tool server's logs up with the engine's.
+_ENGINE_HEADERS = frozenset({"x-request-id"})
+_MAX_SERVER_HEADERS = 10
+_MAX_HEADER_VALUE = 4096
+
+
 class McpServerConfig(BaseModel):
     """An MCP server the engine should connect to as a client.
 
@@ -55,6 +65,31 @@ class McpServerConfig(BaseModel):
     name: str
     url: str
     allowed_tools: list[str] = Field(min_length=1)
+    #: HTTP headers sent to this server only, with discovery and with every
+    #: call: a credential, or an identity only this server should see. They
+    #: take precedence over `X-User-Id` and `X-Session-Id`, so one server can
+    #: receive its own user identity (a token the embedding site signed, say)
+    #: while every other server, the traces and the logs keep the request's
+    #: `user_id`. Never logged, traced or shown in a repr.
+    headers: dict[str, str] = Field(default_factory=dict, repr=False)
+
+    @field_validator("headers")
+    @classmethod
+    def _safe_headers(cls, headers: dict[str, str]) -> dict[str, str]:
+        # The messages name the header, never its value: a value is usually a
+        # secret, and a validation error travels back in the response body.
+        if len(headers) > _MAX_SERVER_HEADERS:
+            raise ValueError(f"at most {_MAX_SERVER_HEADERS} headers per server")
+        for name, value in headers.items():
+            if not _HEADER_NAME.fullmatch(name):
+                raise ValueError(f"{name!r} is not a valid header name")
+            if name.lower() in _ENGINE_HEADERS:
+                raise ValueError(f"{name} is set by the engine")
+            if len(value) > _MAX_HEADER_VALUE or any(c in value for c in "\r\n\x00"):
+                raise ValueError(
+                    f"the value of {name} is too long or not a single line"
+                )
+        return headers
 
 
 class AssistantConfig(BaseModel):

@@ -49,7 +49,7 @@ async def _session(
     A caller-provided http client is not lifecycle-managed by the transport, so
     it is opened here and closed when the session ends.
     """
-    headers = caller_headers(user_id, session_id) or None
+    headers = headers_for(target, user_id, session_id) or None
     async with (
         create_mcp_http_client(
             headers=headers, timeout=httpx2.Timeout(target.timeout_s)
@@ -62,6 +62,23 @@ async def _session(
     ):
         await session.initialize()
         yield session
+
+
+def headers_for(
+    target: McpTarget, user_id: str | None, session_id: str | None
+) -> dict[str, str]:
+    """Everything one server receives: the caller's headers, then the server's own.
+
+    The server's own come last so they win: a server configured with its own
+    `X-User-Id` gets that value, while every other server gets the request's.
+    Header names are compared without regard to case, as HTTP does.
+    """
+    merged = caller_headers(user_id, session_id)
+    for name, value in target.headers:
+        for existing in [k for k in merged if k.lower() == name.lower()]:
+            del merged[existing]
+        merged[name] = value
+    return merged
 
 
 def caller_headers(user_id: str | None, session_id: str | None) -> dict[str, str]:
@@ -141,11 +158,17 @@ class McpToolProvider:
         return tools
 
     async def _tools_of(self, target: McpTarget) -> list[Mapping[str, Any]]:
-        """One server's allowlisted tools, from the cache while it is fresh."""
+        """One server's allowlisted tools, from the cache while it is fresh.
+
+        A server with its own headers is never cached: what it lists may depend
+        on the credential, and a cache keyed on credentials would keep them in
+        memory for no benefit.
+        """
         key = (target.url, target.allowed_tools)
         now = time.monotonic()
+        cacheable = self._tools_ttl_s > 0 and not target.headers
 
-        cached = self._discovered.get(key)
+        cached = self._discovered.get(key) if cacheable else None
         if cached is not None and now - cached[0] < self._tools_ttl_s:
             return cached[1]
 
@@ -163,7 +186,7 @@ class McpToolProvider:
             if target.allows(tool.name)
         ]
 
-        if self._tools_ttl_s > 0:
+        if cacheable:
             self._discovered[key] = (now, tools)
 
         return tools
