@@ -86,6 +86,55 @@ class HandoffNode(_Node):
     )
 
 
+_Var = Annotated[str, Field(max_length=40, pattern=r"^[a-z][a-z0-9_]*$")]
+
+
+class AskNode(_Node):
+    """Pause the turn, ask the visitor one thing, and continue with the answer.
+
+    The turn really stops here: the agent saves the graph's state, ends the
+    response with an `input_required` event, and a later request that carries
+    `resume` picks the graph up at this step. The answer lands in `var`; for a
+    choice, its label in `<var>_label` too. Skipping, when `optional`, leaves
+    both empty.
+    """
+
+    type: Literal["ask"]
+    #: The question, said to the visitor; templated.
+    prompt: str = Field(min_length=1, max_length=2000)
+    #: What kind of answer, so a UI can show the right control and the engine
+    #: can check it: free text, a phone number, an email address, a web
+    #: address, or one of a list of options.
+    input: Literal["text", "phone", "email", "url", "choice"] = "text"
+    #: For `choice`: the options, as written.
+    options: list[Annotated[str, Field(min_length=1, max_length=120)]] = Field(
+        default_factory=list, max_length=20
+    )
+    #: For `choice`: a variable holding the options instead, as a JSON list of
+    #: strings or of `{"value", "label"}` objects -- what a tool step returned.
+    options_from: _Var | None = None
+    #: Whether the visitor may skip the question.
+    optional: bool = False
+    #: The words on the skip control.
+    skip_label: str = Field(default="Skip", min_length=1, max_length=40)
+    #: A hint shown in an empty text field.
+    placeholder: str = Field(default="", max_length=120)
+    var: _Var
+
+    @model_validator(mode="after")
+    def _options_fit_the_input(self) -> AskNode:
+        has_options = bool(self.options) or self.options_from is not None
+        if self.input == "choice" and not has_options:
+            raise ValueError(
+                f"ask {self.id!r} is a choice with no options or options_from"
+            )
+        if self.input != "choice" and has_options:
+            raise ValueError(f"ask {self.id!r} has options but asks for {self.input}")
+        if self.options and self.options_from is not None:
+            raise ValueError(f"ask {self.id!r} sets both options and options_from")
+        return self
+
+
 class EndNode(_Node):
     """Finish the turn."""
 
@@ -99,6 +148,7 @@ WorkflowNode = Annotated[
     | ToolNode
     | ReplyNode
     | HandoffNode
+    | AskNode
     | EndNode,
     Field(discriminator="type"),
 ]
