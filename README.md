@@ -1,9 +1,19 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png" />
+  <img alt="chatbot-engine: the AI part of a chatbot. Your backend sends the prompt, model and tools; the engine retrieves, calls the model and your MCP tools, and streams the answer back with sources, tokens and cost." src="docs/images/banner.png" />
+</picture>
+
 # chatbot-engine
 
 [![CI](https://github.com/rouzbeh-abadi/chatbot-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/rouzbeh-abadi/chatbot-engine/actions/workflows/ci.yml)
 [![Release](https://github.com/rouzbeh-abadi/chatbot-engine/actions/workflows/release.yml/badge.svg)](https://github.com/rouzbeh-abadi/chatbot-engine/actions/workflows/release.yml)
 [![Python 3.13](https://img.shields.io/badge/python-3.13-blue.svg)](https://www.python.org/downloads/)
 [![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
+
+**The AI part of a chatbot, open source.** Answers from your own documents with
+hybrid RAG, actions through your own backend over MCP, multi-step workflows
+with LangGraph, and any model through OpenRouter. One stateless HTTP service,
+in Docker, under Apache 2.0.
 
 chatbot-engine is an HTTP service for building chatbots that answer from your
 own documents and call your own tools. It implements the AI part of a chatbot,
