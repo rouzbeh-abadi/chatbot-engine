@@ -36,6 +36,16 @@ per chunk. Ranks rather than scores, because a cosine similarity and a BM25
 score are not on a common scale. A chunk found by both searches outranks one
 found first by only one of them.
 
+Only the keyword search's three best matches take part (`KEYWORD_FUSED`).
+Below those, a keyword "match" is mostly a common word the chunk shares with
+the question ("to", "a", "have"), and because being in both rankings beats
+being first in one, such matches would push out the chunk closest in meaning
+whenever it shares no word with the question. "How long do I have to return a
+lamp?" against a page that says "accepts returns within 30 days" is the case:
+the tokenizer does not stem, so "returns" is not "return", and before this
+limit that page lost its place in the top five to passages that merely
+contained "to".
+
 ## The keyword index
 
 The BM25 index is built from the chunks already in the vector store, per

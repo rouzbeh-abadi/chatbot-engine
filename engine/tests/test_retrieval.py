@@ -17,7 +17,7 @@ from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
 
 from chatbot_engine.agent import retriever
-from chatbot_engine.agent.retriever import _fuse, retrieve
+from chatbot_engine.agent.retriever import KEYWORD_FUSED, _fuse, _fuse_hybrid, retrieve
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.rag import rerank as rerank_module
 from chatbot_engine.rag import sparse
@@ -137,6 +137,27 @@ def test_fusion_ranks_a_chunk_both_searches_found_above_one_only_one_found() -> 
 
 def test_fusion_of_nothing_is_nothing() -> None:
     assert _fuse([], []) == []
+
+
+def test_common_words_do_not_push_out_the_chunk_closest_in_meaning() -> None:
+    """The chunk that answers "How long do I have to return a lamp?" says
+    "accepts returns within 30 days": first on meaning, and no word in common
+    with the question. Every other chunk shares a common word ("to", "a") and
+    so is in both rankings. Only the keyword search's best few take part in
+    fusion, so the answer still reaches the top five."""
+    answer = Document(page_content="Lumen Lamps accepts returns within 30 days.")
+    others = [Document(page_content=f"chunk {n} with to and a") for n in range(6)]
+    dense = [(answer, 0.65), *((d, 0.5 - n / 100) for n, d in enumerate(others))]
+    keyword = [(d, 2.0 - n / 10) for n, d in enumerate(others)]
+
+    top5 = [d.page_content for d, _ in _fuse_hybrid(dense, keyword)[:5]]
+    everything = [d.page_content for d, _ in _fuse(dense, keyword)[:5]]
+
+    assert answer.page_content in top5
+    assert answer.page_content not in everything, "fusing every keyword hit loses it"
+    # The keyword search's best still ranks first: exact terms keep their weight.
+    assert top5[0] == others[0].page_content
+    assert KEYWORD_FUSED == 3
 
 
 # --- the keyword index's lifecycle ------------------------------------------

@@ -4,7 +4,8 @@ Retrieval is a pipeline with two configurable stages:
 
     rewrite the question against the history
       -> for each query: vector search, and keyword search when `hybrid`
-      -> fuse the rankings (reciprocal rank fusion)
+      -> fuse the rankings (reciprocal rank fusion), the keyword search's
+         few best matches only
       -> merge across queries, best score per chunk
       -> drop chunks below `min_score`, and everything when nothing clears it
       -> rerank with the model, when enabled
@@ -52,6 +53,15 @@ Hit = tuple[Document, float]
 #: first-place rank so that a chunk ranked well by both searches beats one
 #: ranked first by a single search.
 RRF_K = 60
+
+#: How many of the keyword search's best matches take part in fusion. Its
+#: strength is the few chunks that name the question's exact terms. Further
+#: down, a "match" is mostly a shared common word ("to", "a", "have"), and
+#: since fusion ranks a chunk found by both searches above any chunk found by
+#: one, those would push out the chunk closest in meaning that shares no word
+#: with the question: "How long do I have to return a lamp?" against "accepts
+#: returns within 30 days", where "returns" is not "return" to the tokenizer.
+KEYWORD_FUSED = 3
 
 REWRITE_SYSTEM = """\
 Rewrite the user's latest message into standalone search queries for a knowledge
@@ -174,7 +184,7 @@ async def retrieve_with_usage(
             )
             if keyword:
                 matched.add(keyword[0][0].page_content)
-            fused = _fuse(dense, keyword)
+            fused = _fuse_hybrid(dense, keyword)
         else:
             fused = _normalise(dense)
 
@@ -234,6 +244,14 @@ async def _dense(
         query, k=k, filter={"project_id": project_id}
     )
     return [(document, _similarity(distance)) for document, distance in hits]
+
+
+def _fuse_hybrid(
+    dense: list[tuple[Document, float]], keyword: list[tuple[Document, float]]
+) -> list[Hit]:
+    """One query's vector and keyword rankings, fused: every vector hit, and
+    only the keyword search's `KEYWORD_FUSED` best, which are its evidence."""
+    return _fuse(dense, keyword[:KEYWORD_FUSED])
 
 
 def _fuse(*rankings: list[tuple[Document, float]]) -> list[Hit]:
