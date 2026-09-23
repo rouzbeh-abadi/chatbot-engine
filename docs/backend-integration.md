@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.16
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.17
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.16"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.17"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -413,6 +413,7 @@ condition. The backend should distinguish:
 | Engine missing configuration (no provider key) | `501` | `501`, passed through |
 | Request malformed | `4xx` | `502`; the backend's own bug |
 | Document unusable (`415`, `422`) | `4xx` | the same code; the caller's document |
+| Model provider refused the call or was unreachable (a model blocked by the account's guardrail, no credit, an unknown model) | `502`, with the provider's reason in `detail` | `502`, and show the reason to whoever can fix the account |
 | Engine failed | `5xx` | `502` |
 
 The `501` body names the variable to set:

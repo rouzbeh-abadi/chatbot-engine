@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.16
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.16
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.16
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.16
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.17
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.17
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.17
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.17
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -47,7 +47,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.16 && git push origin v0.1.16
+git tag v0.1.17 && git push origin v0.1.17
 ```
 
 The Release workflow runs the full test suite, publishes the three images, and

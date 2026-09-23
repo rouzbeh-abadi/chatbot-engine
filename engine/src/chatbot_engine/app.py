@@ -10,6 +10,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import openai
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -23,6 +24,7 @@ from chatbot_engine.errors import (
     DocumentRejectedError,
     EngineError,
     NotConfiguredError,
+    provider_reason,
 )
 from chatbot_engine.observability import RequestIdMiddleware, configure_logging
 from chatbot_engine.settings import get_settings
@@ -103,6 +105,18 @@ def create_app() -> FastAPI:
     async def engine_error(_: Request, exc: EngineError) -> JSONResponse:
         """500: any deliberate engine error that is not one of the above."""
         return JSONResponse(status_code=500, content={"detail": str(exc)})
+
+    @app.exception_handler(openai.APIError)
+    async def provider_error(_: Request, exc: openai.APIError) -> JSONResponse:
+        """502: the model provider refused the call or could not be reached.
+
+        Its own reason goes back to the caller, since that is what the caller
+        can act on: a model blocked by an account's guardrail, a key with no
+        credit, a model that does not exist. A chat turn is not affected; a
+        failure after its stream has started arrives as an `error` event.
+        """
+        logger.warning("provider call failed: %s", provider_reason(exc))
+        return JSONResponse(status_code=502, content={"detail": provider_reason(exc)})
 
     # Every request gets an id, kept from the caller when it sent one.
     app.add_middleware(RequestIdMiddleware)

@@ -25,3 +25,32 @@ class DocumentRejectedError(EngineError):
 
     Mapped to 422, not 500: the engine worked, the answer is "not this file".
     """
+
+
+#: The most of a provider's reason passed on; its body can be long.
+PROVIDER_REASON_CHARS = 500
+
+
+def provider_reason(exc: BaseException) -> str:
+    """What the model provider said, without the SDK's wrapping.
+
+    The SDK's own message is `Error code: 404 - {...}`, the whole body printed
+    as a dict; the provider's sentence is inside it, under `message`. A call
+    that never got an answer says so.
+    """
+    status = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        inner = body.get("error", body)
+        if isinstance(inner, dict) and isinstance(inner.get("message"), str):
+            reason = inner["message"]
+        else:
+            reason = str(exc)
+    else:
+        reason = str(exc)
+    where = (
+        f"the model provider answered {status}"
+        if status
+        else "the model provider could not be reached"
+    )
+    return f"{where}: {reason.strip()}"[:PROVIDER_REASON_CHARS]

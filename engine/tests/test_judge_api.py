@@ -311,3 +311,59 @@ def test_without_a_judge_model_the_project_model_grades_as_before(
 
     assert seen["config"] is config
     assert report.model == "openai/gpt-5-mini"
+
+
+# --- the provider's refusal, passed on -----------------------------------------
+
+
+class _RefusingJudge:
+    """Fails the way the provider client does when the provider says no."""
+
+    def __init__(self, exc: Exception) -> None:
+        self.exc = exc
+
+    async def __call__(self, request: JudgeRequest) -> JudgeReport:
+        raise self.exc
+
+
+def test_a_provider_refusal_comes_back_as_502_with_the_providers_reason(
+    client: TestClient, project: dict[str, object]
+) -> None:
+    """Not a bare 500: the caller is told what to fix, in the provider's words."""
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    blocked = openai.NotFoundError(
+        "Error code: 404 - {'error': {...}}",
+        response=httpx.Response(404, request=request),
+        body={
+            "message": "Model blocked by guardrail: 5 endpoints excluded",
+            "code": 404,
+        },
+    )
+    _with_judge(client, _RefusingJudge(blocked))
+
+    response = client.post("/judge", json=_body(project))
+
+    assert response.status_code == 502
+    assert response.json()["detail"] == (
+        "the model provider answered 404: Model blocked by guardrail: 5 endpoints excluded"
+    )
+
+
+def test_a_provider_that_cannot_be_reached_comes_back_as_502(
+    client: TestClient, project: dict[str, object]
+) -> None:
+    import httpx
+    import openai
+
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    _with_judge(client, _RefusingJudge(openai.APIConnectionError(request=request)))
+
+    response = client.post("/judge", json=_body(project))
+
+    assert response.status_code == 502
+    assert response.json()["detail"].startswith(
+        "the model provider could not be reached: "
+    )
