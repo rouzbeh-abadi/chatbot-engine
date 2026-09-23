@@ -111,7 +111,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.15
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.16
 ```
 
 The readiness endpoint reports whether a provider key is set, whether the
@@ -282,7 +282,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_LANGFUSE_PUBLIC_KEY=pk-lf-... \
   -e ENGINE_LANGFUSE_SECRET_KEY=sk-lf-... \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.15
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.16
 ```
 
 [DEPLOYMENT.md](DEPLOYMENT.md) covers the remaining topics, including rate
@@ -395,7 +395,12 @@ the model credentials. The caller supplies the dataset.
 
 **System prompt.** A judge model scores the assistant's behaviour against a
 rubric, checking that it refuses what it should, stays grounded in the
-documents and does not invent policies.
+documents and does not invent policies. By default the assistant's own model
+grades; `POST /judge` takes a `judge_model` to grade with another one, at
+temperature 0, since a model grading its own answers tends to be kind to
+them. A case may also carry an `answer`, which is graded as it is instead of
+being asked: send a few answers whose right score you know, and you can tell
+whether the judge can be trusted before you trust its other scores.
 
 ```bash
 make eval                       # score the system prompt (the stack must be running)

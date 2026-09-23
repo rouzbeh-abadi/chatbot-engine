@@ -61,17 +61,35 @@ async def generate_answers(
     project: AssistantConfig,
     cases: list[EvalCase],
 ) -> list[str]:
-    """Answer every case, in order."""
-    return [await generate_answer(agent, project, case) for case in cases]
+    """Answer every case, in order; a case that brings its own answer is not asked."""
+    return [
+        case.answer
+        if case.answer is not None
+        else await generate_answer(agent, project, case)
+        for case in cases
+    ]
+
+
+def judge_config(
+    project: AssistantConfig, judge_model: str | None = None
+) -> AssistantConfig:
+    """The settings the grading call runs with: the project's own, or another
+    model at temperature 0, uncapped, on the same key."""
+    if judge_model is None:
+        return project
+    return project.model_copy(
+        update={"model": judge_model, "temperature": 0.0, "max_output_tokens": None}
+    )
 
 
 async def judge_answers(
     project: AssistantConfig,
     judge_prompt: str,
     transcript: str,
+    judge_model: str | None = None,
 ) -> tuple[JudgeVerdicts, str]:
     """Grade the run in one call, and report which model did it."""
-    model = build_chat_model(project)
+    model = build_chat_model(judge_config(project, judge_model))
     chain = create_judge_chain(model, judge_prompt)
     graded: JudgeVerdicts = await chain.ainvoke({"transcript": transcript})
 
@@ -117,11 +135,11 @@ async def evaluate_dataset(
     request: JudgeRequest,
     agent: Agent,
 ) -> JudgeReport:
-    """Answer every case, then grade the run."""
+    """Answer every case that brought no answer, then grade the run."""
     answers = await generate_answers(agent, request.project, request.cases)
     transcript = serialize_questions_for_judge(request.cases, answers)
     graded, model = await judge_answers(
-        request.project, request.judge_prompt, transcript
+        request.project, request.judge_prompt, transcript, request.judge_model
     )
 
     return build_judge_report(request.cases, answers, graded, model)

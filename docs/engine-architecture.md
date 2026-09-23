@@ -13,7 +13,7 @@ code that fulfils it:
 | --- | --- | --- |
 | Answer a chat turn | `POST /chat` | Retrieve context, call the model, run requested tools, stream the answer |
 | Ingest a document | `PUT /documents` | Extract, chunk, embed, store |
-| Grade the system prompt | `POST /judge` | Answer a dataset, score each answer against a rubric |
+| Grade the system prompt | `POST /judge` | Answer a dataset, score each answer against a rubric; optionally with another model as the judge, and answers supplied to test the judge itself |
 | Grade retrieval | `POST /eval/rag` | Answer a dataset, score retrieval with RAGAS |
 
 There is no top-level branching. Tracing any one operation from its route to the

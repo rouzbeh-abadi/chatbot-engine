@@ -23,6 +23,10 @@ class EvalCase(BaseModel):
     #: Prose, not an exact string: there are many good phrasings of one correct
     #: answer, and the judge compares behaviour rather than wording.
     expected: str
+    #: An answer to grade as it is, instead of asking the assistant. For
+    #: checking the grader itself: a case whose right score is known, sent
+    #: with an answer, shows whether the judge can be trusted with the rest.
+    answer: str | None = None
 
 
 class JudgeRequest(BaseModel):
@@ -36,6 +40,12 @@ class JudgeRequest(BaseModel):
     #: means for their assistant.
     judge_prompt: str = Field(min_length=1)
     cases: list[EvalCase] = Field(min_length=1)
+    #: The model that grades, when it should not be the one that answered: a
+    #: model grading its own answers tends to be kind to them. It grades at
+    #: temperature 0, so one run grades like the next, and without the
+    #: project's answer cap, which is sized for answers, not for grading.
+    #: Omitted, the project's model grades, as before.
+    judge_model: str | None = Field(default=None, min_length=1)
 
 
 class GradedVerdict(BaseModel):
