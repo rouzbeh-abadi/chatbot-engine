@@ -326,7 +326,18 @@ async def test_the_rewrite_and_rerank_are_counted_in_the_turns_usage(
     ):
         _, spent = await retrieve_with_usage(request)
 
-    assert spent == {"input_tokens": 80, "output_tokens": 10, "total_tokens": 90}
+    # All of it ran on the utility model, and is marked so, for the caller to price at that model's rate.
+    assert spent == {
+        "input_tokens": 80,
+        "output_tokens": 10,
+        "total_tokens": 90,
+        "utility_input_tokens": 80,
+        "utility_output_tokens": 10,
+        # Two calls, neither of which said what it was billed (a stub, not OpenRouter).
+        "calls": 2,
+        "billed_calls": 0,
+        "billed_nano_usd": 0,
+    }
 
 
 async def test_retrieval_usage_reaches_the_usage_event() -> None:

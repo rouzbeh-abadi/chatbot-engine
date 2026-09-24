@@ -9,12 +9,14 @@ This is where retrieval, the prompt, the model, and the tools finally meet.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import logging
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+import openai
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
@@ -24,6 +26,7 @@ from langchain_core.messages import (
     ToolCall,
     ToolMessage,
 )
+from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_openai import ChatOpenAI
 
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
@@ -38,32 +41,136 @@ from chatbot_engine.tracing import run_config
 
 logger = logging.getLogger(__name__)
 
-#: Token totals, as accumulated across a turn's model calls.
+#: Token totals, as accumulated across a turn's model calls. The `utility_`
+#: counts are the part of the totals spent on the utility model (the query
+#: rewrite, the rerank, a workflow's condition step), so a caller can price
+#: them at that model's rate rather than the answer model's.
 Totals = dict[str, int]
+
+_COUNTED = ("input_tokens", "output_tokens", "total_tokens")
 
 
 def empty_totals() -> Totals:
-    return {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}
+    return {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "total_tokens": 0,
+        "utility_input_tokens": 0,
+        "utility_output_tokens": 0,
+        # What the provider billed, in billionths of a dollar so the totals stay
+        # whole numbers, and how many of the turn's calls said so out of all of
+        # them: the bill stands for the turn only when every call reported one.
+        "billed_nano_usd": 0,
+        "billed_calls": 0,
+        "calls": 0,
+    }
 
 
-def add_usage(totals: Totals, message: BaseMessage) -> None:
-    """Add one model reply's token counts to `totals`.
+#: Where a reply keeps what the provider billed for it (`BilledChatOpenAI`).
+BILLED_USD = "billed_usd"
+
+
+def _billed(usage: object) -> float | None:
+    """The `cost` OpenRouter adds to a reply's usage: USD, what it billed."""
+    cost = usage.get("cost") if isinstance(usage, dict) else None
+    if isinstance(cost, bool) or not isinstance(cost, int | float):
+        return None
+    return float(cost)
+
+
+class BilledChatOpenAI(ChatOpenAI):
+    """`ChatOpenAI` that keeps what the provider billed for each call.
+
+    OpenRouter adds `cost` to every reply's usage, streamed or not: what that
+    call was billed, at the price of whichever provider served it. The library
+    keeps the token counts and drops the cost; this keeps it in the reply's
+    `response_metadata`, where `add_usage` reads it. A model several
+    providers serve is billed at the price of the one that answered, which
+    the catalogue's single list price cannot say.
+    """
+
+    def _convert_chunk_to_generation_chunk(
+        self,
+        chunk: dict,
+        default_chunk_class: type,
+        base_generation_info: dict | None,
+    ) -> ChatGenerationChunk | None:
+        generation = super()._convert_chunk_to_generation_chunk(
+            chunk, default_chunk_class, base_generation_info
+        )
+        cost = _billed(chunk.get("usage"))
+        if generation is not None and cost is not None:
+            generation.message.response_metadata[BILLED_USD] = cost
+        return generation
+
+    def _create_chat_result(
+        self,
+        response: dict | openai.BaseModel,
+        generation_info: dict | None = None,
+    ) -> ChatResult:
+        result = super()._create_chat_result(response, generation_info)
+        body = response if isinstance(response, dict) else response.model_dump()
+        cost = _billed(body.get("usage"))
+        if cost is not None:
+            for generation in result.generations:
+                generation.message.response_metadata[BILLED_USD] = cost
+        return result
+
+
+#: Everything the current turn has spent so far, whatever agent runs it and
+#: whatever it reports at its end: set by the stream for one turn
+#: (`start_meter`), added to by every `add_usage`. A turn that fails before
+#: reporting its usage is reported from this, so its spend is known.
+_METER: contextvars.ContextVar[Totals | None] = contextvars.ContextVar(
+    "usage_meter", default=None
+)
+
+
+def start_meter() -> Totals:
+    """A fresh meter for the turn about to run in this context."""
+    meter = empty_totals()
+    _METER.set(meter)
+    return meter
+
+
+def add_usage(totals: Totals, message: BaseMessage, *, utility: bool = False) -> None:
+    """Add one model reply's token counts to `totals`, and to the turn's meter.
 
     `usage_metadata` is present on a reply from a model built with
     `stream_usage=True`, and absent from one a provider did not report on, so
-    a missing count is treated as zero rather than an error.
+    a missing count is treated as zero rather than an error. `utility` marks
+    a reply from the utility model, whose counts are also kept apart.
     """
     metadata = getattr(message, "usage_metadata", None)
     if not metadata:
         return
-    for key in totals:
-        totals[key] += metadata.get(key, 0)
+    billed = (getattr(message, "response_metadata", None) or {}).get(BILLED_USD)
+    meter = _METER.get()
+    for target in (
+        (totals, meter) if meter is not None and meter is not totals else (totals,)
+    ):
+        for key in _COUNTED:
+            target[key] = target.get(key, 0) + metadata.get(key, 0)
+        # Every call is counted, and the ones that said what they were billed.
+        target["calls"] = target.get("calls", 0) + 1
+        if isinstance(billed, int | float):
+            target["billed_calls"] = target.get("billed_calls", 0) + 1
+            target["billed_nano_usd"] = target.get("billed_nano_usd", 0) + round(
+                billed * 1e9
+            )
+        if utility:
+            target["utility_input_tokens"] = target.get(
+                "utility_input_tokens", 0
+            ) + metadata.get("input_tokens", 0)
+            target["utility_output_tokens"] = target.get(
+                "utility_output_tokens", 0
+            ) + metadata.get("output_tokens", 0)
 
 
-def usage_of(message: BaseMessage) -> Totals:
+def usage_of(message: BaseMessage, *, utility: bool = False) -> Totals:
     """One model reply's token counts as fresh totals; zeros when it reported none."""
     totals = empty_totals()
-    add_usage(totals, message)
+    add_usage(totals, message, utility=utility)
     return totals
 
 
@@ -87,6 +194,9 @@ class Usage:
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    #: The part of the totals spent on the utility model.
+    utility_input_tokens: int = 0
+    utility_output_tokens: int = 0
     model: str | None = None
     #: USD cost at OpenRouter's listed prices, or None for an unpriced model.
     cost_usd: float | None = None
@@ -103,7 +213,7 @@ def build_chat_model(
     """Create the chat model using the assistant config and engine settings."""
     settings = settings or get_settings()
 
-    return ChatOpenAI(
+    return BilledChatOpenAI(
         model=config.model or settings.chat_model,
         temperature=config.temperature,
         max_tokens=config.max_output_tokens,
@@ -512,36 +622,58 @@ def price_usage(
     *,
     finish_reason: FinishReason = "stop",
 ) -> Usage:
-    """Package token totals as a `Usage`, priced when the model is in the table.
+    """Package token totals as a `Usage`, with the turn's cost.
 
-    The table is `ENGINE_PRICING` unless one is passed. Public because an agent
-    plugin reports cost too, and two agents that priced a turn differently
-    would be a bug: this is the one place a cost is computed.
-
-    One rate for the whole turn. The rewrite and rerank may run on a cheaper
-    utility model, and their tokens are priced at the answer model's rate,
-    which overstates the cost by a small, known amount rather than requiring
-    per-call bookkeeping.
+    The cost is what the provider billed when every model call in the turn
+    reported it (OpenRouter does, `BilledChatOpenAI`): exact, whichever
+    provider served each call. Otherwise it is priced from the table,
+    `ENGINE_PRICING` unless one is passed, at one rate for the whole turn,
+    the rewrite's and the rerank's tokens included; null when the table does
+    not list the model. Public because an agent plugin reports cost too, and
+    two agents that priced a turn differently would be a bug: this is the one
+    place a cost is computed.
     """
     table = pricing if pricing is not None else get_settings().pricing
     prices = table.get(model_name or "")
     # A graph agent's usage channel starts empty; a missing count is zero.
     totals = {**empty_totals(), **totals}
-    cost = (
-        (totals["input_tokens"] * prices[0] + totals["output_tokens"] * prices[1])
-        / 1_000_000
-        if prices is not None
-        else None
-    )
-    return Usage(model=model_name, cost_usd=cost, finish_reason=finish_reason, **totals)
+    cost: float | None
+    if totals["calls"] > 0 and totals["billed_calls"] == totals["calls"]:
+        cost = totals["billed_nano_usd"] / 1e9
+    elif prices is not None:
+        cost = (
+            totals["input_tokens"] * prices[0] + totals["output_tokens"] * prices[1]
+        ) / 1_000_000
+    else:
+        cost = None
+    counts = {key: totals[key] for key in _USAGE_COUNTS}
+    return Usage(model=model_name, cost_usd=cost, finish_reason=finish_reason, **counts)
+
+
+#: The counts a `Usage` carries; the billing bookkeeping stays in the totals.
+_USAGE_COUNTS = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "utility_input_tokens",
+    "utility_output_tokens",
+)
 
 
 def usage_event(usage: Usage) -> UsageEvent:
-    """The `usage` event for a priced turn. Every agent emits it through here."""
+    """The `usage` event for a priced turn. Every agent emits it through here.
+
+    The utility model is named when part of the turn ran on it; unset, the
+    utility calls ran on the answer model and carry no name of their own.
+    """
+    utility = usage.utility_input_tokens + usage.utility_output_tokens > 0
     return UsageEvent(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         total_tokens=usage.total_tokens,
         cost_usd=usage.cost_usd,
         model=usage.model,
+        utility_input_tokens=usage.utility_input_tokens,
+        utility_output_tokens=usage.utility_output_tokens,
+        utility_model=get_settings().utility_model if utility else None,
     )

@@ -486,7 +486,7 @@ class WorkflowAgent:
                 return {
                     "route": picked,
                     "vars": {f"condition_{node.id}": picked},
-                    "usage": usage_of(reply),
+                    "usage": usage_of(reply, utility=True),
                 }
 
             return step

@@ -124,7 +124,7 @@ async def rewrite_queries(
     )
 
     if totals is not None:
-        add_usage(totals, reply)
+        add_usage(totals, reply, utility=True)
 
     queries = [line.strip() for line in str(reply.content).splitlines()]
     return [query for query in queries if query] or [request.message]

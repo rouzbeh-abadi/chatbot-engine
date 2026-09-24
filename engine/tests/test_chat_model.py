@@ -184,3 +184,109 @@ def test_a_blank_request_key_is_refused() -> None:
     """`""` would otherwise mean "use the engine's key" by accident."""
     with pytest.raises(ValueError):
         _config(provider_api_key="")
+
+
+# --- what the provider billed -------------------------------------------------
+
+
+def _billed_model():
+    from chatbot_engine.agent.client import BilledChatOpenAI
+
+    return BilledChatOpenAI(
+        model="m/answer", api_key="test", base_url="http://localhost:9"
+    )
+
+
+def _usage(cost: float | None) -> dict[str, object]:
+    usage: dict[str, object] = {
+        "prompt_tokens": 100,
+        "completion_tokens": 20,
+        "total_tokens": 120,
+    }
+    if cost is not None:
+        usage["cost"] = cost
+    return usage
+
+
+def test_a_streamed_reply_keeps_what_the_provider_billed() -> None:
+    from langchain_core.messages import AIMessageChunk
+
+    from chatbot_engine.agent.client import BILLED_USD
+
+    chunk = _billed_model()._convert_chunk_to_generation_chunk(
+        {"id": "x", "model": "m/answer", "choices": [], "usage": _usage(0.0000174)},
+        AIMessageChunk,
+        {},
+    )
+    assert chunk is not None
+    assert chunk.message.response_metadata[BILLED_USD] == 0.0000174
+    # A chunk without a bill, the stream's text, carries none.
+    plain = _billed_model()._convert_chunk_to_generation_chunk(
+        {
+            "id": "x",
+            "model": "m/answer",
+            "choices": [{"index": 0, "delta": {"content": "Hi"}}],
+        },
+        AIMessageChunk,
+        {},
+    )
+    assert plain is not None
+    assert BILLED_USD not in plain.message.response_metadata
+
+
+def test_a_whole_reply_keeps_what_the_provider_billed() -> None:
+    from chatbot_engine.agent.client import BILLED_USD
+
+    result = _billed_model()._create_chat_result(
+        {
+            "id": "x",
+            "model": "m/answer",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "Hi"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": _usage(0.0002),
+        }
+    )
+    assert result.generations[0].message.response_metadata[BILLED_USD] == 0.0002
+
+
+def test_a_turn_is_priced_at_its_bill_when_every_call_reported_one_and_from_the_table_otherwise() -> (
+    None
+):
+    from langchain_core.messages import AIMessage
+
+    from chatbot_engine.agent.client import (
+        BILLED_USD,
+        add_usage,
+        empty_totals,
+        price_usage,
+    )
+
+    def reply(billed: float | None) -> AIMessage:
+        return AIMessage(
+            content="",
+            usage_metadata={
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+            },
+            response_metadata={BILLED_USD: billed} if billed is not None else {},
+        )
+
+    table = {"m/answer": (1.0, 2.0)}
+    totals = empty_totals()
+    add_usage(totals, reply(0.0003), utility=True)
+    add_usage(totals, reply(0.0017))
+    assert price_usage(totals, "m/answer", table).cost_usd == 0.002
+    # One call without a bill: the whole turn falls back to the table, at one rate.
+    add_usage(totals, reply(None))
+    assert (
+        price_usage(totals, "m/answer", table).cost_usd
+        == (300 * 1.0 + 60 * 2.0) / 1_000_000
+    )
+    # Nothing billed and nothing in the table: no price.
+    assert price_usage(empty_totals(), "m/unknown", table).cost_usd is None

@@ -185,6 +185,11 @@ class UsageEvent(BaseModel):
     total_tokens: int = 0
     cost_usd: float | None = None
     model: str | None = None
+    #: The part of the counts spent on the engine's utility model (rewrite,
+    #: rerank, a workflow's condition step), named in `utility_model`.
+    utility_input_tokens: int = 0
+    utility_output_tokens: int = 0
+    utility_model: str | None = None
 
 
 class ToolCallStartedEvent(BaseModel):

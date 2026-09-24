@@ -9,7 +9,8 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterable, AsyncIterator
 
-from chatbot_engine.models.events import DoneEvent, ErrorEvent, Event
+from chatbot_engine.agent.client import price_usage, start_meter, usage_event
+from chatbot_engine.models.events import DoneEvent, ErrorEvent, Event, UsageEvent
 
 MEDIA_TYPE = "application/x-ndjson"
 
@@ -34,17 +35,29 @@ def describe(exc: BaseException) -> str:
     return described
 
 
-async def to_ndjson(events: AsyncIterable[Event]) -> AsyncIterator[str]:
+async def to_ndjson(
+    events: AsyncIterable[Event], *, model: str | None = None
+) -> AsyncIterator[str]:
     """Serialise a run, one event per line.
 
     A failure part-way through becomes a terminal `error` + `done` pair rather
     than an exception: the 200 status has already been sent, so raising here would
-    reach the caller as a truncated body with no explanation.
+    reach the caller as a truncated body with no explanation. When the turn
+    had already spent tokens and not yet said so, a `usage` event with what
+    it spent comes first, from the turn's meter (`start_meter`), so the caller
+    can count a failed turn as it counts any other; `model` names the model it
+    is priced at.
     """
+    meter = start_meter()
+    reported = False
     try:
         async for event in events:
+            if isinstance(event, UsageEvent):
+                reported = True
             yield event.model_dump_json() + "\n"
     except Exception as exc:
+        if not reported and meter["total_tokens"] > 0:
+            yield usage_event(price_usage(meter, model)).model_dump_json() + "\n"
         yield (
             ErrorEvent(code="engine_error", message=describe(exc)).model_dump_json()
             + "\n"

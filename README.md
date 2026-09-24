@@ -111,7 +111,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.18
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.19
 ```
 
 The readiness endpoint reports whether a provider key is set, whether the
@@ -282,7 +282,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_LANGFUSE_PUBLIC_KEY=pk-lf-... \
   -e ENGINE_LANGFUSE_SECRET_KEY=sk-lf-... \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.18
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.19
 ```
 
 [DEPLOYMENT.md](DEPLOYMENT.md) covers the remaining topics, including rate

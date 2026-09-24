@@ -50,7 +50,7 @@ async def chat(
     )
 
     return StreamingResponse(
-        to_ndjson(events),
+        to_ndjson(events, model=request.project.model or settings.chat_model),
         media_type=MEDIA_TYPE,
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

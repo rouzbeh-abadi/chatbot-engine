@@ -160,3 +160,107 @@ def _chained() -> Exception:
             raise RuntimeError("outer") from inner
     except RuntimeError as exc:
         return exc
+
+
+# --- what a failed turn spent -------------------------------------------------
+
+
+def _reply(tokens_in: int, tokens_out: int):
+    from langchain_core.messages import AIMessage
+
+    return AIMessage(
+        content="",
+        usage_metadata={
+            "input_tokens": tokens_in,
+            "output_tokens": tokens_out,
+            "total_tokens": tokens_in + tokens_out,
+        },
+    )
+
+
+async def _ndjson_of(events) -> list[dict[str, object]]:
+    from chatbot_engine.api.streaming import to_ndjson
+
+    return [json.loads(line) async for line in to_ndjson(events, model="m/answer")]
+
+
+def test_a_turn_that_fails_after_spending_says_what_it_spent_before_the_error() -> None:
+    """The caller counts the turn from this, instead of estimating it."""
+    import asyncio
+
+    from chatbot_engine.agent.client import add_usage, empty_totals
+
+    async def events():
+        totals = empty_totals()
+        add_usage(totals, _reply(300, 20), utility=True)  # the rewrite
+        add_usage(totals, _reply(2_000, 0))  # the answer model, cut off
+        yield TokenEvent(text="Thirty")
+        raise RuntimeError("provider timeout")
+
+    lines = asyncio.run(_ndjson_of(events()))
+
+    assert [line["type"] for line in lines] == ["token", "usage", "error", "done"]
+    usage = lines[1]
+    assert (usage["input_tokens"], usage["output_tokens"], usage["model"]) == (
+        2_300,
+        20,
+        "m/answer",
+    )
+    assert (usage["utility_input_tokens"], usage["utility_output_tokens"]) == (300, 20)
+
+
+def test_a_turn_that_fails_after_reporting_or_before_spending_adds_no_usage() -> None:
+    import asyncio
+
+    from chatbot_engine.agent.client import add_usage, empty_totals
+
+    async def reported():
+        totals = empty_totals()
+        add_usage(totals, _reply(100, 10))
+        yield UsageEvent(input_tokens=100, output_tokens=10, total_tokens=110)
+        raise RuntimeError("late")
+
+    async def nothing():
+        raise RuntimeError("engine down")
+        yield  # pragma: no cover
+
+    assert [line["type"] for line in asyncio.run(_ndjson_of(reported()))] == [
+        "usage",
+        "error",
+        "done",
+    ]
+    assert [line["type"] for line in asyncio.run(_ndjson_of(nothing()))] == [
+        "error",
+        "done",
+    ]
+
+
+def test_the_usage_event_names_the_utility_model_when_part_of_the_turn_ran_on_it(
+    monkeypatch,
+) -> None:
+    from chatbot_engine.agent.client import Usage, usage_event
+    from chatbot_engine.api.dependencies import reset_dependency_cache
+
+    monkeypatch.setenv("ENGINE_UTILITY_MODEL", "openai/gpt-4.1-mini")
+    reset_dependency_cache()
+    event = usage_event(
+        Usage(
+            input_tokens=500,
+            output_tokens=50,
+            total_tokens=550,
+            utility_input_tokens=300,
+            utility_output_tokens=20,
+            model="m/answer",
+        )
+    )
+    assert (event.utility_model, event.utility_input_tokens) == (
+        "openai/gpt-4.1-mini",
+        300,
+    )
+    assert (
+        usage_event(
+            Usage(input_tokens=5, output_tokens=5, total_tokens=10)
+        ).utility_model
+        is None
+    )
+    reset_dependency_cache()

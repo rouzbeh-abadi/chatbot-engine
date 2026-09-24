@@ -53,7 +53,14 @@ class TokenEvent(_Event):
 
 
 class UsageEvent(_Event):
-    """Token counts and cost for the turn."""
+    """Token counts and cost for the turn.
+
+    The counts are the whole turn's. The `utility_` counts are the part of
+    them spent on the utility model (the query rewrite, the rerank, a
+    workflow's condition step), named in `utility_model`, so a caller can
+    price that part at its own rate; `utility_model` is null when those calls
+    ran on the answer model.
+    """
 
     type: Literal["usage"] = "usage"
     input_tokens: int = 0
@@ -61,6 +68,9 @@ class UsageEvent(_Event):
     total_tokens: int = 0
     cost_usd: float | None = None
     model: str | None = None
+    utility_input_tokens: int = 0
+    utility_output_tokens: int = 0
+    utility_model: str | None = None
 
 
 class ToolCallStartedEvent(_Event):

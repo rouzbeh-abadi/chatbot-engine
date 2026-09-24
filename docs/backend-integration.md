@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.18
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.19
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.18"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.19"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -285,7 +285,7 @@ Read it line by line and switch on `type`.
 | `token` | `text` | Append to the answer |
 | `tool_call_started` | `call_id`, `tool`, `server`, `arguments` | Show progress |
 | `tool_call_finished` | `call_id`, `tool`, `ok`, `duration_ms`, `error` | Pair with `started` by `call_id` |
-| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model` | Display cost. Tokens cover every model call in the turn; `cost_usd` is null unless the engine's `ENGINE_PRICING` lists the model |
+| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model`, `utility_input_tokens`, `utility_output_tokens`, `utility_model` | Display or bill cost. Tokens cover every model call in the turn; the `utility_` counts are the part spent on `ENGINE_UTILITY_MODEL` (the query rewrite, the rerank, a workflow's condition step), so that part can be priced at its own rate, and `utility_model` is null when those calls ran on the answer model. `cost_usd` is what the provider billed when every model call in the turn reported it, as OpenRouter does, whichever of its providers served each call; otherwise priced from `ENGINE_PRICING`, and null when that does not list the model |
 | `input_required` | `thread_id`, `node`, `prompt`, `input`, `options[]`, `optional`, `skip_label`, `placeholder`, `error` | A workflow turn paused on a question. Show the control for `input` (`text`, `phone`, `email`, `url`, or `choice` with `options[]` of `{value, label}`); answer with `resume` |
 | `error` | `code`, `message` | The turn failed after the response started |
 | `done` | `finish_reason` | Always last. `stop`; `length` when `max_output_tokens` cut the answer (show the visitor it was shortened); `tool_limit` when the model was still asking for tools after `max_tool_iterations` rounds (what it said so far has streamed); `input_required` after an `input_required` event; `error` after an `error` event |
@@ -300,6 +300,9 @@ chunked by headings, `page` when it was chunked by page; see
 **A run always ends with `done`,** including on failure. A failure after the
 response has started arrives as an `error` event followed by `done` with
 `finish_reason: "error"`, because the `200` status has already been sent.
+When the turn had already spent tokens and not yet reported them, a `usage`
+event with what it spent comes before the `error`, so a failed turn can be
+counted like any other.
 
 **Read `finish_reason`.** `stop` is a normal end. `length` means the reply
 was cut at `max_output_tokens`: show the reader the answer was shortened, or
