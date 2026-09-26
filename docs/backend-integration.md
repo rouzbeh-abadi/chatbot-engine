@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.19
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.20
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.19"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.20"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -219,9 +219,15 @@ the answer as the next request, with the same `project`, `session_id` and a
 }
 ```
 
-The turn continues from the step that asked. An answer the step refuses (not
-a phone number, an option not offered) comes back at once as another
-`input_required` with `error` set and no new tokens. `skipped: true` answers
+The turn continues from the step that asked. The step reads the reply first
+(see `understand` in agents.md): a no goes to the step's `on_decline`, or
+ends the turn with an acknowledgement; a question back is answered in tokens
+before the same `input_required` comes again, up to the step's `retries`
+times, then the turn goes to its `on_other` or replies and ends. An answer
+the reading takes as an attempt but the check refuses (a phone number a digit
+short, an option not offered) comes back as another `input_required` with
+`error` set and no new tokens, as often as it takes; the reading's cost comes
+in a `usage` event. `skipped: true` answers
 an `optional` question with nothing. A `thread_id` from another project or
 session, one older than `ENGINE_PAUSE_TTL_S` (a day by default), or one whose
 workflow was edited since is refused with an `error` event (`resume_expired`

@@ -101,6 +101,17 @@ class AskNode(_Node):
     `resume` picks the graph up at this step. The answer lands in `var`; for a
     choice, its label in `<var>_label` too. Skipping, when `optional`, leaves
     both empty.
+
+    With `understand` on, a reply is read before it is kept, since people
+    answer in their own words: a reply that already fits (a valid phone
+    number, one of the options) is taken as it is; any other is read by the
+    utility model as one of three things. An answer, however it is phrased,
+    keeps only the value asked for ("call it Apollo please" gives "Apollo").
+    A visitor who declines or changes their mind goes to `on_decline`, or
+    hears `decline_reply` and the turn ends. Anything else (a question back,
+    another topic) is replied to from the knowledge base and the question is
+    asked again, up to `retries` times; after that the turn goes to
+    `on_other`, or replies once more and leaves the question.
     """
 
     type: Literal["ask"]
@@ -124,6 +135,21 @@ class AskNode(_Node):
     #: A hint shown in an empty text field.
     placeholder: str = Field(default="", max_length=120)
     var: _Var
+    #: Whether a reply is read before it is kept (see the class). Off, every
+    #: reply that passes the check for its kind is the answer, as it is.
+    understand: bool = True
+    #: Times to ask again when a reply does not answer, before leaving the question.
+    retries: int = Field(default=1, ge=0, le=3)
+    #: Where to go when the visitor declines or changes their mind. None: say
+    #: `decline_reply`, or a short acknowledgement in the visitor's language,
+    #: and end the turn.
+    on_decline: _Id | None = None
+    #: Where to go when the replies still do not answer after `retries`. None:
+    #: reply to the last one from the knowledge base and end the turn.
+    on_other: _Id | None = None
+    #: What to say when the visitor declines and there is no `on_decline`;
+    #: templated. Empty: a short acknowledgement in the visitor's language.
+    decline_reply: str = Field(default="", max_length=500)
 
     @model_validator(mode="after")
     def _options_fit_the_input(self) -> AskNode:
@@ -202,6 +228,17 @@ class WorkflowSpec(BaseModel):
                     )
             elif n.type != "end" and sum(e.from_ == n.id for e in self.edges) > 1:
                 raise ValueError(f"node {n.id!r} has more than one outgoing edge")
+            if n.type == "ask":
+                for field, target in (
+                    ("on_decline", n.on_decline),
+                    ("on_other", n.on_other),
+                ):
+                    if target == n.id:
+                        raise ValueError(f"{field} of {n.id!r} names the step itself")
+                    if target is not None and target not in known:
+                        raise ValueError(
+                            f"{field} of {n.id!r} names an unknown node {target!r}"
+                        )
         # Everything must be reachable from the start, or it is a mistake.
         seen: set[str] = set()
         todo = [self.start]
@@ -214,6 +251,8 @@ class WorkflowSpec(BaseModel):
             todo.extend(e.to for e in self.edges if e.from_ == cur)
             if node.type == "condition":
                 todo.extend(node.branches.values())
+            if node.type == "ask":
+                todo.extend(t for t in (node.on_decline, node.on_other) if t)
         unreachable = known - seen
         if unreachable:
             raise ValueError(f"unreachable nodes: {sorted(unreachable)}")

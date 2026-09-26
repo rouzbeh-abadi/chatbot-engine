@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.19
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.20
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -268,7 +268,7 @@ other agent, so the caller's UI needs nothing new.
 | `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the result text in `var`; reported as `tool_call_started` and `tool_call_finished` with the real duration. When the call fails or the tool is not offered right now (its server is down, or no longer has it), `on_error: "stop"` (the default) streams the assistant's `unavailable_message` and ends the turn, so steps that assume the call worked never run; `on_error: "continue"` goes on with `var` empty |
 | `reply` | streams a fixed, templated text as the answer |
 | `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with `reason` (templated, with a default) and the transcript through the same runner, so a ticket or an email can be raised and the call shows in the log |
-| `ask` | pauses the turn to ask the visitor one thing (`input`: `text`, `phone`, `email`, `url`, or `choice` with `options` or `options_from` a variable holding a JSON list), and continues with the answer in `var` (and a choice's label in `<var>_label`); `optional` allows skipping, which leaves both empty. See "Asking the visitor" below |
+| `ask` | pauses the turn to ask the visitor one thing (`input`: `text`, `phone`, `email`, `url`, or `choice` with `options` or `options_from` a variable holding a JSON list), and continues with the answer in `var` (and a choice's label in `<var>_label`); `optional` allows skipping, which leaves both empty. With `understand` (on by default) the reply is read first: an answer in other words keeps only the value, a visitor who declines goes to `on_decline` (or hears `decline_reply`), and a reply that does not answer is replied to and asked again up to `retries` times, then goes to `on_other`. See "Asking the visitor" below |
 | `end` | finishes the turn; the same as a node with no outgoing edge |
 
 Templates in `prompt`, `text`, `message` and tool arguments may use
@@ -320,3 +320,38 @@ What the step guarantees:
   checkpointer.
 - **A choice with no options is skipped,** leaving the variable empty, so a
   tool that found no slots does not produce an empty question.
+- **A reply is read before it is kept** (`understand`, on by default), since
+  people answer in their own words. A reply that already fits (a valid phone
+  number, one of the options) is kept as it is, without a model call. Any
+  other goes to the utility model, which says what it is:
+  - **an answer**, in any words or language: only the value is kept ("call it
+    Apollo please" gives `Apollo`; "the afternoon one" picks that option);
+  - **a no**: the visitor declines, cancels or changes their mind. The turn
+    goes to `on_decline`, or says `decline_reply` (or, without one, a short
+    acknowledgement in the visitor's language that the model wrote) and ends,
+    so "no, I don't want a new project" never becomes a project's name;
+  - **something else**, such as a question back or another topic: it is
+    replied to from the knowledge base and the question is asked again, up to
+    `retries` times (1 by default, 0 to 3). After that the turn goes to
+    `on_other`, or replies once more and leaves the question.
+
+  A text reply is always read; a valid phone number, address or option is
+  kept without a call, and so is an option named in other letters ("no" for
+  a "No" option) and the skip by its name. An answer that is an attempt but
+  does not fit ("+44 20" for a phone number, a digit short) is asked again
+  with the reason, as often as it takes, and does not count against
+  `retries`; a refusal ("my number is secret") is a no. When the question may
+  be skipped, a reply that says there is nothing to give skips it, as pressing
+  the skip does. If the reading cannot be had, the question is asked again
+  and keeps waiting; if it cannot be had twice in a row, the reply is taken
+  as it stands, as with `understand` off, so the question can still be
+  answered. `understand: false` keeps every reply that
+  passes the check, as it is. Reading a reply is one small call on the
+  utility model, counted in the turn's usage as the utility part; the
+  `input_required` event carries `understand`, so a client knows whether
+  typed words are read.
+
+```json
+{"id": "name", "type": "ask", "prompt": "What should the project be called?", "input": "text",
+ "var": "name", "retries": 1, "on_decline": "no_project", "on_other": "handoff"}
+```

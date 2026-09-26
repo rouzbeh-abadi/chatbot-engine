@@ -248,6 +248,10 @@ class InputRequiredEvent(BaseModel):
     skip_label: str | None = None
     placeholder: str | None = None
     error: str | None = None
+    #: Whether the step reads a typed reply before keeping it (a workflow's
+    #: `understand`): a client may then send any words, and a no or a
+    #: question back is understood. Off, only a fitting answer is taken.
+    understand: bool = True
 
 
 class ErrorEvent(BaseModel):

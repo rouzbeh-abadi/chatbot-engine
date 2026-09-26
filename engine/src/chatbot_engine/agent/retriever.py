@@ -81,8 +81,10 @@ def utility_config(project: AssistantConfig) -> AssistantConfig:
     """The assistant config for the small calls a turn makes around the answer.
 
     `ENGINE_UTILITY_MODEL` swaps in a cheaper model for the rewrite and the
-    rerank; neither writes a word the customer reads. Temperature zero, since
-    both want the same output for the same input. The assistant's
+    rerank, which write nothing the customer reads, and for the reading of a
+    reply to a workflow's question, which may write the one sentence a
+    visitor who declined hears. Temperature zero, since all want the same
+    output for the same input. The assistant's
     `max_output_tokens` is for the answer the customer reads; a tight cap
     there must not truncate a rerank list, so it is lifted here.
     """
