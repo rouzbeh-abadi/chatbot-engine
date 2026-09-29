@@ -14,7 +14,12 @@ from test_agent_parity import (
 )
 
 from chatbot_engine.agent.client import DEFAULT_UNAVAILABLE_MESSAGE
-from chatbot_engine.models.chat import AssistantConfig, ChatRequest, McpServerConfig
+from chatbot_engine.models.chat import (
+    AssistantConfig,
+    ChatRequest,
+    McpServerConfig,
+    Message,
+)
 from chatbot_engine.models.events import (
     DoneEvent,
     TokenEvent,
@@ -287,6 +292,71 @@ async def test_a_condition_falls_back_to_the_first_branch():
         spec, ScriptedModel(rounds=[[AIMessageChunk(content="mumble")]], seen=[])
     )
     assert _text(events) == "A"
+
+
+_ROUTER = {
+    "start": "intent",
+    "nodes": [
+        {
+            "id": "intent",
+            "type": "condition",
+            "question": "What does the visitor want? other: anything else. "
+            "subscription: their subscription, or answering a question about it.",
+            "branches": {"other": "faq", "subscription": "billing"},
+        },
+        {"id": "faq", "type": "reply", "text": "FAQ"},
+        {"id": "billing", "type": "reply", "text": "Billing"},
+    ],
+}
+
+
+async def test_a_condition_reads_the_turns_a_reply_answers():
+    """Every message starts the workflow again, so "yes" reaches the router
+    on its own: the router reads the question it answers, the last turns with
+    who said them, and is told to decide by the message itself."""
+    request = _request(_ROUTER)
+    request.message = "yes"
+    request.history = [
+        Message(role="user", content="first message, too old to read"),
+        Message(role="assistant", content="old answer"),
+        Message(role="user", content="and another"),
+        Message(role="assistant", content="Can I help with anything else?"),
+        Message(role="user", content="Can I cancel my plan?"),
+        # Inside the window: neither a system turn nor an empty one takes a place.
+        Message(role="system", content="Persona notes the router does not need."),
+        Message(role="assistant", content="  "),
+        Message(role="assistant", content="What code did we email you?"),
+        Message(role="user", content="123456"),
+        Message(role="assistant", content="x" * 900 + " Shall I cancel it?"),
+    ]
+    model = ScriptedModel(rounds=[[AIMessageChunk(content="subscription")]], seen=[])
+
+    events = await _run(_ROUTER, model, request=request)
+
+    assert _text(events) == "Billing"
+    prompt = model.seen[0][-1].content
+    assert "Latest message: yes" in prompt
+    assert "Choose by the latest message" in prompt
+    assert "Visitor: Can I cancel my plan?" in prompt
+    # A long turn keeps its end, where the question it asked is.
+    assert "Shall I cancel it?" in prompt and "x" * 400 not in prompt
+    # The last six turns that say something: the sixth from the end is read,
+    # the seventh is not, and no system turn or empty line gets in.
+    assert "Visitor: and another" in prompt
+    assert "old answer" not in prompt
+    assert "Persona" not in prompt and "Assistant: \n" not in prompt
+    assert prompt.index("Can I cancel") < prompt.index("Latest message")
+
+
+async def test_a_condition_on_the_first_message_reads_only_the_message():
+    """Nothing before the first message, so the prompt stays as short as it was."""
+    model = ScriptedModel(rounds=[[AIMessageChunk(content="other")]], seen=[])
+
+    await _run(_ROUTER, model)
+
+    prompt = model.seen[0][-1].content
+    assert "Message: is my flight delayed?" in prompt
+    assert "Conversation so far" not in prompt
 
 
 async def test_a_model_step_can_store_its_reply_for_a_later_step():
