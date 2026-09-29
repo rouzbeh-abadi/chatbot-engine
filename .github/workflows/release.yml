@@ -146,10 +146,15 @@ jobs:
       # Two steps rather than one clever invocation: `--generate-notes` and
       # `--notes` are used separately here, so neither depends on how gh chooses
       # to merge them. The body is read back and appended to.
+      #
+      # Both steps can run again for the same tag: one tag push has started this
+      # workflow twice (v0.1.21), and the concurrency group only queues the second
+      # run, so it finds the release already made and its notes already complete.
       - name: Create the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "${{ github.ref_name }}" --generate-notes
+          VERSION: ${{ github.ref_name }}
+        run: gh release view "$VERSION" > /dev/null 2>&1 || gh release create "$VERSION" --generate-notes
 
       - name: Add the image coordinates to the notes
         env:
@@ -161,6 +166,7 @@ jobs:
           # v0.1.0 as 0.1.0, 0.1 and 0.
           tag="${VERSION#v}"
           notes=$(gh release view "$VERSION" --json body --jq .body)
+          case "$notes" in *"## Container images"*) exit 0 ;; esac
           gh release edit "$VERSION" --notes "$notes
 
           ## Container images
