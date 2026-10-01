@@ -70,3 +70,20 @@ def test_the_assistant_config_carries_a_workflow():
 
     config = AssistantConfig(project_id="p", name="P", system_prompt=".", workflow=GOOD)
     assert config.workflow is not None and config.workflow.start == "retrieve"
+
+
+def _chain(n: int) -> dict:
+    """A workflow of n reply steps, each leading to the next."""
+    return {
+        "start": "s0",
+        "nodes": [{"id": f"s{i}", "type": "reply", "text": "Hi"} for i in range(n)],
+        "edges": [{"from": f"s{i}", "to": f"s{i + 1}"} for i in range(n - 1)],
+    }
+
+
+def test_a_workflow_takes_up_to_forty_steps():
+    """A workflow with several ready-made paths (a booking with its questions,
+    a call-back, a subscription) outgrew twenty steps."""
+    assert len(WorkflowSpec.model_validate(_chain(40)).nodes) == 40
+    with pytest.raises(ValueError, match="at most 40 items"):
+        WorkflowSpec.model_validate(_chain(41))

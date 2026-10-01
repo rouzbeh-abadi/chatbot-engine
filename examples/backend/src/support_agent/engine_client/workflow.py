@@ -196,9 +196,9 @@ class WorkflowSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    nodes: list[WorkflowNode] = Field(min_length=1, max_length=20)
+    nodes: list[WorkflowNode] = Field(min_length=1, max_length=40)
     #: A node with no outgoing edge and no branches ends the turn.
-    edges: list[Edge] = Field(default_factory=list, max_length=40)
+    edges: list[Edge] = Field(default_factory=list, max_length=80)
     start: _Id
     #: Node visits allowed in one turn, so a loop cannot run away.
     max_steps: int = Field(default=30, ge=1, le=100)

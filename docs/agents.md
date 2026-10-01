@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.21
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.22
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -271,13 +271,19 @@ other agent, so the caller's UI needs nothing new.
 | `ask` | pauses the turn to ask the visitor one thing (`input`: `text`, `phone`, `email`, `url`, or `choice` with `options` or `options_from` a variable holding a JSON list), and continues with the answer in `var` (and a choice's label in `<var>_label`); `optional` allows skipping, which leaves both empty. With `understand` (on by default) the reply is read first: an answer in other words keeps only the value, a visitor who declines goes to `on_decline` (or hears `decline_reply`), and a reply that does not answer is replied to and asked again up to `retries` times, then goes to `on_other`. See "Asking the visitor" below |
 | `end` | finishes the turn; the same as a node with no outgoing edge |
 
-Templates in `prompt`, `text`, `message` and tool arguments may use
-`{{message}}`, `{{user_id}}`, `{{session_id}}` and `{{vars.<name>}}`; a
-condition also sets `vars.condition_<id>` to the label it chose. A node with
+Templates in `prompt` (a Chat Model step's and a question's), `text`,
+`message` and tool arguments may use `{{message}}`, `{{user_id}}`,
+`{{session_id}}` and `{{vars.<name>}}`, and `{{vars.<name>.<field>}}` reads a
+field of the JSON object a variable holds (a string as it is, anything else
+as JSON, and nothing when it is not there, as an unset variable reads); a
+condition also sets `vars.condition_<id>` to the label it chose. A Chat Model
+step's prompt is rendered into its instructions, so a variable holding a
+visitor's answer or a tool's result is best named there as data. A node with
 no outgoing edge ends the turn, after which the agent emits the `usage` and
 `done` events. The schema refuses unknown node ids,
 unreachable nodes, a condition with edges, and a node with two outgoing
-edges; `max_steps` (default 30) caps the visits in one turn. Every node
+edges, and takes at most 40 nodes and 80 edges; `max_steps` (default 30)
+caps the visits in one turn. Every node
 appears as a step in the trace when tracing is on. Without a `workflow`, the
 agent runs retrieve then model, the same shape as the `graph` agent.
 
@@ -340,7 +346,9 @@ What the step guarantees:
   a "No" option) and the skip by its name. An answer that is an attempt but
   does not fit ("+44 20" for a phone number, a digit short) is asked again
   with the reason, as often as it takes, and does not count against
-  `retries`; a refusal ("my number is secret") is a no. When the question may
+  `retries`; for a choice with `on_other`, an answer none of the options is
+  ("Friday instead") goes to `on_other` at once, such as to a step that finds
+  other options; a refusal ("my number is secret") is a no. When the question may
   be skipped, a reply that says there is nothing to give skips it, as pressing
   the skip does. If the reading cannot be had, the question is asked again
   and keeps waiting; if it cannot be had twice in a row, the reply is taken

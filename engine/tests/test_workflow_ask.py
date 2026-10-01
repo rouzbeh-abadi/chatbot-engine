@@ -271,6 +271,42 @@ async def test_a_choice_outside_the_options_is_refused():
     assert not any(name == "book" for name, _ in tools.calls)
 
 
+async def test_a_choice_outside_the_options_goes_where_the_step_sends_other_replies():
+    """With `on_other`, an answer none of the options is ("Friday instead")
+    goes there, such as to a step that finds other options, rather than
+    being told to choose one of those offered."""
+    spec = {
+        **CALLBACK,
+        "nodes": [
+            *(
+                {**n, "on_other": "elsewhere"} if n["id"] == "when" else n
+                for n in CALLBACK["nodes"]
+            ),
+            {"id": "elsewhere", "type": "reply", "text": "Let me look at Friday."},
+        ],
+    }
+    pauses, tools = Pauses.memory(), Tools()
+    thread = _asked(await _run(_request(spec), pauses, tools)).thread_id
+    await _run(
+        _request(
+            spec, "+4915112345678", {"thread_id": thread, "value": "+4915112345678"}
+        ),
+        pauses,
+        tools,
+    )
+
+    events = await _run(
+        _request(spec, "Friday", {"thread_id": thread, "value": "Friday"}),
+        pauses,
+        tools,
+        ScriptedModel(rounds=[_verdict("answered", "Friday")], seen=[]),
+    )
+
+    assert _text(events) == "Let me look at Friday."
+    assert not any(isinstance(e, InputRequiredEvent) for e in events)
+    assert not any(name == "book" for name, _ in tools.calls)
+
+
 PROJECT = {
     "start": "url",
     "nodes": [

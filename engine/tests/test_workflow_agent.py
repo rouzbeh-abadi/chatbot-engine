@@ -140,6 +140,40 @@ async def test_a_tool_step_reports_timing_and_failure_like_a_model_call():
     assert isinstance(events[-1], DoneEvent)
 
 
+async def test_a_model_steps_prompt_reads_variables_and_their_fields():
+    """A Chat Model step's instructions are templated like any other text, and
+    `{{vars.<name>.<field>}}` reads a field of the JSON object a variable
+    holds; a field that is not there reads as nothing, as an unset variable."""
+    spec = {
+        "start": "lookup",
+        "nodes": [
+            {
+                "id": "lookup",
+                "type": "tool",
+                "tool": "get_booking_status",
+                "var": "booking",
+            },
+            {
+                "id": "answer",
+                "type": "model",
+                "tools": False,
+                "prompt": "Status: {{vars.booking.status}}. All: {{vars.booking}}. Gate: [{{vars.booking.gate}}] [{{vars.nothing.at_all}}]",
+            },
+            {"id": "say", "type": "reply", "text": " ({{vars.booking.status}})"},
+        ],
+        "edges": [{"from": "lookup", "to": "answer"}, {"from": "answer", "to": "say"}],
+    }
+    model = ScriptedModel(rounds=[[AIMessageChunk(content="It is delayed.")]], seen=[])
+
+    events = await _run(spec, model)
+
+    system = str(model.seen[0][0].content)
+    assert 'Status: delayed. All: {"status": "delayed"}. Gate: [] []' in system, (
+        "rendered before the model reads it"
+    )
+    assert _text(events) == "It is delayed. (delayed)"
+
+
 async def test_a_tool_that_is_not_offered_says_so_instead_of_failing_the_turn():
     """Its server is down, or no longer has it: the visitor hears the
     assistant's own words for that, and the log shows the call as failed."""

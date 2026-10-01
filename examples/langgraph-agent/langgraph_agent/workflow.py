@@ -332,6 +332,23 @@ def parse_verdict(text: str, raw: str) -> Verdict:
     )
 
 
+def field_of(value: str, path: str) -> str:
+    """A field of the JSON object a variable holds, by its dotted path, as
+    text: a string as it is, anything else as JSON. Empty when the variable is
+    not such an object or has no such field, as an unset variable is."""
+    try:
+        found: Any = json.loads(value)
+    except ValueError:
+        return ""
+    for key in path.split("."):
+        if not isinstance(found, dict) or key not in found:
+            return ""
+        found = found[key]
+    if found is None:
+        return ""
+    return found if isinstance(found, str) else json.dumps(found)
+
+
 def options_of(node: AskNode, vars_: dict[str, str]) -> list[AskOption]:
     """A choice's options: as written, or parsed from the variable that holds them.
 
@@ -509,7 +526,11 @@ class WorkflowAgent:
             def sub(m: re.Match[str]) -> str:
                 key = m.group(1).strip()
                 if key.startswith("vars."):
-                    return vars_.get(key[5:], "")
+                    # A variable's name has no dot, so what follows one is a
+                    # field of the JSON object it holds: {{vars.slots.note}}.
+                    name, _, path = key[5:].partition(".")
+                    value = vars_.get(name, "")
+                    return field_of(value, path) if path else value
                 return values.get(key, "")
 
             return re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}", sub, template)
@@ -558,7 +579,9 @@ class WorkflowAgent:
                 messages = prompt_messages(
                     request,
                     state.get("context", ""),
-                    extra_system="\n\n".join(p for p in (node.prompt, note) if p),
+                    extra_system="\n\n".join(
+                        p for p in (render(node.prompt, state), note) if p
+                    ),
                     prior=state.get("messages", [])[state.get("since", 0) :],
                 )
                 new: list[BaseMessage] = []
@@ -949,6 +972,16 @@ class WorkflowAgent:
                     value, error = check_answer(node, meant, options)
                     if error is None:
                         return answered(value, **out)
+                    if node.input == "choice" and node.on_other is not None:
+                        # An answer none of the options is ("Monday instead")
+                        # goes where the question sends what it does not
+                        # cover, such as a step that finds other options.
+                        return {
+                            **out,
+                            "ask_error": {node.id: ""},
+                            "missed": {node.id: 0},
+                            "route": "leave",
+                        }
                     # An answer that is not of the kind asked for is asked again,
                     # saying why, as often as it takes: a typo is not a refusal.
                     return retry(error, **out)
