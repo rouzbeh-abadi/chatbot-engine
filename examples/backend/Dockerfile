@@ -6,6 +6,9 @@ FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
 # `copy`, because the cache below is a mount that is gone at run time.
 ENV UV_LINK_MODE=copy
+# A large wheel such as pandas can take minutes to download on a runner building
+# two architectures at once; uv's 30 s default failed the 0.1.22 release.
+ENV UV_HTTP_TIMEOUT=300
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
