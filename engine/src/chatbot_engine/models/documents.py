@@ -73,3 +73,31 @@ class DeleteResult(BaseModel):
 
     doc_id: str
     deleted: bool
+
+
+class ExtractUsage(BaseModel):
+    """What reading an image cost: the vision model's tokens and price."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_tokens: int
+    output_tokens: int
+    #: What the provider billed, or the listed price; null for an unpriced model.
+    cost_usd: float | None = None
+    model: str | None = None
+
+
+class ExtractedText(BaseModel):
+    """What `POST /extract` answers: a file's text, read and not kept."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    text: str
+    #: How many pages had text, for a format with pages (PDF); 0 otherwise.
+    pages: int = 0
+    #: The length of `text`, so a caller can say how much was read.
+    chars: int
+    #: For an image, read by a vision model into the text in it and what it
+    #: shows; the model call's spend, for the caller to bill. Null for a
+    #: document, whose reading calls no model.
+    usage: ExtractUsage | None = None

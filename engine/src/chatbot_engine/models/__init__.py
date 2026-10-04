@@ -7,6 +7,7 @@ services must not share a Python package.
 
 from chatbot_engine.models.chat import (
     AssistantConfig,
+    Attachment,
     ChatRequest,
     McpServerConfig,
     Message,
@@ -15,6 +16,8 @@ from chatbot_engine.models.common import HealthResponse
 from chatbot_engine.models.documents import (
     DeleteResult,
     DocumentRecord,
+    ExtractedText,
+    ExtractUsage,
     IngestStatus,
 )
 from chatbot_engine.models.events import (
@@ -31,12 +34,15 @@ from chatbot_engine.models.events import (
 
 __all__ = [
     "AssistantConfig",
+    "Attachment",
     "ChatRequest",
     "DeleteResult",
     "DocumentRecord",
     "DoneEvent",
     "ErrorEvent",
     "Event",
+    "ExtractUsage",
+    "ExtractedText",
     "HealthResponse",
     "IngestStatus",
     "McpServerConfig",

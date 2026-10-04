@@ -16,7 +16,16 @@ from fastapi.responses import JSONResponse
 
 from chatbot_engine import __version__, tracing
 from chatbot_engine.agent.registry import UnknownAgentError
-from chatbot_engine.api import agents, chat, documents, eval_rag, health, judge, metrics
+from chatbot_engine.api import (
+    agents,
+    chat,
+    documents,
+    eval_rag,
+    extract,
+    health,
+    judge,
+    metrics,
+)
 from chatbot_engine.api.auth import require_api_key
 from chatbot_engine.api.rate_limit import limit_chat, limit_eval
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
@@ -137,6 +146,9 @@ def create_app() -> FastAPI:
     protected.include_router(agents.router)
     protected.include_router(chat.router, dependencies=[Depends(limit_chat)])
     protected.include_router(documents.router)
+    # Reads a file and keeps nothing. A document calls no provider, so the router
+    # is not metered; an image is read by a model and metered in the route.
+    protected.include_router(extract.router)
     protected.include_router(judge.router, dependencies=[Depends(limit_eval)])
     protected.include_router(eval_rag.router, dependencies=[Depends(limit_eval)])
     app.include_router(protected)

@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.22
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.23
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.22"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.23"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -104,6 +104,7 @@ end-user permissions. The backend decides who may ask.
 | `GET` | `/documents?project_id=…` | List what is indexed |
 | `POST` | `/documents/{doc_id}/reindex?project_id=…` | Rebuild a document from its stored original, optionally with new `chunking_strategy`, `chunk_size` or `chunk_overlap`; see [chunking.md](chunking.md) |
 | `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document |
+| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, and the answer's `usage` says what it cost. Answers `{text, pages, chars, usage}`; `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, or a PDF with no text |
 
 Two more for operations:
 
@@ -166,6 +167,7 @@ request carries the whole assistant definition:
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
 | `history` | no | Earlier turns, oldest first |
+| `attachments` | no | Files the person sent in the conversation, oldest first, as `{ name, text }` (at most 5, each up to 60,000 characters; `POST /extract` reads a file into text). Send them with every turn of the conversation, so a later question can still refer to one. Every agent puts them before the message as what the person gave it to read, never as instructions; they are not part of the knowledge-base search. Since 0.1.23 |
 | `resume` | no | `{ thread_id, value?, skipped? }`: the answer to a question a workflow turn paused on (`input_required`). `message` is still sent, as the answer reads in the conversation (the typed text, or the chosen option's label). See "A turn that asks" below |
 
 ### Tracing per assistant
@@ -237,6 +239,32 @@ simply starts a new turn, and the unanswered one is forgotten in time.
 The paused state lives in `ENGINE_CHECKPOINT_DB`, a SQLite file on the
 engine's volume, and is deleted when the turn finishes. With several engine
 replicas, send the answer to the replica that asked.
+
+### Files in the conversation
+
+A person can send a file mid-conversation: an invoice, a contract, a photo of
+a damaged item, a screenshot of an error. The engine does not keep it. Ask for
+its text, then send that text with the turns that follow. An image comes back
+as the text in it and a description of what it shows, read by a vision model,
+so the chat's own model need not see images and the picture is not billed
+again with every turn:
+
+```bash
+curl -X POST localhost:8100/extract -F "file=@invoice.pdf;type=application/pdf"
+# {"text": "Invoice 4521 ...", "pages": 2, "chars": 1843}
+```
+
+```json
+{
+  "project": {"...": "..."},
+  "message": "Is this invoice right?",
+  "attachments": [{"name": "invoice.pdf", "text": "Invoice 4521 ..."}]
+}
+```
+
+A file's text is sent again with every turn, and is billed as prompt tokens
+each time, so bound how many files a conversation keeps and how long each may
+be before you send them.
 
 ### Why the whole configuration is sent every time
 

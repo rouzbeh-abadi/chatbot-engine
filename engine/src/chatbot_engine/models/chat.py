@@ -181,6 +181,30 @@ class ResumeInput(BaseModel):
     skipped: bool = False
 
 
+#: The most files one turn carries, and the text of each. A file is sent again
+#: with every later turn of its conversation, so these bound what a
+#: conversation with files can cost, whatever the caller allows.
+MAX_ATTACHMENTS = 5
+MAX_ATTACHMENT_CHARS = 60_000
+
+
+class Attachment(BaseModel):
+    """A file the person sent in the conversation, as its text.
+
+    The caller reads the file (`POST /extract` does it for PDF, text and
+    Markdown, and for an image, into the text in it and what it shows) and
+    sends the text with each turn of the conversation, so a
+    later question can still refer to it. It reaches the model as what the
+    person gave it to read, never as instructions, and it is not part of the
+    knowledge-base search: retrieval still runs on the message alone.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=MAX_ATTACHMENT_CHARS)
+
+
 class ChatRequest(BaseModel):
     """The body of `POST /chat`.
 
@@ -198,6 +222,11 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, max_length=256)
     user_id: str | None = Field(default=None, max_length=256)
     history: list[Message] = Field(default_factory=list, max_length=200)
+    #: Files the person sent in this conversation, oldest first. Every agent
+    #: puts them before the message they are answering (agent/client.py).
+    attachments: list[Attachment] = Field(
+        default_factory=list, max_length=MAX_ATTACHMENTS
+    )
     #: Continue a turn that paused on a question, with the answer. `message`
     #: is still required: it is how the answer reads in the conversation (the
     #: typed text, or the chosen option's label). Agents that never pause

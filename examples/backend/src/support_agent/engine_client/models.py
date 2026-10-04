@@ -123,6 +123,15 @@ class ResumeInput(BaseModel):
     skipped: bool = False
 
 
+class Attachment(BaseModel):
+    """A file the person sent in the conversation, as its text."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=60_000)
+
+
 class EngineChatRequest(BaseModel):
     """The body of the engine's `POST /chat`."""
 
@@ -135,6 +144,8 @@ class EngineChatRequest(BaseModel):
     # authorization. User identity remains the backend's responsibility.
     user_id: str | None = Field(default=None, max_length=256)
     history: list[Message] = Field(default_factory=list, max_length=200)
+    # Files the person sent in the conversation, as text (engine 0.1.23).
+    attachments: list[Attachment] = Field(default_factory=list, max_length=5)
     # The answer to a question a paused workflow turn asked (`input_required`).
     resume: ResumeInput | None = None
 
