@@ -130,6 +130,8 @@ class Attachment(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=60_000)
+    # The file came with the message being answered (engine 0.1.24).
+    sent_now: bool = False
 
 
 class EngineChatRequest(BaseModel):
@@ -146,6 +148,10 @@ class EngineChatRequest(BaseModel):
     history: list[Message] = Field(default_factory=list, max_length=200)
     # Files the person sent in the conversation, as text (engine 0.1.23).
     attachments: list[Attachment] = Field(default_factory=list, max_length=5)
+    # Names of files the conversation no longer carries (engine 0.1.24).
+    omitted: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=20
+    )
     # The answer to a question a paused workflow turn asked (`input_required`).
     resume: ResumeInput | None = None
 

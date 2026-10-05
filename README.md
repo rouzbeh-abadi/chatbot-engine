@@ -61,6 +61,7 @@ is required to run the engine.
   chunks it, embeds it and stores it. Markdown, plain text and PDF are
   supported. Identical bytes uploaded again are detected by content hash and
   skipped.
+- **Files in the conversation.** `POST /extract` reads a PDF, text, Markdown or image a person sends mid-conversation into text and keeps nothing (an image through a vision model, billed as a chat turn); a chat request carries the text as `attachments`, which every call of the chat model puts before the message as what the person gave it to read, never as instructions. Reading is bounded in time and size, in a process of its own.
 - **Pluggable agents:** The built-in agent is a plain LangChain tool loop with
   no framework dependency. Other agents are Python packages installed next to
   the engine, registered through an entry point and selected by name in the
@@ -111,7 +112,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.23
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.24
 ```
 
 The readiness endpoint reports whether a provider key is set, whether the
@@ -282,7 +283,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_LANGFUSE_PUBLIC_KEY=pk-lf-... \
   -e ENGINE_LANGFUSE_SECRET_KEY=sk-lf-... \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.23
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.24
 ```
 
 [DEPLOYMENT.md](DEPLOYMENT.md) covers the remaining topics, including rate

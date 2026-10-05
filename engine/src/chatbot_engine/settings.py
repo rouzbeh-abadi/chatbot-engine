@@ -14,7 +14,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from chatbot_engine.errors import NotConfiguredError
@@ -62,12 +62,30 @@ class Settings(BaseSettings):
     chat_rate_limit_per_minute: int = 60
     eval_rate_limit_per_hour: int = 20
     ingest_rate_limit_per_minute: int = 20
+    #: Documents read for a chat (`POST /extract`), which call no provider but
+    #: parse a stranger's file; apart from chat, so a flood of files cannot
+    #: throttle the answers, nor the other way round.
+    extract_rate_limit_per_minute: int = 120
 
     #: Where the rate-limit buckets live. Unset, they are in this process's
     #: memory, and every replica counts on its own. Set to a Redis URL
     #: (`redis://host:6379/0`) and all replicas share one exact bucket per
     #: caller. Needs the `redis` extra.
     redis_url: str | None = None
+
+    # --- reading documents for a chat ---------------------------------------
+    #: Not rate limits: bounds on the reading itself, engine-wide, and zero
+    #: is not "off" for either (it would refuse every file), so neither may be.
+
+    #: How long reading one file for a chat may take before its process is
+    #: killed and the file refused.
+    extract_timeout_s: float = Field(default=20.0, gt=0)
+
+    #: How many documents may be read for chats at once. Each read is a
+    #: process of its own that may take its whole deadline and a good deal of
+    #: memory on a file made to; past this, a reading is refused at once
+    #: (503) rather than queued, so files cannot fill the box.
+    extract_concurrency: int = Field(default=2, ge=1)
 
     # --- the model provider -------------------------------------------------
 

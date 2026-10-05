@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.23
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.24
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.23"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.24"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -104,7 +104,7 @@ end-user permissions. The backend decides who may ask.
 | `GET` | `/documents?project_id=…` | List what is indexed |
 | `POST` | `/documents/{doc_id}/reindex?project_id=…` | Rebuild a document from its stored original, optionally with new `chunking_strategy`, `chunk_size` or `chunk_overlap`; see [chunking.md](chunking.md) |
 | `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document |
-| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, and the answer's `usage` says what it cost. Answers `{text, pages, chars, usage}`; `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, or a PDF with no text |
+| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (`503` with `Retry-After` past that). A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed, `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
 
 Two more for operations:
 
@@ -167,7 +167,8 @@ request carries the whole assistant definition:
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
 | `history` | no | Earlier turns, oldest first |
-| `attachments` | no | Files the person sent in the conversation, oldest first, as `{ name, text }` (at most 5, each up to 60,000 characters; `POST /extract` reads a file into text). Send them with every turn of the conversation, so a later question can still refer to one. Every agent puts them before the message as what the person gave it to read, never as instructions; they are not part of the knowledge-base search. Since 0.1.23 |
+| `attachments` | no | Files the person sent in the conversation, oldest first, as `{ name, text, sent_now? }` (at most 5, each up to 60,000 characters; `POST /extract` reads a file into text; `sent_now` marks the one that came with this message, since 0.1.24). Send them with every turn of the conversation, so a later question can still refer to one. Every call of the chat model (the loop and graph agents' answer, a workflow's Chat Model steps and its reply to an answer that misses the question) puts them in the person's turn before the message, framed by their names, with the rules for them in the system prompt: what the person gave it to read, never instructions, never cited with a number. A workflow Condition reads the start of the newest two (1,500 characters each) beside the message; the reading of an answer to a question sees the reply alone; a hand-off's transcript carries the start of each (2,000 characters). They are not part of the knowledge-base search. Since 0.1.23 |
+| `omitted` | no | The names of files the conversation no longer carries (at most 20), when the caller keeps only the newest: the model is told they are no longer included and to ask for one again when asked about it. Since 0.1.24 |
 | `resume` | no | `{ thread_id, value?, skipped? }`: the answer to a question a workflow turn paused on (`input_required`). `message` is still sent, as the answer reads in the conversation (the typed text, or the chosen option's label). See "A turn that asks" below |
 
 ### Tracing per assistant
@@ -264,7 +265,20 @@ curl -X POST localhost:8100/extract -F "file=@invoice.pdf;type=application/pdf"
 
 A file's text is sent again with every turn, and is billed as prompt tokens
 each time, so bound how many files a conversation keeps and how long each may
-be before you send them.
+be before you send them; name the ones you dropped in `omitted`, and mark the
+one that came with the message `sent_now`, so "this one" means it. A
+Condition that must branch on what a file says sees the start of the newest
+two; for more, have a Chat Model step with `var` read the file and branch on
+that variable. Reading a document for a chat is bounded: a process of its own,
+killed at `ENGINE_EXTRACT_TIMEOUT_S`, reading only as far as an attachment
+goes, with pypdf's inflation cap lowered, and its own rate
+(`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`); a document flood cannot throttle
+answers, nor the other way round, and `ENGINE_EXTRACT_CONCURRENCY` readings
+at once, past which a reading is refused with 503. The vision call that reads
+an image is not traced, whichever `ENGINE_TRACING` names: the picture would
+go to the tracer with the call, and a person's photo is not for a third party
+to keep; what the call cost is in the answer's `usage`. It is never retried
+and waits at most 45 s, so a call that is billed is also answered.
 
 ### Why the whole configuration is sent every time
 

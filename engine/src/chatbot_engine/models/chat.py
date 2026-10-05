@@ -9,7 +9,7 @@ anything.
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -186,6 +186,8 @@ class ResumeInput(BaseModel):
 #: conversation with files can cost, whatever the caller allows.
 MAX_ATTACHMENTS = 5
 MAX_ATTACHMENT_CHARS = 60_000
+#: Names of files no longer carried that a turn may still mention.
+MAX_OMITTED = 20
 
 
 class Attachment(BaseModel):
@@ -203,6 +205,8 @@ class Attachment(BaseModel):
 
     name: str = Field(min_length=1, max_length=200)
     text: str = Field(min_length=1, max_length=MAX_ATTACHMENT_CHARS)
+    #: The file came with the message being answered, so "this one" is it.
+    sent_now: bool = False
 
 
 class ChatRequest(BaseModel):
@@ -222,10 +226,16 @@ class ChatRequest(BaseModel):
     session_id: str | None = Field(default=None, max_length=256)
     user_id: str | None = Field(default=None, max_length=256)
     history: list[Message] = Field(default_factory=list, max_length=200)
-    #: Files the person sent in this conversation, oldest first. Every agent
-    #: puts them before the message they are answering (agent/client.py).
+    #: Files the person sent in this conversation, oldest first. Every call of
+    #: the chat model puts them in the person's turn before the message
+    #: (agent/client.py); a workflow Condition sees the start of each.
     attachments: list[Attachment] = Field(
         default_factory=list, max_length=MAX_ATTACHMENTS
+    )
+    #: The names of files the conversation no longer carries (the caller kept
+    #: only the newest), so the model knows they existed when asked.
+    omitted: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
+        default_factory=list, max_length=MAX_OMITTED
     )
     #: Continue a turn that paused on a question, with the answer. `message`
     #: is still required: it is how the answer reads in the conversation (the

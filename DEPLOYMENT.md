@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.23
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.23
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.23
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.23
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.24
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.24
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.24
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.24
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -47,7 +47,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.23 && git push origin v0.1.23
+git tag v0.1.24 && git push origin v0.1.24
 ```
 
 The Release workflow runs the full test suite, publishes the three images, and
@@ -188,9 +188,10 @@ and it cannot verify that a caller applies its own limit.
 | --- | --- | --- |
 | `BACKEND_CHAT_RATE_LIMIT_PER_MINUTE` | 30 | `POST /chat`, `POST /chat/sync` |
 | `BACKEND_EVAL_RATE_LIMIT_PER_HOUR` | 20 | `POST /admin/eval/*` |
-| `ENGINE_CHAT_RATE_LIMIT_PER_MINUTE` | 60 | the engine's `POST /chat` |
+| `ENGINE_CHAT_RATE_LIMIT_PER_MINUTE` | 60 | the engine's `POST /chat`, and `POST /extract` for an image |
 | `ENGINE_EVAL_RATE_LIMIT_PER_HOUR` | 20 | the engine's `POST /judge`, `POST /eval/rag` |
 | `ENGINE_INGEST_RATE_LIMIT_PER_MINUTE` | 20 | `PUT /documents`; listing and deleting are unmetered |
+| `ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE` | 120 | `POST /extract` for a document; an image is a model call and counts on the chat limit |
 
 Zero disables a limit. The backend buckets by authenticated user id when there
 is one and by client address otherwise; the engine buckets by the name of the
@@ -330,4 +331,13 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   second; a call that has streamed text is not retried, and the failure
   reaches the caller as an `error` event. `ENGINE_PROVIDER_TIMEOUT_S`
   (default 60) bounds one provider call. Set the retries to 0 if a proxy in
-  front of OpenRouter already retries, or the two will compound.
+  front of OpenRouter already retries, or the two will compound. Reading an
+  image for `POST /extract` is never retried and waits at most 45 s, so a
+  call that is billed is also answered within the caller's patience.
+- **Reading files for a chat.** `ENGINE_EXTRACT_TIMEOUT_S` (default 20)
+  bounds the reading of one document for `POST /extract`: it runs in a
+  process of its own, bounded in CPU time and memory where the system allows,
+  and is killed at the deadline, the file refused with 422.
+  `ENGINE_EXTRACT_CONCURRENCY` (default 2) is how many such readings may run
+  at once; past it a reading is refused with 503 and `Retry-After` rather
+  than queued, so files cannot fill the box.

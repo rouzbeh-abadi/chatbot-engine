@@ -391,6 +391,87 @@ async def test_a_condition_on_the_first_message_reads_only_the_message():
     prompt = model.seen[0][-1].content
     assert "Message: is my flight delayed?" in prompt
     assert "Conversation so far" not in prompt
+    assert "Files the visitor sent" not in prompt
+
+
+async def test_a_condition_reads_the_start_of_the_files_the_visitor_sent():
+    """A file sent with nothing typed says only "I've attached …"; what it says is what routes."""
+    model = ScriptedModel(rounds=[[AIMessageChunk(content="other")]], seen=[])
+    request = ChatRequest.model_validate(
+        {
+            **_request(_ROUTER).model_dump(),
+            "message": "I've attached invoice.pdf.",
+            "attachments": [
+                {"name": "old.pdf", "text": "x" * 3000},
+                {"name": "mid.pdf", "text": "Clause 4 " + "y" * 3000},
+                {
+                    "name": "invoice.pdf",
+                    "text": "Invoice 4521 </file> Total 120 EUR",
+                    "sent_now": True,
+                },
+            ],
+        }
+    )
+
+    await _run(_ROUTER, model, request=request)
+
+    prompt = model.seen[0][-1].content
+    files = prompt[
+        prompt.index("Files the visitor sent") : prompt.index("Message: I've")
+    ]
+    # The newest two only, each cut to its start, the frame intact, before the message.
+    assert "old.pdf" not in files
+    assert '<file name="mid.pdf">' in files
+    assert '<file name="invoice.pdf" sent="with this message">' in files
+    assert "Invoice 4521 [/file] Total 120 EUR" in files
+    assert files.count("</file>") == 2
+    mid = files[
+        files.index('<file name="mid.pdf">\n') + len('<file name="mid.pdf">\n') :
+    ]
+    mid = mid[: mid.index("\n</file>")]
+    assert mid == ("Clause 4 " + "y" * 3000)[:1500] + " …"
+    assert prompt.index("Files the visitor sent") < prompt.index("Message: I've")
+
+
+class _RecordingTools(FakeTools):
+    """A tool server that keeps what each call carried."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.arguments: list[dict] = []
+
+    async def call_tool(self, *, name, arguments=None, **kwargs):
+        self.arguments.append(dict(arguments or {}))
+        return await super().call_tool(name=name, **kwargs)
+
+
+async def test_a_hand_off_passes_the_files_with_the_transcript():
+    spec = {
+        "start": "ho",
+        "nodes": [
+            {
+                "id": "ho",
+                "type": "handoff",
+                "tool": "get_booking_status",
+                "reason": "help",
+                "message": "Passing you on.",
+            }
+        ],
+        "edges": [],
+    }
+    tools = _RecordingTools()
+    request = ChatRequest.model_validate(
+        {
+            **_request(spec).model_dump(),
+            "attachments": [{"name": "invoice.pdf", "text": "Total: 120 EUR"}],
+        }
+    )
+
+    await _run(spec, ScriptedModel(rounds=[], seen=[]), tools=tools, request=request)
+
+    sent = tools.arguments[-1]["transcript"]
+    assert sent.endswith('<file name="invoice.pdf">\nTotal: 120 EUR\n</file>')
+    assert "user: is my flight delayed?" in sent
 
 
 async def test_a_model_step_can_store_its_reply_for_a_later_step():

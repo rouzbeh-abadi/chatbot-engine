@@ -68,12 +68,19 @@ not normal use. Zero disables one.
 | `ENGINE_CHAT_RATE_LIMIT_PER_MINUTE` | 60 | `POST /chat` |
 | `ENGINE_EVAL_RATE_LIMIT_PER_HOUR` | 20 | `POST /judge`, `POST /eval/rag` |
 | `ENGINE_INGEST_RATE_LIMIT_PER_MINUTE` | 20 | `PUT /documents` |
+| `ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE` | 120 | `POST /extract` for a document; an image counts on the chat limit |
 
 Buckets live in the process's memory by default, so two replicas mean twice
 the effective limit. Set `ENGINE_REDIS_URL` and every replica charges one
 shared bucket per caller. The same applies to the vector store:
 `ENGINE_CHROMA_URL` moves it from embedded files to a shared Chroma server. See
 [DEPLOYMENT.md](../DEPLOYMENT.md#scaling-out).
+
+Two bounds on reading documents for `POST /extract` are not rate limits, and
+zero is not "off" for them (the engine refuses to start): `ENGINE_EXTRACT_TIMEOUT_S`
+(20) is how long one reading may take before it is refused, and
+`ENGINE_EXTRACT_CONCURRENCY` (2) how many may run at once, past which a reading
+is refused with `503` and `Retry-After`.
 
 Set `ENGINE_ENV=production` and the engine refuses to start without a key at
 all, rather than serving openly. See [DEPLOYMENT.md](../DEPLOYMENT.md).

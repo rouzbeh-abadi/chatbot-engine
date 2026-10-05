@@ -70,7 +70,7 @@ async def rerank(
         )
         if totals is not None:
             add_usage(totals, reply, utility=True)
-        order = _parse(str(reply.content), len(candidates))
+        order = _parse(reply.text, len(candidates))
     except Exception as exc:
         logger.warning("rerank failed, keeping fused order: %s", exc)
         return candidates

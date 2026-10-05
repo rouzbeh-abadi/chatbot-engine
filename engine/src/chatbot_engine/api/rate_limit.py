@@ -248,6 +248,13 @@ async def limit_ingest(caller: CallerDep, settings: SettingsDep) -> None:
     )
 
 
+async def limit_extract(caller: CallerDep, settings: SettingsDep) -> None:
+    """A document read for a chat: no provider call, but a stranger's file parsed."""
+    _limiter("extract", settings.extract_rate_limit_per_minute, 60.0, settings).check(
+        caller.name
+    )
+
+
 def reset_rate_limits() -> None:
     """Forget every limiter. For tests, and after a configuration change."""
     _LIMITERS.clear()

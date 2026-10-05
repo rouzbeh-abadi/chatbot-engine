@@ -93,10 +93,15 @@ class ExtractedText(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str
-    #: How many pages had text, for a format with pages (PDF); 0 otherwise.
+    #: How many pages the document has, for a format with pages (PDF), read
+    #: or not; 0 otherwise.
     pages: int = 0
     #: The length of `text`, so a caller can say how much was read.
     chars: int
+    #: Whether the reading stopped at the most an attachment carries
+    #: (60,000 characters), so `text` is the start of the document, not all
+    #: of it. Never set for an image.
+    truncated: bool = False
     #: For an image, read by a vision model into the text in it and what it
     #: shows; the model call's spend, for the caller to bill. Null for a
     #: document, whose reading calls no model.

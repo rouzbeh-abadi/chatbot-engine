@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.23
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.24
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -264,10 +264,10 @@ other agent, so the caller's UI needs nothing new.
 | --- | --- |
 | `retrieve` | searches the knowledge base; later model steps see the passages |
 | `model` | calls the assistant's model with the prompt, the conversation and the retrieved passages, streams the reply as the answer, and runs the tools it asks for, up to `max_tool_iterations` rounds (`tools: false` disables them; running out ends the turn with `tool_limit`); the reply is capped by `max_output_tokens`; `prompt` appends instructions for this step; `var` stores the reply in a variable instead of speaking it |
-| `condition` | asks the utility model (`ENGINE_UTILITY_MODEL`, temperature 0) one question about the message, expecting one of the branch labels, and follows that branch; the answer is matched exactly, then as a whole word, and the first label is the fallback. Every message starts the workflow again, so the model also reads the last six turns of the history (system and empty turns left out, each cut to its first 150 and last 350 characters), told to choose by the message and use them only to see what it replies to: a "yes", an email address or a code is routed by the question it answers. On the first message it reads the message alone |
+| `condition` | asks the utility model (`ENGINE_UTILITY_MODEL`, temperature 0) one question about the message, expecting one of the branch labels, and follows that branch; the answer is matched exactly, then as a whole word, and the first label is the fallback. Every message starts the workflow again, so the model also reads the last six turns of the history (system and empty turns left out, each cut to its first 150 and last 350 characters), told to choose by the message and use them only to see what it replies to: a "yes", an email address or a code is routed by the question it answers. On the first message it reads the message alone. It also reads the start of the newest two files the person sent (`attachments`, 1,500 characters each, since 0.1.24) and the retrieved passages |
 | `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the result text in `var`; reported as `tool_call_started` and `tool_call_finished` with the real duration. When the call fails or the tool is not offered right now (its server is down, or no longer has it), `on_error: "stop"` (the default) streams the assistant's `unavailable_message` and ends the turn, so steps that assume the call worked never run; `on_error: "continue"` goes on with `var` empty |
 | `reply` | streams a fixed, templated text as the answer |
-| `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with `reason` (templated, with a default) and the transcript through the same runner, so a ticket or an email can be raised and the call shows in the log |
+| `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with `reason` (templated, with a default) and the transcript (the history and the message as `role: content` lines, then the start of each file the person sent, 2,000 characters each, since 0.1.24) through the same runner, so a ticket or an email can be raised and the call shows in the log |
 | `ask` | pauses the turn to ask the visitor one thing (`input`: `text`, `phone`, `email`, `url`, or `choice` with `options` or `options_from` a variable holding a JSON list), and continues with the answer in `var` (and a choice's label in `<var>_label`); `optional` allows skipping, which leaves both empty. With `understand` (on by default) the reply is read first: an answer in other words keeps only the value, a visitor who declines goes to `on_decline` (or hears `decline_reply`), and a reply that does not answer is replied to and asked again up to `retries` times, then goes to `on_other`. See "Asking the visitor" below |
 | `end` | finishes the turn; the same as a node with no outgoing edge |
 
