@@ -31,6 +31,7 @@ from chatbot_engine.ports.documents import DocumentRegistry
 from chatbot_engine.rag import sparse
 from chatbot_engine.rag.splitter import ChunkStrategy, DocumentChunker
 from chatbot_engine.rag.vector_store import ChromaChunkStore
+from chatbot_engine.untrusted import instruction_warnings
 
 
 def doc_id_for(project_id: str, external_id: str) -> str:
@@ -255,7 +256,7 @@ class DocumentIngestPipeline:
                     doc_id=record.doc_id, data=data, mimetype=record.mimetype
                 )
 
-            chunks = await asyncio.to_thread(
+            chunks, warnings = await asyncio.to_thread(
                 self._split, extractor, data, record, chunker or self._chunker
             )
 
@@ -284,6 +285,7 @@ class DocumentIngestPipeline:
                 update={
                     "chunk_count": len(chunks),
                     "error": None,
+                    "warnings": warnings,
                     # `indexed` is earned by the vectors landing, not claimed.
                     "status": (
                         IngestStatus.INDEXED
@@ -300,8 +302,9 @@ class DocumentIngestPipeline:
         data: bytes,
         record: DocumentRecord,
         chunker: DocumentChunker | None = None,
-    ) -> list[Document]:
-        """Extract the text and split it, carrying the document's identity along.
+    ) -> tuple[list[Document], list[str]]:
+        """Extract the text and split it, carrying the document's identity along,
+        and say what in the text reads like orders to an AI (`warnings`).
 
         Both steps are synchronous and CPU-bound, so `ingest` runs this off the
         event loop: a slow PDF would otherwise stall every request in flight.
@@ -319,7 +322,7 @@ class DocumentIngestPipeline:
         # This metadata is copied onto every chunk, and is what a citation is
         # built from later. The chunker adds `start_index`, and -- depending on
         # the strategy -- the page number or the heading trail.
-        return (chunker or self._chunker).chunk(
+        chunks = (chunker or self._chunker).chunk(
             extracted,
             {
                 "doc_id": record.doc_id,
@@ -328,3 +331,4 @@ class DocumentIngestPipeline:
                 "filename": record.filename,
             },
         )
+        return chunks, instruction_warnings(extracted.text)

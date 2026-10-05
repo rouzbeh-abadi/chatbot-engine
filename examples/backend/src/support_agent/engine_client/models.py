@@ -337,6 +337,9 @@ class DocumentRecord(BaseModel):
     chunking_strategy: Literal["size", "headings", "page"] | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
+    #: What in the document reads like orders to an AI, found when it was last
+    #: indexed; empty before engine 0.1.25.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class DeleteResult(BaseModel):

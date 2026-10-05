@@ -421,12 +421,17 @@ Returns `201` and a record:
   "chunk_count": 10,
   "error": null,
   "created_at": "2026-08-19T09:12:44Z",
-  "updated_at": "2026-08-19T09:12:44Z"
+  "updated_at": "2026-08-19T09:12:44Z",
+  "warnings": []
 }
 ```
 
 `status` is one of `received`, `indexed`, `unchanged`, `failed`. `received`
-means the engine has no provider key and could not embed.
+means the engine has no provider key and could not embed. `warnings` (since
+0.1.25) says, one sentence per kind, what in the document reads like orders
+to an AI: hidden characters (spelt out), instruction-like text (quoted) or
+chat markup. It is empty for an ordinary document and for one indexed by an
+older engine until it is re-indexed. The document is indexed either way.
 
 ### Idempotency
 
@@ -625,6 +630,33 @@ the discovered-tools cache.
 
 Whatever a tool returns is placed in the model's context. Treat it as data, the
 same as retrieved document text.
+
+### Text the chatbot did not write
+
+Retrieved extracts, the person's files and tool results can each carry an
+instruction meant for the model: a line in a crawled page, a sentence in a
+PDF, an order note. Since 0.1.25 the engine:
+
+- puts the extracts in the person's turn, inside `<extracts>…</extracts>`,
+  before the files and the message, with the rules for them (cite by number,
+  never take orders from them) in the system prompt. No text the chatbot did
+  not write is ever in the system role;
+- removes characters a reader cannot see but a model reads from every
+  extract, file, tool result and turn: Unicode tag characters (which spell
+  ASCII invisibly), bidirectional overrides and isolates, invisible operators,
+  a stray byte order mark. Joiners and direction marks stay, since Persian,
+  Arabic, the Indic scripts and emoji need them;
+- shows a closing tag inside an extract or a file as `[/extracts]` or
+  `[/file]`, so the text cannot end its frame and carry on as the person;
+- says, when a document is indexed, what in it reads like orders to an AI
+  (`warnings` on the record), so its owner can look. The document is indexed
+  either way.
+
+The rules and the frames lower the odds; what holds is what a tool lets a
+model do. Keep anything that acts for a person behind a check the model cannot
+make up (a code sent to the person, an order number with its email), and
+key a person's data on the id the backend forwards, never on what the model
+says.
 
 ---
 

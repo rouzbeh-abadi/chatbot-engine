@@ -25,6 +25,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from chatbot_engine.agent.client import Totals, add_usage, build_chat_model
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.tracing import run_config
+from chatbot_engine.untrusted import visible
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +51,9 @@ async def rerank(
     if len(candidates) < 2:
         return candidates
 
+    # Passages are someone else's text: nothing a reader cannot see reaches the ranking model either.
     numbered = "\n\n".join(
-        f"[{index}]\n{document.page_content}"
+        f"[{index}]\n{visible(document.page_content)}"
         for index, document in enumerate(candidates, start=1)
     )
     # Imported here: `retriever` imports this module, and the config helper

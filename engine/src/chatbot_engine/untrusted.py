@@ -1,0 +1,128 @@
+"""Text the chatbot did not write: knowledge extracts, the person's files, tool results.
+
+Any of it may carry an instruction meant for the model (a prompt injection):
+a line in a crawled page, a sentence in an uploaded PDF, an order note in a
+shop. The prompts say such text is data, and the engine puts it where the
+model trusts it least, in the person's turn or a tool's result. Two more
+things are done here, before any of it reaches a model:
+
+- Characters a reader cannot see but a model reads are removed: the Unicode
+  tag characters (U+E0000 to U+E007F), which spell ASCII invisibly and are
+  the usual way to hide an instruction from a person; the bidirectional
+  embedding, override and isolate controls; the invisible operators; and a
+  byte order mark inside the text. Joiners and direction marks (U+200C to
+  U+200F) stay: Persian, Arabic and the Indic scripts need them, and so do
+  emoji.
+- A closing tag for the frame the text travels in is shown as `[/tag]`, so
+  the text cannot end its frame early and speak from outside it.
+
+And when a document is indexed, `instruction_warnings` says what in it reads
+like orders to an AI, so its owner can look. Nothing is refused for it: a
+help page about prompt injection is a fair document, and the warning is a
+cue to read, not a verdict.
+"""
+
+from __future__ import annotations
+
+import re
+
+#: Tag characters, bidirectional controls, invisible operators, a stray BOM.
+_INVISIBLE = re.compile("[\U000e0000-\U000e007f‪-‮⁡-⁤⁦-⁩﻿]")
+
+#: The tag characters that mirror printable ASCII: U+E0020 to U+E007E.
+_TAG_ASCII = re.compile("[\U000e0020-\U000e007e]+")
+
+
+def visible(text: str) -> str:
+    """`text` without the characters a reader cannot see."""
+    return _INVISIBLE.sub("", text)
+
+
+def closing_tag(tag: str) -> re.Pattern[str]:
+    """A closing tag for `tag`, however it is spelt or spaced; not the closer of
+    another element whose name only starts with `tag` (`</file-list>`)."""
+    return re.compile(rf"</\s*{re.escape(tag)}(?=[\s/>])[^>]*>", re.IGNORECASE)
+
+
+def framed(text: str, tag: str) -> str:
+    """`text` made safe to put inside `<tag>…</tag>`: nothing invisible, no closer."""
+    return closing_tag(tag).sub(f"[/{tag}]", visible(text))
+
+
+def label(name: str, fallback: str = "file") -> str:
+    """A name as a frame or a header may hold it: one line, nothing invisible,
+    nothing that could open or close a tag."""
+    return " ".join(re.sub(r'[<>"]', " ", visible(name)).split()) or fallback
+
+
+#: What reads like orders to an AI, by kind. Each pattern is narrow on
+#: purpose: a warning nobody believes is worse than none.
+_INSTRUCTIONS = re.compile(
+    r"\b(?:ignore|disregard|forget|override|bypass)\b[^.\n]{0,40}?"
+    r"\b(?:previous|prior|above|earlier|all|any|your|these|those|system)\b[^.\n]{0,30}?"
+    r"\b(?:instructions?|rules|prompts?|guidelines|directions)\b"
+    r"|\b(?:new|updated|real|actual)\s+(?:system\s+)?instructions?\s*:"
+    r"|\byou\s+are\s+now\s+(?:a|an|the|in|no\s+longer)\b"
+    r"|\b(?:reveal|print|repeat|show|output|disclose)\b[^.\n]{0,30}?"
+    r"\b(?:system\s+prompt|your\s+(?:instructions|prompt|rules))\b"
+    r"|\bdo\s+not\s+(?:tell|inform|mention\s+(?:this\s+)?to|reveal\s+(?:this\s+)?to)\s+(?:the\s+)?(?:user|visitor|customer|human)\b",
+    re.IGNORECASE,
+)
+
+#: Chat markup that imitates a model's roles.
+_ROLE_MARKUP = re.compile(
+    r"<\|(?:im_start|im_end|system|assistant|user|endoftext)\|>|\[/?INST\]|<<SYS>>",
+    re.IGNORECASE,
+)
+
+
+def _excerpt(text: str, start: int, end: int, *, width: int = 100) -> str:
+    """The match with a little around it, on one line, at most `width` characters."""
+    left = max(0, start - 30)
+    snippet = " ".join(visible(text[left : end + 50]).split())
+    if len(snippet) > width:
+        snippet = snippet[: width - 1].rstrip() + "…"
+    return ("…" if left else "") + snippet
+
+
+def _places(count: int) -> str:
+    return "" if count == 1 else f" ({count} places)"
+
+
+def instruction_warnings(text: str) -> list[str]:
+    """What in `text` reads like orders to an AI, one sentence per kind, for
+    the document's owner. Empty for an ordinary document."""
+    warnings: list[str] = []
+
+    hidden = _TAG_ASCII.findall(text)
+    if hidden:
+        # Each tag character is its ASCII twin moved up by 0xE0000.
+        spelt = " ".join(
+            " ".join(
+                "".join(chr(ord(c) - 0xE0000) for c in run) for run in hidden
+            ).split()
+        )
+        shown = spelt if len(spelt) <= 100 else spelt[:99].rstrip() + "…"
+        warnings.append(
+            f"Hidden characters that a reader cannot see spell out: “{shown}”{_places(len(hidden))}"
+        )
+    elif _INVISIBLE.search(text):
+        warnings.append(
+            "Hidden control characters that can change or hide how text reads"
+        )
+
+    clean = visible(text)
+    found = list(_INSTRUCTIONS.finditer(clean))
+    if found:
+        first = found[0]
+        warnings.append(
+            f"Text that reads like instructions to an AI: “{_excerpt(clean, first.start(), first.end())}”{_places(len(found))}"
+        )
+
+    markup = list(_ROLE_MARKUP.finditer(text))
+    if markup:
+        warnings.append(
+            f"Chat markup that imitates an AI's roles: “{markup[0].group(0)}”{_places(len(markup))}"
+        )
+
+    return warnings

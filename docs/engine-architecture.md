@@ -70,7 +70,9 @@ flowchart LR
 5. **`agent/retriever.py`** performs retrieval: rewrite the query, search the
    vector store and, under `hybrid`, the keyword index in `rag/sparse.py`,
    fuse the rankings, rerank with the model when enabled, and return the hits
-   and the numbered context. See [retrieval.md](retrieval.md).
+   and the numbered context, each extract cleaned of what a reader cannot see
+   and unable to close its frame (`untrusted.py`). The extracts travel in the
+   person's turn, never the system role. See [retrieval.md](retrieval.md).
 6. **`agent/client.py`** runs the model-and-tool loop: discover the MCP tools,
    call the model, execute any requested tool through the `ToolProvider`, return
    the result to the model, and repeat until it produces a final answer or the

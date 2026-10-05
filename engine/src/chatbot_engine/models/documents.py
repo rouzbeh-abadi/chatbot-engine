@@ -50,6 +50,12 @@ class DocumentRecord(BaseModel):
     chunking_strategy: ChunkStrategy | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
+    #: What in the document reads like orders to an AI, one sentence per kind
+    #: (`chatbot_engine.untrusted.instruction_warnings`), found when it was
+    #: last indexed: hidden characters, instruction-like text, chat markup.
+    #: The text is still indexed and reaches the model as data; this is for
+    #: its owner to look at. Empty for a document indexed before 0.1.25.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ReindexRequest(BaseModel):

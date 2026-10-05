@@ -82,6 +82,7 @@ from chatbot_engine.models.workflow import (
 from chatbot_engine.ports.agent import ToolProvider
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
+from chatbot_engine.untrusted import visible
 from langgraph_agent.pauses import Pause, Pauses, spec_hash
 from langgraph_agent.runner import run_graph
 
@@ -159,7 +160,7 @@ def condition_prompt(question: str, request: ChatRequest, context: str) -> str:
     )
     label = "Latest message" if recent else "Message"
     return (
-        f"{question}\n\n{conversation}{files}{label}: {request.message}\n\n"
+        f"{question}\n\n{visible(conversation)}{files}{label}: {visible(request.message)}\n\n"
         f"Context:\n{context[:4000]}"
     )
 
@@ -863,7 +864,7 @@ class WorkflowAgent:
                     content=f"The question: {question}\nIt asks for {asks_for}"
                     + ("" if node.input == "choice" else ".")
                     + skip
-                    + f"\n\nThe visitor's reply:\n{raw[:1000]}"
+                    + f"\n\nThe visitor's reply:\n{visible(raw[:1000])}"
                 ),
             ]
             reply: AIMessageChunk | None = None

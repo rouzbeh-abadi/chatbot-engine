@@ -44,6 +44,7 @@ from chatbot_engine.rag.rerank import rerank
 from chatbot_engine.rag.vector_store import open_vector_store
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
+from chatbot_engine.untrusted import framed, label
 
 #: A retrieved chunk and its score: 1.0 is the best match in the result set.
 Hit = tuple[Document, float]
@@ -325,10 +326,14 @@ def to_context(hits: list[Hit]) -> str:
     """Number the chunks, so the model can cite one by number.
 
     The numbers line up with the order of `to_source_refs`, which is what lets
-    the UI turn a `[2]` in the answer into a chip naming the file.
+    the UI turn a `[2]` in the answer into a chip naming the file. Each
+    chunk is someone else's text, made safe to sit inside `<extracts>`:
+    nothing invisible, and a closer shown as `[/extracts]`, so a page cannot
+    end the extracts and go on as if it were the person or the system
+    (`chatbot_engine.untrusted`). Its source is one line with no tag in it.
     """
     return "\n\n".join(
-        f"[{index}] {chunk.metadata.get('source', 'unknown')}\n{chunk.page_content}"
+        f"[{index}] {label(str(chunk.metadata.get('source', 'unknown')), 'unknown')}\n{framed(chunk.page_content, 'extracts')}"
         for index, (chunk, _) in enumerate(hits, start=1)
     )
 

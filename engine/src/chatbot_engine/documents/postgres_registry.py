@@ -11,6 +11,7 @@ this registry never sees. The `postgres` extra provides the driver.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from datetime import datetime
 
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     chunking_strategy TEXT,
     chunk_size        INTEGER,
     chunk_overlap     INTEGER,
+    warnings          TEXT,
     PRIMARY KEY (project_id, doc_id)
 )
 """
@@ -43,7 +45,7 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
 _COLUMNS = (
     "project_id, doc_id, external_id, filename, mimetype, size_bytes, "
     "content_hash, status, chunk_count, error, created_at, updated_at, "
-    "chunking_strategy, chunk_size, chunk_overlap"
+    "chunking_strategy, chunk_size, chunk_overlap, warnings"
 )
 
 #: Columns added after the table first shipped, added in place on start so an
@@ -52,11 +54,12 @@ _ADDED = (
     ("chunking_strategy", "TEXT"),
     ("chunk_size", "INTEGER"),
     ("chunk_overlap", "INTEGER"),
+    ("warnings", "TEXT"),
 )
 
 _UPSERT = f"""
 INSERT INTO {TABLE} ({_COLUMNS})
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (project_id, doc_id) DO UPDATE SET
     external_id = EXCLUDED.external_id,
     filename = EXCLUDED.filename,
@@ -70,7 +73,8 @@ ON CONFLICT (project_id, doc_id) DO UPDATE SET
     updated_at = EXCLUDED.updated_at,
     chunking_strategy = EXCLUDED.chunking_strategy,
     chunk_size = EXCLUDED.chunk_size,
-    chunk_overlap = EXCLUDED.chunk_overlap
+    chunk_overlap = EXCLUDED.chunk_overlap,
+    warnings = EXCLUDED.warnings
 """
 
 
@@ -91,6 +95,7 @@ def _to_row(record: DocumentRecord) -> tuple[object, ...]:
         record.chunking_strategy,
         record.chunk_size,
         record.chunk_overlap,
+        json.dumps(record.warnings) if record.warnings else None,
     )
 
 
@@ -98,7 +103,7 @@ def _to_record(row: tuple) -> DocumentRecord:
     (
         project_id, doc_id, external_id, filename, mimetype, size_bytes,
         content_hash, status, chunk_count, error, created_at, updated_at,
-        chunking_strategy, chunk_size, chunk_overlap,
+        chunking_strategy, chunk_size, chunk_overlap, warnings,
     ) = row  # fmt: skip
     return DocumentRecord(
         project_id=project_id,
@@ -116,6 +121,7 @@ def _to_record(row: tuple) -> DocumentRecord:
         chunking_strategy=chunking_strategy,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
+        warnings=json.loads(warnings) if warnings else [],
     )
 
 
