@@ -9,12 +9,19 @@ things are done here, before any of it reaches a model:
 - Characters a reader cannot see but a model reads are removed: the Unicode
   tag characters (U+E0000 to U+E007F), which spell ASCII invisibly and are
   the usual way to hide an instruction from a person; the bidirectional
-  embedding, override and isolate controls; the invisible operators; and a
-  byte order mark inside the text. Joiners and direction marks (U+200C to
-  U+200F) stay: Persian, Arabic and the Indic scripts need them, and so do
-  emoji.
+  embedding, override and isolate controls; the zero-width space, the word
+  joiner and the invisible operators; the variation selectors (U+FE00 to
+  U+FE0F, U+E0100 to U+E01EF), which can carry bytes hidden behind an emoji;
+  and a byte order mark inside the text. Joiners and direction marks (U+200C
+  to U+200F) stay: Persian, Arabic and the Indic scripts need them, and so do
+  emoji. An emoji that loses its presentation selector still reads the same.
 - A closing tag for the frame the text travels in is shown as `[/tag]`, so
-  the text cannot end its frame early and speak from outside it.
+  the text cannot end its frame early and speak from outside it, however it
+  is spelt: in either case, spaced, with the fullwidth less-than or
+  greater-than sign (U+FF1C, U+FF1E), or with a slash that only looks like
+  one.
+- A line that starts the way a numbered extract does (`[3] other.md`) gets a
+  backslash in front (`unnumbered`), so it cannot pass for another extract.
 
 And when a document is indexed, `instruction_warnings` says what in it reads
 like orders to an AI, so its owner can look. Nothing is refused for it: a
@@ -26,11 +33,35 @@ from __future__ import annotations
 
 import re
 
-#: Tag characters, bidirectional controls, invisible operators, a stray BOM.
-_INVISIBLE = re.compile("[\U000e0000-\U000e007f‪-‮⁡-⁤⁦-⁩﻿]")
+#: Tag characters, the zero-width space, bidirectional controls, the word
+#: joiner and invisible operators, variation selectors, a stray BOM.
+_INVISIBLE = re.compile(
+    "[\U000e0000-\U000e007f\u200b\u202a-\u202e\u2060-\u2064\u2066-\u2069"
+    "\ufe00-\ufe0f\ufeff\U000e0100-\U000e01ef]"
+)
+
+#: What the owner is warned about: the invisible characters that hide or
+#: reorder text, and a run of variation selectors, the way bytes are hidden
+#: behind an emoji. One selector after an emoji, a zero-width space or a word
+#: joiner is ordinary in text copied from the web, and is only removed.
+_HIDING = re.compile(
+    "[\U000e0000-\U000e007f\u202a-\u202e\u2061-\u2064\u2066-\u2069\ufeff]"
+    "|[\ufe00-\ufe0f\U000e0100-\U000e01ef]{2,}"
+)
 
 #: The tag characters that mirror printable ASCII: U+E0020 to U+E007E.
 _TAG_ASCII = re.compile("[\U000e0020-\U000e007e]+")
+
+#: What a tag can open with besides `<`: the fullwidth less-than sign.
+_OPENERS = "<\uff1c"
+#: What a closing tag's slash can be besides `/`: the fullwidth solidus, the
+#: fraction slash, the division slash and the big solidus.
+_SLASHES = "/\uff0f\u2044\u2215\u29f8"
+#: What a tag can end with besides `>`: the fullwidth greater-than sign.
+_CLOSERS = ">\uff1e"
+
+#: A line that starts the way a numbered extract does: `[3]`.
+_NUMBERED_LINE = re.compile(r"^([ \t]*)\[(\d+)\]", re.MULTILINE)
 
 
 def visible(text: str) -> str:
@@ -39,9 +70,15 @@ def visible(text: str) -> str:
 
 
 def closing_tag(tag: str) -> re.Pattern[str]:
-    """A closing tag for `tag`, however it is spelt or spaced; not the closer of
-    another element whose name only starts with `tag` (`</file-list>`)."""
-    return re.compile(rf"</\s*{re.escape(tag)}(?=[\s/>])[^>]*>", re.IGNORECASE)
+    """A closing tag for `tag`, however it is spelt or spaced, or written with
+    a fullwidth angle bracket or a slash that only looks like one; not the
+    closer of another element whose name only starts with `tag`
+    (`</file-list>`)."""
+    return re.compile(
+        rf"[{_OPENERS}][{_SLASHES}]\s*{re.escape(tag)}"
+        rf"(?=[\s{_SLASHES}{_CLOSERS}])[^{_CLOSERS}]*[{_CLOSERS}]",
+        re.IGNORECASE,
+    )
 
 
 def framed(text: str, tag: str) -> str:
@@ -52,7 +89,22 @@ def framed(text: str, tag: str) -> str:
 def label(name: str, fallback: str = "file") -> str:
     """A name as a frame or a header may hold it: one line, nothing invisible,
     nothing that could open or close a tag."""
-    return " ".join(re.sub(r'[<>"]', " ", visible(name)).split()) or fallback
+    return (
+        " ".join(re.sub(rf'[{_OPENERS}{_CLOSERS}"]', " ", visible(name)).split())
+        or fallback
+    )
+
+
+def unnumbered(text: str) -> str:
+    """`text` with a backslash before each line that starts like a numbered
+    extract (`[3] other.md` becomes `\\[3] other.md`).
+
+    Extracts reach the model numbered, one header line each, and the model
+    cites them by number. A line in a chunk that started the same way could
+    pass the chunk's text off as another extract, or name a source nothing
+    retrieved; escaped, it reads as what it is, a line of the chunk.
+    """
+    return _NUMBERED_LINE.sub(r"\1\\[\2]", text)
 
 
 #: What reads like orders to an AI, by kind. Each pattern is narrow on
@@ -106,7 +158,7 @@ def instruction_warnings(text: str) -> list[str]:
         warnings.append(
             f"Hidden characters that a reader cannot see spell out: “{shown}”{_places(len(hidden))}"
         )
-    elif _INVISIBLE.search(text):
+    elif _HIDING.search(text):
         warnings.append(
             "Hidden control characters that can change or hide how text reads"
         )

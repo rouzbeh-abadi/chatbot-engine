@@ -9,18 +9,31 @@ exists for, and the fake makes it observable without a provider.
 
 from __future__ import annotations
 
+import asyncio
+import threading
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
 
 from chatbot_engine.agent import retriever
-from chatbot_engine.agent.retriever import KEYWORD_FUSED, _fuse, _fuse_hybrid, retrieve
-from chatbot_engine.models.chat import AssistantConfig, ChatRequest
+from chatbot_engine.agent.retriever import (
+    KEYWORD_FUSED,
+    MAX_QUERIES,
+    REWRITE_MAX_TOKENS,
+    _fuse,
+    _fuse_hybrid,
+    retrieve,
+    retrieve_with_usage,
+    rewrite_queries,
+)
+from chatbot_engine.models.chat import AssistantConfig, ChatRequest, Message
 from chatbot_engine.rag import rerank as rerank_module
 from chatbot_engine.rag import sparse
+from chatbot_engine.rag.vector_store import open_vector_store
 
 CHUNKS = {
     "fares.md": "The Basic fare is non-refundable. Flexible fares can be refunded in full.",
@@ -72,7 +85,6 @@ async def test_hybrid_finds_the_chunk_that_names_the_term(client: TestClient) ->
 
     assert _sources(hits)[0] == "fares.md"
     assert all(0.0 <= score <= 1.0 for _, score in hits)
-    assert hits[0][1] == 1.0, "the best chunk scores 1.0 whatever produced it"
 
 
 async def test_vector_mode_is_untouched_by_keywords(client: TestClient) -> None:
@@ -196,6 +208,103 @@ async def test_the_keyword_index_sees_a_document_ingested_after_it_was_built(
     assert _sources(later)[0] == "promo.md"
 
 
+async def test_the_keyword_index_is_built_and_searched_off_the_event_loop(
+    client: TestClient,
+) -> None:
+    """Both read or score every chunk of the project: on the event loop they
+    would hold up every other request in flight."""
+    _seed(client)
+    threads: list[threading.Thread] = []
+    build = sparse.sparse_index
+    search = sparse.SparseIndex.search
+
+    def building(store, project_id):
+        threads.append(threading.current_thread())
+        return build(store, project_id)
+
+    def searching(self, query, k):
+        threads.append(threading.current_thread())
+        return search(self, query, k)
+
+    with (
+        patch.object(sparse, "sparse_index", building),
+        patch.object(sparse.SparseIndex, "search", searching),
+    ):
+        await retrieve(_request(retrieval="hybrid"))
+
+    assert len(threads) == 2
+    assert threading.main_thread() not in threads
+
+
+async def test_a_search_within_the_interval_reads_nothing_from_the_collection(
+    client: TestClient,
+) -> None:
+    """The index used to list every chunk id of the project on every query to
+    see whether it had changed. Within its interval it is now trusted, and
+    an ingest or a delete in this process drops it at once."""
+    _seed(client)
+    await retrieve(_request(retrieval="hybrid"))
+
+    with patch.object(Chroma, "get", side_effect=AssertionError("read the chunks")):
+        hits = await retrieve(_request(retrieval="hybrid"))
+
+    assert _sources(hits)[0] == "fares.md"
+
+
+async def test_the_index_is_built_again_once_its_interval_has_passed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """How another replica's upload reaches this one."""
+    _seed(client)
+    builds: list[str] = []
+    build = sparse._build
+
+    def counting(store, project_id, now):
+        builds.append(project_id)
+        return build(store, project_id, now)
+
+    monkeypatch.setattr(sparse, "_build", counting)
+    await retrieve(_request(retrieval="hybrid"))
+    await retrieve(_request(retrieval="hybrid"))
+    assert builds == ["support"]
+
+    monkeypatch.setattr(sparse, "INDEX_TTL_S", 0.0)
+    await retrieve(_request(retrieval="hybrid"))
+    assert builds == ["support", "support"]
+
+
+def test_only_so_many_indexes_are_kept_the_least_recently_searched_dropped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sparse, "MAX_INDEXES", 2)
+    sparse.invalidate()
+    store = open_vector_store()
+
+    for project in ("a", "b", "a", "c"):
+        sparse.sparse_index(store, project)
+
+    assert [project for _, project in sparse._indexes] == ["a", "c"]
+
+
+def test_an_index_built_across_an_invalidation_is_not_kept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Built from the chunks before an ingest that finished meanwhile, it
+    would answer from the old version for the rest of its interval."""
+    sparse.invalidate()
+    build = sparse._build
+
+    def racing(store, project_id, now):
+        index = build(store, project_id, now)
+        sparse.invalidate(project_id)
+        return index
+
+    monkeypatch.setattr(sparse, "_build", racing)
+    sparse.sparse_index(open_vector_store(), "support")
+
+    assert not sparse._indexes
+
+
 async def test_the_keyword_index_forgets_a_deleted_document(client: TestClient) -> None:
     _seed(client)
     fares = next(
@@ -275,6 +384,23 @@ async def test_a_failing_rerank_call_keeps_the_fused_order(client: TestClient) -
         with_rerank = await retrieve(_request(retrieval="hybrid", rerank=True))
 
     assert _sources(with_rerank) == _sources(without)
+
+
+async def test_the_rerank_judges_against_every_query(client: TestClient) -> None:
+    """Not the first query alone: a message that asks two things is two
+    queries, and a passage that answers the second is as relevant."""
+    _seed(client)
+    model = _Reranker('{"ranking": [1]}')
+
+    with patch.object(rerank_module, "build_chat_model", return_value=model):
+        await retrieve_with_usage(
+            _request(retrieval="hybrid", rerank=True),
+            queries=["is the Basic fare refundable", "how heavy can a cabin bag be"],
+        )
+
+    assert model.prompts[0].startswith(
+        "Question: is the Basic fare refundable\nhow heavy can a cabin bag be\n"
+    )
 
 
 def test_the_ranking_parser_tolerates_prose_and_repairs_omissions() -> None:
@@ -392,6 +518,64 @@ async def test_retrieval_usage_reaches_the_usage_event() -> None:
     )
 
 
+def _follow_up() -> ChatRequest:
+    return _request().model_copy(
+        update={"history": [Message(role="user", content="hello")]}
+    )
+
+
+async def test_a_rewrite_becomes_at_most_a_few_distinct_queries() -> None:
+    """A model that does not stop would otherwise turn one message into a
+    search, and an embedding call, per line."""
+    reply = _Utility("basic fare\ncabin bag\nbasic fare\nseats\ncheck-in\npets\nwifi")
+
+    with patch.object(retriever, "build_chat_model", return_value=reply) as built:
+        queries = await rewrite_queries(_follow_up())
+
+    assert queries == ["basic fare", "cabin bag", "seats", "check-in"]
+    assert len(queries) == MAX_QUERIES
+    assert built.call_args.args[0].max_output_tokens == REWRITE_MAX_TOKENS
+
+
+async def test_a_rewrite_cut_off_by_its_cap_drops_the_unfinished_line() -> None:
+    class Cut:
+        async def ainvoke(self, messages, config=None):
+            return AIMessage(
+                content="basic fare\ncabin bag weig",
+                response_metadata={"finish_reason": "length"},
+            )
+
+    with patch.object(retriever, "build_chat_model", return_value=Cut()):
+        assert await rewrite_queries(_follow_up()) == ["basic fare"]
+
+
+async def test_the_queries_are_searched_at_once(client: TestClient) -> None:
+    """Each is an embedding call and a search; the turn waits for the
+    slowest, not for their sum."""
+    _seed(client)
+    running = 0
+    most = 0
+    dense = retriever._dense
+
+    async def slow(store, project_id, query, k):
+        nonlocal running, most
+        running += 1
+        most = max(most, running)
+        await asyncio.sleep(0.05)
+        try:
+            return await dense(store, project_id, query, k)
+        finally:
+            running -= 1
+
+    with patch.object(retriever, "_dense", slow):
+        await retrieve_with_usage(
+            _request(retrieval="hybrid"),
+            queries=["basic fare", "cabin bag", "check-in"],
+        )
+
+    assert most == 3
+
+
 def test_the_utility_model_replaces_the_assistants_for_the_small_calls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -493,3 +677,57 @@ async def test_without_a_minimum_every_chunk_is_kept_as_before(
         hits = await retrieve(_request(retrieval="vector", top_k=4))
 
     assert len(hits) == 4
+
+
+# --- the score a hit is cited with ----------------------------------------------
+
+
+async def test_a_hit_is_cited_with_its_similarity_not_its_place(
+    client: TestClient,
+) -> None:
+    """Fusion orders by rank, and its best chunk always scored 1.0, which read
+    as full confidence in whatever came first. The order stays the fused one;
+    the score is how close the chunk is to the question."""
+    _seed(client)
+
+    with _scored(**{"baggage.md": 0.62, "fares.md": 0.31}):
+        hits = await retrieve(_request(retrieval="hybrid", top_k=4))
+
+    cited = dict(zip(_sources(hits), (score for _, score in hits), strict=True))
+    assert cited == {
+        "baggage.md": 0.62,
+        "fares.md": 0.31,
+        "checkin.md": 0.1,
+        "seats.md": 0.1,
+    }
+
+
+async def test_a_chunk_only_the_keyword_search_found_is_cited_with_zero(
+    client: TestClient,
+) -> None:
+    """It has no vector score to cite."""
+    _seed(client)
+
+    async def baggage_only(store, project_id, query, k):
+        found = Document(
+            page_content=CHUNKS["baggage.md"], metadata={"source": "baggage.md"}
+        )
+        return [(found, 0.6)]
+
+    with patch.object(retriever, "_dense", baggage_only):
+        hits = await retrieve(_request(retrieval="hybrid", top_k=4))
+
+    cited = dict(zip(_sources(hits), (score for _, score in hits), strict=True))
+    assert cited.pop("baggage.md") == 0.6
+    assert "fares.md" in cited, "the keyword search's best match"
+    assert set(cited.values()) == {0.0}
+
+
+def test_the_similarity_is_the_cosine_for_vectors_of_unit_length() -> None:
+    """Chroma's default space is squared L2: 2 - 2cos for unit vectors."""
+    from chatbot_engine.agent.retriever import _similarity
+
+    assert _similarity(0.0) == 1.0
+    assert _similarity(1.0) == 0.5, "cos 0.5 is a squared distance of 1"
+    assert _similarity(2.0) == 0.0, "orthogonal"
+    assert _similarity(4.0) == 0.0, "opposite, floored at zero"

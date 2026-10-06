@@ -337,6 +337,9 @@ class DocumentRecord(BaseModel):
     chunking_strategy: Literal["size", "headings", "page"] | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
+    #: The embedding model the document's vectors were made with; null when
+    #: nothing was embedded, and before engine 0.1.26.
+    embedding_model: str | None = None
     #: What in the document reads like orders to an AI, found when it was last
     #: indexed; empty before engine 0.1.25.
     warnings: list[str] = Field(default_factory=list)

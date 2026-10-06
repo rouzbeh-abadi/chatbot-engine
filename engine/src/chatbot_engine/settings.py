@@ -87,6 +87,24 @@ class Settings(BaseSettings):
     #: (503) rather than queued, so files cannot fill the box.
     extract_concurrency: int = Field(default=2, ge=1)
 
+    # --- reading documents for the index ------------------------------------
+    #: Bounds on reading an uploaded document into the knowledge base, apart
+    #: from a chat file's: a knowledge document is read once and may run to
+    #: hundreds of pages. Zero is not "off" for either, so neither may be.
+
+    #: How long reading one document for the index may take before its
+    #: process is killed and the document refused, with the reason on its
+    #: record. Longer than a chat file's, and well inside the time a caller
+    #: waits for the whole upload, embedding included.
+    index_read_timeout_s: float = Field(default=60, gt=0)
+
+    #: The most text one document may give the index, in characters: about
+    #: six hundred pages of dense prose. A longer document is refused rather
+    #: than indexed in part, since the part left out would look indexed and
+    #: answer nothing; reading stops here, so a file made to inflate costs no
+    #: more than this.
+    index_max_chars: int = Field(default=2_000_000, gt=0)
+
     # --- the model provider -------------------------------------------------
 
     #: Checked where the client is built, so an engine that only ingests
@@ -97,14 +115,23 @@ class Settings(BaseSettings):
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
 
     #: How many times a provider call is retried on a transient failure (a
-    #: 429, a 5xx, a dropped connection), with exponential backoff between
-    #: attempts. Applies to the request, and to a stream that breaks before
-    #: its first token. A stream that fails after its first token is not
-    #: retried, because the tokens already sent cannot be taken back.
+    #: 429, a 5xx, a dropped connection, an error the provider sends inside
+    #: the stream), with exponential backoff between attempts. A streamed
+    #: call is retried in one place only, `stream_reply`, and only while no
+    #: text has reached the caller: the tokens already sent cannot be taken
+    #: back. A call that is not streamed (the query rewrite, the rerank, the
+    #: judge) is retried by the provider client.
     provider_max_retries: int = 3
 
     #: Seconds to wait for a provider before giving up on one attempt.
     provider_timeout_s: float = 60.0
+
+    #: The longest one chat turn may take, retrieval, model calls, retries
+    #: and tool calls together. Past it the turn stops where it is and ends
+    #: with the assistant's `unavailable_message`, so a provider that keeps
+    #: failing, or a tool server that keeps the turn waiting, cannot hold a
+    #: request open for minutes.
+    turn_deadline_s: float = Field(default=120.0, gt=0)
 
     #: Used when the backend sends no `model` in `AssistantConfig`.
     chat_model: str = "openai/gpt-5-mini"
@@ -229,6 +256,32 @@ class Settings(BaseSettings):
     #: Seconds to wait on an MCP server before giving up.
     mcp_timeout_s: float = 30.0
 
+    #: The most characters of one tool result the model reads. A result is
+    #: sent back with every later model call of the turn, so a tool that
+    #: answers with a whole database table would be paid for again each
+    #: round; past this the result is cut, with a line saying how much was
+    #: left out. A workflow's Tool Call step keeps the whole result in its
+    #: variable, and the variable is cut the same way in a step's prompt.
+    tool_result_chars: int = Field(default=20_000, ge=1_000)
+
+    #: The most characters one model call's prompt may hold: the system
+    #: prompt, the history, the extracts, the files, the message and the
+    #: turn's own tool results. Over it, the oldest turns of the history are
+    #: left out first, as many as it takes; when no history at all is still
+    #: too much, the last extracts go, then each file is cut to an even
+    #: share. The system prompt and the message are never cut. The default is
+    #: about 100,000 tokens of English text, where the request schema alone
+    #: would allow millions of characters; lower it for a model with a
+    #: smaller context window.
+    prompt_chars: int = Field(default=400_000, ge=10_000)
+
+    #: The largest request body a JSON route reads, in bytes. A body is
+    #: refused with 413 before it is read when its `Content-Length` says it
+    #: is larger, and as soon as it grows past this when it arrives in
+    #: chunks. The default fits the largest chat request the schema accepts.
+    #: Uploads (`PUT /documents`, `POST /extract`) have their own limit.
+    max_body_bytes: int = Field(default=8 * 1024 * 1024, ge=1024)
+
     #: How long a server's tool list is reused before it is asked again. Every
     #: turn needs the list, and a graph agent asks for it at every step, so
     #: without a cache each answer opens a connection per server just to learn
@@ -242,9 +295,16 @@ class Settings(BaseSettings):
     #: indexes fields. Either way every line carries the request id.
     log_format: Literal["text", "json"] = "text"
 
-    #: Whether `GET /metrics` is served. On by default; it is unauthenticated
-    #: and carries counts, not content.
+    #: Whether `GET /metrics` is served. On by default; it carries counts,
+    #: not content.
     metrics_enabled: bool = True
+
+    #: Whether `GET /metrics` is served without the API key. Unset, it is
+    #: open locally and behind the key under `ENGINE_ENV=production`, since
+    #: its counts name the callers and the models; a scraper then sends
+    #: `X-API-Key` like any other caller. True opens it in production too,
+    #: for a scraper on a private network that cannot send a header.
+    metrics_public: bool | None = None
 
     #: Where every model call of a turn is recorded. `langsmith` uses
     #: LangChain's tracer and its `LANGCHAIN_*` environment (the two settings

@@ -50,6 +50,12 @@ class DocumentRecord(BaseModel):
     chunking_strategy: ChunkStrategy | None = None
     chunk_size: int | None = None
     chunk_overlap: int | None = None
+    #: The embedding model the document's vectors were made with, after the
+    #: engine's default filled in a request that named none. Identical bytes
+    #: sent with another model are embedded again rather than answered
+    #: `unchanged`. Null when nothing was embedded (a `received` document, for
+    #: one) and for a document indexed before 0.1.26, which did not record it.
+    embedding_model: str | None = None
     #: What in the document reads like orders to an AI, one sentence per kind
     #: (`chatbot_engine.untrusted.instruction_warnings`), found when it was
     #: last indexed: hidden characters, instruction-like text, chat markup.

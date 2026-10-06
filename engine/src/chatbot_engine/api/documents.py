@@ -135,7 +135,9 @@ async def delete_document(
     """Remove a document.
 
     Removes the chunks, the stored file and the registry row together: a partial
-    delete would leave orphaned vectors that still surface in retrieval.
+    delete would leave orphaned vectors that still surface in retrieval. Only
+    a document `project_id` has: another project's, whatever its id, is not
+    found, and the answer is `deleted: false` with nothing touched.
     """
     deleted = await service.delete(project_id=project_id, doc_id=doc_id)
     return DeleteResult(doc_id=doc_id, deleted=deleted)

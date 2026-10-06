@@ -9,9 +9,18 @@ Every strategy ends with the same size cap. Splitting on structure alone leaves
 whatever the author wrote -- a forty-page chapter is one "chunk" -- which
 embeds badly and drowns the answer in irrelevant text. Structure decides the
 boundaries; the size cap keeps the pieces usable.
+
+A Markdown heading is never a chunk on its own. Cut off from its text (as one
+followed by a paragraph longer than the size cap is), it carries a title and
+nothing else, takes a place among the chunks a question retrieves, and is
+cited with nothing to show, while the text it introduces loses its title. Such
+a heading goes to the start of what follows it instead.
 """
 
 from __future__ import annotations
+
+import re
+from itertools import pairwise
 
 from langchain_core.documents import Document
 from langchain_text_splitters import (
@@ -46,6 +55,64 @@ class ChunkingError(ValueError):
 #: The heading levels `headings` splits on. Deeper levels stay inside the
 #: section: splitting on every `####` would produce chunks of a sentence or two.
 _HEADERS = [("#", "h1"), ("##", "h2"), ("###", "h3")]
+
+#: A Markdown heading line at any level: up to three spaces, one to six `#`,
+#: then its title or nothing. The trailing spaces the header splitter leaves at
+#: the end of a line are allowed.
+_HEADING_LINE = re.compile(r" {0,3}#{1,6}(?:[ \t].*)?")
+
+
+def _only_headings(text: str) -> bool:
+    """Whether every line of `text` that holds anything is a heading."""
+    lines = [line for line in text.splitlines() if line.strip()]
+    return bool(lines) and all(_HEADING_LINE.fullmatch(line) for line in lines)
+
+
+def _fold_headings(pieces: list[Document], text: str) -> list[Document]:
+    """`pieces`, cut from `text` in order, with each run of pieces that are
+    only headings joined to the start of the piece after it.
+
+    The joined piece starts where the heading did and may run a heading's
+    length past the size cap. A heading with nothing after it joins the piece
+    before it instead, and a text of nothing but headings keeps them as cut.
+    """
+    folded: list[Document] = []
+    waiting: list[Document] = []
+    for piece in pieces:
+        if _only_headings(piece.page_content):
+            waiting.append(piece)
+            continue
+        folded.append(_joined([*waiting, piece], text) if waiting else piece)
+        waiting = []
+
+    if waiting and folded:
+        folded[-1] = _joined([folded[-1], *waiting], text)
+    elif waiting:
+        folded = waiting
+
+    return folded
+
+
+def _joined(pieces: list[Document], text: str) -> Document:
+    """Consecutive pieces of `text` as one, with the first one's metadata."""
+    parts = [pieces[0].page_content]
+    for before, after in pairwise(pieces):
+        parts.extend((_between(before, after, text), after.page_content))
+
+    return Document(page_content="".join(parts), metadata=dict(pieces[0].metadata))
+
+
+def _between(before: Document, after: Document, text: str) -> str:
+    """What separates two consecutive pieces in `text`: the whitespace between
+    them as written, or a blank line when their places do not say."""
+    start = before.metadata.get("start_index")
+    then = after.metadata.get("start_index")
+    if isinstance(start, int) and isinstance(then, int) and start >= 0:
+        end = start + len(before.page_content)
+        gap = text[end:then]
+        if end <= then and not gap.strip():
+            return gap
+    return "\n\n"
 
 
 class DocumentChunker:
@@ -116,10 +183,15 @@ class DocumentChunker:
         return self._by_size(extracted.text, metadata)
 
     def _by_size(self, text: str, metadata: dict[str, object]) -> list[Document]:
-        """Fixed-length windows. Also the last step of every other strategy."""
-        return self._splitter.split_documents(
+        """Fixed-length windows. Also the last step of every other strategy.
+
+        A window that holds only headings joins the one after it, the text
+        it introduces (`_fold_headings`).
+        """
+        pieces = self._splitter.split_documents(
             [Document(page_content=text, metadata=dict(metadata))]
         )
+        return _fold_headings(pieces, text)
 
     def _by_page(
         self, extracted: ExtractedDocument, metadata: dict[str, object]
@@ -156,11 +228,32 @@ class DocumentChunker:
         if len(sections) <= 1:
             return self._by_size(extracted.text, metadata)
 
-        chunks: list[Document] = []
+        # A section that is only headings (one whose heading is followed
+        # straight away by the next at its level, say) has no text of its own:
+        # it goes to the start of the section after it, or, at the very end,
+        # to the one before it. The header splitter ends each line it joins
+        # with two spaces; a folded heading is joined the same way.
+        texts: list[tuple[str, dict[str, object]]] = []
+        waiting: list[str] = []
         for section in sections:
+            if _only_headings(section.page_content):
+                waiting.append(section.page_content)
+                continue
             # The splitter puts the heading trail in metadata; keep it, so a
             # chunk knows which section it came from.
             merged = {**metadata, **section.metadata}
-            chunks.extend(self._by_size(section.page_content, merged))
+            texts.append(("  \n".join([*waiting, section.page_content]), merged))
+            waiting = []
+
+        if not texts:
+            # Nothing but headings: no section to give them to.
+            return self._by_size(extracted.text, metadata)
+        if waiting:
+            text, merged = texts[-1]
+            texts[-1] = ("  \n".join([text, *waiting]), merged)
+
+        chunks: list[Document] = []
+        for text, merged in texts:
+            chunks.extend(self._by_size(text, merged))
 
         return chunks

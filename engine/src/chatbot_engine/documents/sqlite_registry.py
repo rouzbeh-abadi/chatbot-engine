@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS documents (
     chunk_size        INTEGER,
     chunk_overlap     INTEGER,
     warnings          TEXT,
+    embedding_model   TEXT,
     PRIMARY KEY (project_id, doc_id)
 );
 """
@@ -46,7 +47,7 @@ CREATE TABLE IF NOT EXISTS documents (
 _COLUMNS = (
     "project_id, doc_id, external_id, filename, mimetype, size_bytes, "
     "content_hash, status, chunk_count, error, created_at, updated_at, "
-    "chunking_strategy, chunk_size, chunk_overlap, warnings"
+    "chunking_strategy, chunk_size, chunk_overlap, warnings, embedding_model"
 )
 
 #: Columns added after the table first shipped, added in place on start so an
@@ -56,6 +57,7 @@ _ADDED = (
     ("chunk_size", "INTEGER"),
     ("chunk_overlap", "INTEGER"),
     ("warnings", "TEXT"),
+    ("embedding_model", "TEXT"),
 )
 
 
@@ -77,6 +79,7 @@ def _to_row(record: DocumentRecord) -> tuple[object, ...]:
         record.chunk_size,
         record.chunk_overlap,
         json.dumps(record.warnings) if record.warnings else None,
+        record.embedding_model,
     )
 
 
@@ -102,6 +105,7 @@ def _to_record(row: sqlite3.Row) -> DocumentRecord:
         chunk_size=row["chunk_size"],
         chunk_overlap=row["chunk_overlap"],
         warnings=json.loads(row["warnings"]) if row["warnings"] else [],
+        embedding_model=row["embedding_model"],
     )
 
 

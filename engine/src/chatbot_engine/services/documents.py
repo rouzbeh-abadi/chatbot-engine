@@ -83,11 +83,22 @@ class DocumentService:
     async def delete(self, *, project_id: str, doc_id: str) -> bool:
         """Remove a document: chunks, then the file, then the record.
 
+        Only a document the project has. The record is looked up first, and
+        without one nothing is touched and the answer is False: a `doc_id` is
+        derived from the project and the caller's name for the file, so it can
+        be worked out by anyone who knows the name, and the record is what
+        says the document belongs to this project. The chunks are then removed
+        by project and document together, and the stored file, which is kept
+        by `doc_id` alone, only once the record has vouched for it.
+
         The record last: it is the only thing that knows the document existed, so
         losing it first would leave vectors and a file nothing can find.
         """
+        if await self._registry.get(project_id=project_id, doc_id=doc_id) is None:
+            return False
+
         if self._vectors is not None:
-            await self._vectors.delete(doc_id=doc_id)
+            await self._vectors.delete(doc_id=doc_id, project_id=project_id)
             sparse.invalidate(project_id)
         if self._blobs is not None:
             await self._blobs.delete(doc_id=doc_id)

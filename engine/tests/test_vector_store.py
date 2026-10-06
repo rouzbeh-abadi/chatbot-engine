@@ -101,9 +101,74 @@ async def test_writing_no_chunks_is_a_delete(client: TestClient) -> None:
     doc_id = _upload(client, LONG).json()["doc_id"]
     store = ChromaChunkStore()
 
-    await store.write(doc_id=doc_id, chunks=[])
+    await store.write(doc_id=doc_id, project_id="support", chunks=[])
 
     assert count_chunks() == 0
+
+
+async def test_a_delete_reaches_only_its_own_projects_chunks(
+    client: TestClient,
+) -> None:
+    """A `doc_id` can be worked out from a project and a file name, so the
+    project is part of every delete: another project's id removes nothing."""
+    record = _upload(client, LONG).json()
+
+    removed = await ChromaChunkStore().delete(
+        doc_id=record["doc_id"], project_id="other"
+    )
+
+    assert removed == 0
+    assert count_chunks() == record["chunk_count"]
+
+
+async def test_a_failed_embedding_leaves_the_version_already_indexed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bug this guards: a provider outage during a re-index used to leave
+    the document with no chunks at all, since the old ones went first."""
+    from langchain_core.documents import Document
+    from langchain_core.embeddings import DeterministicFakeEmbedding
+
+    first = _upload(client, LONG).json()
+    before = open_vector_store().get(include=["documents"])
+
+    def outage(self, texts):
+        raise RuntimeError("provider down")
+
+    monkeypatch.setattr(DeterministicFakeEmbedding, "embed_documents", outage)
+    with pytest.raises(RuntimeError, match="provider down"):
+        await ChromaChunkStore().write(
+            doc_id=first["doc_id"],
+            project_id="support",
+            chunks=[Document(page_content="new", metadata={"project_id": "support"})],
+        )
+
+    after = open_vector_store().get(include=["documents"])
+    assert sorted(after["ids"]) == sorted(before["ids"])
+    assert sorted(after["documents"]) == sorted(before["documents"])
+
+
+async def test_a_new_version_replaces_the_old_one_in_place(
+    client: TestClient,
+) -> None:
+    """Embedded first, then written over the old ids, then the old tail
+    removed: what is left is exactly the new version."""
+    from langchain_core.documents import Document
+
+    doc_id = _upload(client, LONG).json()["doc_id"]
+    chunks = [
+        Document(
+            page_content=f"part {n}",
+            metadata={"doc_id": doc_id, "project_id": "support"},
+        )
+        for n in range(2)
+    ]
+
+    await ChromaChunkStore().write(doc_id=doc_id, project_id="support", chunks=chunks)
+
+    stored = open_vector_store().get(include=["documents"])
+    assert sorted(stored["ids"]) == [f"{doc_id}:0", f"{doc_id}:1"]
+    assert sorted(stored["documents"]) == ["part 0", "part 1"]
 
 
 # --- one collection per embedding model ---------------------------------------
@@ -141,10 +206,43 @@ async def test_deleting_reaches_a_document_indexed_under_another_model(
         files={"file": ("baggage.md", LONG, "text/markdown")},
     ).json()["doc_id"]
 
-    removed = await ChromaChunkStore().delete(doc_id=doc_id)
+    removed = await ChromaChunkStore().delete(doc_id=doc_id, project_id="support")
 
     assert removed > 0
     assert count_chunks(open_vector_store("openai/text-embedding-3-large")) == 0
+
+
+async def test_identical_bytes_under_another_model_move_to_its_collection(
+    client: TestClient,
+) -> None:
+    """Answered `unchanged`, the document would stay where the new model's
+    queries never look."""
+
+    def upload(model: str):
+        return client.put(
+            "/documents",
+            data={
+                "project_id": "support",
+                "external_id": "baggage.md",
+                "embedding_model": model,
+            },
+            files={"file": ("baggage.md", LONG, "text/markdown")},
+        ).json()
+
+    small = upload("openai/text-embedding-3-small")
+    large = upload("openai/text-embedding-3-large")
+
+    assert large["status"] == "indexed"
+    assert (small["embedding_model"], large["embedding_model"]) == (
+        "openai/text-embedding-3-small",
+        "openai/text-embedding-3-large",
+    )
+    assert count_chunks(open_vector_store("openai/text-embedding-3-small")) == 0
+    assert (
+        count_chunks(open_vector_store("openai/text-embedding-3-large"))
+        == (large["chunk_count"])
+    )
+    assert upload("openai/text-embedding-3-large")["status"] == "unchanged"
 
 
 def test_a_legacy_collection_is_adopted_by_the_default_model() -> None:

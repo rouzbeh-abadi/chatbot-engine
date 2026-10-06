@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
     chunk_size        INTEGER,
     chunk_overlap     INTEGER,
     warnings          TEXT,
+    embedding_model   TEXT,
     PRIMARY KEY (project_id, doc_id)
 )
 """
@@ -45,7 +46,7 @@ CREATE TABLE IF NOT EXISTS {TABLE} (
 _COLUMNS = (
     "project_id, doc_id, external_id, filename, mimetype, size_bytes, "
     "content_hash, status, chunk_count, error, created_at, updated_at, "
-    "chunking_strategy, chunk_size, chunk_overlap, warnings"
+    "chunking_strategy, chunk_size, chunk_overlap, warnings, embedding_model"
 )
 
 #: Columns added after the table first shipped, added in place on start so an
@@ -55,11 +56,12 @@ _ADDED = (
     ("chunk_size", "INTEGER"),
     ("chunk_overlap", "INTEGER"),
     ("warnings", "TEXT"),
+    ("embedding_model", "TEXT"),
 )
 
 _UPSERT = f"""
 INSERT INTO {TABLE} ({_COLUMNS})
-VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
 ON CONFLICT (project_id, doc_id) DO UPDATE SET
     external_id = EXCLUDED.external_id,
     filename = EXCLUDED.filename,
@@ -74,7 +76,8 @@ ON CONFLICT (project_id, doc_id) DO UPDATE SET
     chunking_strategy = EXCLUDED.chunking_strategy,
     chunk_size = EXCLUDED.chunk_size,
     chunk_overlap = EXCLUDED.chunk_overlap,
-    warnings = EXCLUDED.warnings
+    warnings = EXCLUDED.warnings,
+    embedding_model = EXCLUDED.embedding_model
 """
 
 
@@ -96,6 +99,7 @@ def _to_row(record: DocumentRecord) -> tuple[object, ...]:
         record.chunk_size,
         record.chunk_overlap,
         json.dumps(record.warnings) if record.warnings else None,
+        record.embedding_model,
     )
 
 
@@ -103,7 +107,7 @@ def _to_record(row: tuple) -> DocumentRecord:
     (
         project_id, doc_id, external_id, filename, mimetype, size_bytes,
         content_hash, status, chunk_count, error, created_at, updated_at,
-        chunking_strategy, chunk_size, chunk_overlap, warnings,
+        chunking_strategy, chunk_size, chunk_overlap, warnings, embedding_model,
     ) = row  # fmt: skip
     return DocumentRecord(
         project_id=project_id,
@@ -122,6 +126,7 @@ def _to_record(row: tuple) -> DocumentRecord:
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
         warnings=json.loads(warnings) if warnings else [],
+        embedding_model=embedding_model,
     )
 
 

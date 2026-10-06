@@ -2,13 +2,14 @@
 
 Retrieval is a pipeline with two configurable stages:
 
-    rewrite the question against the history
-      -> for each query: vector search, and keyword search when `hybrid`
+    rewrite the question against the history, into at most `MAX_QUERIES`
+      -> for each query, all at once: vector search, and keyword search when
+         `hybrid`
       -> fuse the rankings (reciprocal rank fusion), the keyword search's
          few best matches only
       -> merge across queries, best score per chunk
       -> drop chunks below `min_score`, and everything when nothing clears it
-      -> rerank with the model, when enabled
+      -> rerank with the model against every query, when enabled
       -> keep the top `top_k`
 
 Vector search finds what a chunk is about; keyword search finds exact terms
@@ -17,8 +18,11 @@ refundable?" find the chunk that names the Basic fare rather than one that
 discusses refunds in general. Reranking then lets the model judge relevance
 directly, at the cost of one call, for assistants where that is worth it.
 
-Every hit carries a score in [0, 1], higher is better, whatever produced it,
-so a citation's confidence means the same thing in every mode.
+Every hit is cited with its vector similarity to the question, in [0, 1]
+(see `_similarity`), whatever ordered it. Fusion orders by rank and the
+reranker by judgement, and neither number says how close a chunk is, which is
+what a citation's score is read as. A chunk only the keyword search found has
+no vector score, and is cited with 0.
 
 The rewrite and the rerank are model calls. `retrieve_with_usage` returns
 their token counts alongside the hits, so an agent can fold them into the
@@ -26,6 +30,8 @@ turn's reported usage; `retrieve` is the same without the bookkeeping.
 """
 
 from __future__ import annotations
+
+import asyncio
 
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -44,9 +50,9 @@ from chatbot_engine.rag.rerank import rerank
 from chatbot_engine.rag.vector_store import open_vector_store
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
-from chatbot_engine.untrusted import framed, label
+from chatbot_engine.untrusted import framed, label, unnumbered
 
-#: A retrieved chunk and its score: 1.0 is the best match in the result set.
+#: A retrieved chunk and its score: its vector similarity to the question.
 Hit = tuple[Document, float]
 
 #: The constant in reciprocal rank fusion. 60 is the value from the original
@@ -63,6 +69,16 @@ RRF_K = 60
 #: with the question: "How long do I have to return a lamp?" against "accepts
 #: returns within 30 days", where "returns" is not "return" to the tokenizer.
 KEYWORD_FUSED = 3
+
+#: The most search queries one message becomes. A message that asks several
+#: things gets a query each; past this, a model that does not stop would turn
+#: one message into a search, and an embedding call, per line it wrote.
+MAX_QUERIES = 4
+
+#: The most tokens the rewrite may write: a few short lines, with room for a
+#: reasoning model's thinking, which counts towards it. A bound for a model
+#: that does not stop, not a length for its answer.
+REWRITE_MAX_TOKENS = 4_000
 
 REWRITE_SYSTEM = """\
 Rewrite the user's latest message into standalone search queries for a knowledge
@@ -87,7 +103,8 @@ def utility_config(project: AssistantConfig) -> AssistantConfig:
     visitor who declined hears. Temperature zero, since all want the same
     output for the same input. The assistant's
     `max_output_tokens` is for the answer the customer reads; a tight cap
-    there must not truncate a rerank list, so it is lifted here.
+    there must not truncate a rerank list, so it is lifted here. The rewrite
+    sets its own (`REWRITE_MAX_TOKENS`).
     """
     settings = get_settings()
     return project.model_copy(
@@ -107,15 +124,17 @@ async def rewrite_queries(
     A follow-up like "and what about the taxes?" retrieves badly on its own
     words; with earlier turns to lean on, the model rewrites it into something
     the search can match, and splits a message that asks several things into
-    one query each. Skipped when there is no history, so a first-turn question
-    costs no extra model call.
+    one query each, at most `MAX_QUERIES` and none twice. Skipped when there
+    is no history, so a first-turn question costs no extra model call.
     """
     if not request.history:
         return [request.message]
 
     history = transcript(request)
-    model = build_chat_model(utility_config(request.project))
-    reply = await model.ainvoke(
+    config = utility_config(request.project).model_copy(
+        update={"max_output_tokens": REWRITE_MAX_TOKENS}
+    )
+    reply = await build_chat_model(config).ainvoke(
         [
             SystemMessage(REWRITE_SYSTEM),
             HumanMessage(
@@ -129,8 +148,12 @@ async def rewrite_queries(
     if totals is not None:
         add_usage(totals, reply, utility=True)
 
-    queries = [line.strip() for line in reply.text.splitlines()]
-    return [query for query in queries if query] or [request.message]
+    lines = [line.strip() for line in reply.text.splitlines()]
+    if reply.response_metadata.get("finish_reason") == "length" and len(lines) > 1:
+        # Cut off by the cap: the last line is a query's first words only.
+        lines = lines[:-1]
+    queries = list(dict.fromkeys(line for line in lines if line))[:MAX_QUERIES]
+    return queries or [request.message]
 
 
 async def retrieve(request: ChatRequest) -> list[Hit]:
@@ -167,24 +190,43 @@ async def retrieve_with_usage(
     if queries is None:
         queries = await rewrite_queries(request, totals)
 
+    # The project's keyword index, the same for every query. In a thread, as
+    # each search is: building it reads and tokenises every chunk the project
+    # has, and a search scores them all, which on the event loop would hold
+    # up every other request in flight.
+    index = (
+        await asyncio.to_thread(sparse.sparse_index, store, project.project_id)
+        if mode == "hybrid"
+        else None
+    )
+
+    async def search(
+        query: str,
+    ) -> tuple[list[tuple[Document, float]], list[tuple[Document, float]]]:
+        dense = await _dense(store, project.project_id, query, candidates)
+        if index is None:
+            return dense, []
+        return dense, await asyncio.to_thread(index.search, query, candidates)
+
+    # All the queries at once: each is an embedding call and a search, and
+    # the turn waits for the slowest rather than for their sum.
+    searched = await asyncio.gather(*(search(query) for query in queries))
+
     # Across queries, a chunk keeps its best score. Keyed by content: the same
     # chunk can come back from both searches and from several queries.
     best: dict[str, Hit] = {}
-    # The best vector similarity each chunk reached, for `min_score`. Fused
-    # scores are relative to the result set (the top one is always 1.0), so
-    # only the similarity says whether anything is actually close.
+    # The best vector similarity each chunk reached, for `min_score` and for
+    # the score it is cited with. Fused scores are relative to the result set
+    # (the top one is always 1.0), so only the similarity says whether
+    # anything is actually close.
     similarity: dict[str, float] = {}
     # Each query's best keyword match, which `min_score` keeps regardless.
     matched: set[str] = set()
-    for query in queries:
-        dense = await _dense(store, project.project_id, query, candidates)
+    for dense, keyword in searched:
         for document, score in dense:
             key = document.page_content
             similarity[key] = max(score, similarity.get(key, 0.0))
-        if mode == "hybrid":
-            keyword = sparse.sparse_index(store, project.project_id).search(
-                query, candidates
-            )
+        if index is not None:
             if keyword:
                 matched.add(keyword[0][0].page_content)
             fused = _fuse_hybrid(dense, keyword)
@@ -200,18 +242,22 @@ async def retrieve_with_usage(
         best = _above(best, similarity, matched, project.min_score)
 
     ranked = sorted(best.values(), key=lambda hit: hit[1], reverse=True)
-    ranked = ranked[: max(candidates, project.top_k)]
+    documents = [document for document, _ in ranked[: max(candidates, project.top_k)]]
 
-    if do_rerank and ranked:
-        # The reranker orders; the fused score stays as the evidence for each
-        # chunk, so a citation's confidence is not an artefact of its position.
-        by_content = {document.page_content: score for document, score in ranked}
-        ordered = await rerank(
-            request, queries[0], [document for document, _ in ranked], totals
-        )
-        ranked = [(document, by_content[document.page_content]) for document in ordered]
+    if do_rerank and documents:
+        # Against every query, not the first alone: a message that asks two
+        # things is two queries, and the passage that answers the second is
+        # as relevant as the one that answers the first.
+        documents = await rerank(request, "\n".join(queries), documents, totals)
 
-    return ranked[: project.top_k], totals
+    # Cited with the similarity, not the fused score: the order is the fused
+    # or reranked one, but how close a chunk is to the question is the
+    # number a citation is read as.
+    hits = [
+        (document, similarity.get(document.page_content, 0.0))
+        for document in documents[: project.top_k]
+    ]
+    return hits, totals
 
 
 def _above(
@@ -242,7 +288,7 @@ def _above(
 async def _dense(
     store, project_id: str, query: str, k: int
 ) -> list[tuple[Document, float]]:
-    """Vector search: chunks with their cosine similarity, best first."""
+    """Vector search: chunks with their similarity (`_similarity`), best first."""
     hits = await store.asimilarity_search_with_score(
         query, k=k, filter={"project_id": project_id}
     )
@@ -261,8 +307,9 @@ def _fuse(*rankings: list[tuple[Document, float]]) -> list[Hit]:
     """Reciprocal rank fusion, normalised so the best chunk scores 1.0.
 
     Each ranking contributes 1 / (RRF_K + rank) per chunk. Ranks rather than
-    scores, because a cosine similarity and a BM25 score are not on a common
-    scale and any attempt to put them on one is a guess.
+    scores, because a vector similarity and a BM25 score are not on a common
+    scale and any attempt to put them on one is a guess. The fused score
+    orders the chunks; it is not what they are cited with.
     """
     fused: dict[str, float] = {}
     documents: dict[str, Document] = {}
@@ -327,17 +374,47 @@ def to_context(hits: list[Hit]) -> str:
 
     The numbers line up with the order of `to_source_refs`, which is what lets
     the UI turn a `[2]` in the answer into a chip naming the file. Each
-    chunk is someone else's text, made safe to sit inside `<extracts>`:
-    nothing invisible, and a closer shown as `[/extracts]`, so a page cannot
-    end the extracts and go on as if it were the person or the system
-    (`chatbot_engine.untrusted`). Its source is one line with no tag in it.
+    extract opens with one line: its number, its source and, when the
+    chunking strategy recorded one, the heading trail of the section it came
+    from (`[2] faq.md > Fares > Flexible fare`), so a chunk whose own text
+    does not name its subject still says what it is about. The trail is in
+    the header, not in the text that was embedded, so documents indexed
+    before it was added have it too.
+
+    Each chunk is someone else's text, made safe to sit inside `<extracts>`
+    (`chatbot_engine.untrusted`): nothing invisible; a closer shown as
+    `[/extracts]`, so a page cannot end the extracts and go on as if it were
+    the person or the system; and a line that starts like a header escaped,
+    so a chunk cannot pass its text off as another extract. The header is one
+    line with no tag in it.
     """
     return "\n\n".join(
-        f"[{index}] {label(str(chunk.metadata.get('source', 'unknown')), 'unknown')}\n{framed(chunk.page_content, 'extracts')}"
+        f"{_header(index, chunk.metadata)}\n"
+        f"{unnumbered(framed(chunk.page_content, 'extracts'))}"
         for index, (chunk, _) in enumerate(hits, start=1)
     )
 
 
+def _header(number: int, metadata: dict) -> str:
+    """`[2] faq.md > Fares > Flexible fare`: the number, the source and the
+    heading trail, each part a label (one line, no tag)."""
+    source = label(str(metadata.get("source", "unknown")), "unknown")
+    trail = [
+        label(str(metadata[key]), "") for key in ("h1", "h2", "h3") if metadata.get(key)
+    ]
+
+    return " > ".join([f"[{number}] {source}", *(part for part in trail if part)])
+
+
 def _similarity(distance: float) -> float:
-    """Chroma returns cosine distance, 0 (identical) to 2 (opposite)."""
+    """A vector similarity in [0, 1], from the distance Chroma returns.
+
+    The collections use Chroma's default space, `l2`, in which a search
+    returns the squared Euclidean distance between the two embeddings. For
+    embeddings of unit length, as OpenAI's are, that distance is `2 - 2cos`,
+    so `1 - d / 2` is the cosine similarity of the two, floored at zero: 1 for
+    the same direction, 0 for unrelated or opposite text. For a model whose
+    vectors are not of unit length it is a measure of closeness, not a
+    cosine. Changing the space would mean re-creating every collection.
+    """
     return max(0.0, 1.0 - distance / 2.0)

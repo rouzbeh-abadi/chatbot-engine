@@ -7,11 +7,17 @@ ranks by term match and is good at exactly those, which is why the two are
 fused rather than either used alone.
 
 The index is built from the chunks already in the vector store, so there is
-one source of truth and nothing extra to persist. It is rebuilt per project
-when the collection's chunk count changes or a short interval has passed, and
-dropped at once when this process ingests or deletes. Another replica's
-changes reach this one at the next rebuild, which is the cost of not
-persisting a second index.
+one source of truth and nothing extra to persist. It is kept per project for
+`INDEX_TTL_S` and rebuilt after that, and dropped at once when this process
+ingests or deletes. Until then a search consults nothing but the index, not
+the collection. Another replica's changes reach this one at the next rebuild,
+which is the cost of not persisting a second index. At most `MAX_INDEXES` are
+kept, the one searched longest ago dropped first, so an engine serving many
+projects holds only the ones in use.
+
+Building an index reads and tokenises every chunk of a project, and a search
+scores every one of them: both are blocking work, which a caller on the event
+loop runs in a thread (agent/retriever.py does).
 
 Tokenisation is `\\w+` on lowercased text: adequate for languages that separate
 words with spaces, and not for ones that do not, where the vector half of the
@@ -23,16 +29,23 @@ from __future__ import annotations
 import re
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 from rank_bm25 import BM25Okapi
 
-#: How long an index is trusted before the collection is consulted again.
+#: How long an index is trusted before it is built again from the collection.
 #: Long enough that a burst of questions rebuilds nothing; short enough that a
 #: document ingested by another replica is searchable within a minute.
 INDEX_TTL_S = 60.0
+
+#: How many projects' indexes are kept at once. Each holds its project's
+#: chunk texts and their term counts; an engine serving more projects than
+#: this rebuilds the index of one that comes back after the others pushed it
+#: out, which costs that search one read of the project's chunks.
+MAX_INDEXES = 32
 
 _WORD = re.compile(r"\w+")
 
@@ -47,7 +60,6 @@ class SparseIndex:
 
     documents: list[Document]
     bm25: BM25Okapi
-    chunk_count: int
     built_at: float
 
     def search(self, query: str, k: int) -> list[tuple[Document, float]]:
@@ -69,45 +81,62 @@ class SparseIndex:
         return [(document, score) for document, score in ranked[:k] if score > 0]
 
 
-_indexes: dict[tuple[str, str], SparseIndex] = {}
+#: The indexes kept, by collection and project, the one searched longest ago
+#: first. A collection is known by its id rather than its name: a collection
+#: made again under the same name (another `ENGINE_CHROMA_DIR`, a collection
+#: dropped and re-created) holds other chunks, and must not meet an index
+#: built from the old one.
+_indexes: OrderedDict[tuple[str, str], SparseIndex] = OrderedDict()
 _lock = threading.Lock()
+#: Counts the calls to `invalidate`. A build that began before one may hold
+#: the chunks from before the change, so it answers the search that asked for
+#: it and is not kept.
+_generation = 0
 
 
 def sparse_index(store: Chroma, project_id: str) -> SparseIndex:
-    """The project's index, rebuilt when the collection has visibly changed."""
-    key = (store._collection.name, project_id)
-    count = _chunk_count(store, project_id)
+    """The project's index: the one built within `INDEX_TTL_S`, or a new one.
+
+    Blocking: a new index reads every chunk of the project. Run it off the
+    event loop.
+    """
+    key = (str(store._collection.id), project_id)
     now = time.monotonic()
 
     with _lock:
         cached = _indexes.get(key)
-        fresh = (
-            cached is not None
-            and cached.chunk_count == count
-            and now - cached.built_at < INDEX_TTL_S
-        )
-        if fresh:
+        if cached is not None and now - cached.built_at < INDEX_TTL_S:
+            _indexes.move_to_end(key)
             return cached
+        generation = _generation
 
-        index = _build(store, project_id, count, now)
-        _indexes[key] = index
-        return index
+    # Built outside the lock, so a large project's build holds up no other
+    # project's search.
+    index = _build(store, project_id, now)
+
+    with _lock:
+        if generation == _generation:
+            _indexes[key] = index
+            _indexes.move_to_end(key)
+            while len(_indexes) > MAX_INDEXES:
+                _indexes.popitem(last=False)
+
+    return index
 
 
 def invalidate(project_id: str | None = None) -> None:
     """Drop cached indexes, for one project or all. Called after an ingest or
     delete in this process, so the next search sees the change at once."""
+    global _generation
+
     with _lock:
+        _generation += 1
         for key in list(_indexes):
             if project_id is None or key[1] == project_id:
                 del _indexes[key]
 
 
-def _chunk_count(store: Chroma, project_id: str) -> int:
-    return len(store.get(where={"project_id": project_id}, include=[])["ids"])
-
-
-def _build(store: Chroma, project_id: str, count: int, now: float) -> SparseIndex:
+def _build(store: Chroma, project_id: str, now: float) -> SparseIndex:
     got = store.get(
         where={"project_id": project_id}, include=["documents", "metadatas"]
     )
@@ -117,9 +146,4 @@ def _build(store: Chroma, project_id: str, count: int, now: float) -> SparseInde
     ]
     corpus = [tokenize(document.page_content) for document in documents] or [[""]]
 
-    return SparseIndex(
-        documents=documents,
-        bm25=BM25Okapi(corpus),
-        chunk_count=count,
-        built_at=now,
-    )
+    return SparseIndex(documents=documents, bm25=BM25Okapi(corpus), built_at=now)

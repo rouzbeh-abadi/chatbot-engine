@@ -13,8 +13,11 @@ meet vectors produced the same way it was.
 
 from __future__ import annotations
 
+import asyncio
 import re
 import threading
+from collections.abc import Collection
+from typing import Any
 from urllib.parse import urlparse
 
 import chromadb
@@ -228,6 +231,17 @@ def count_chunks(store: Chroma | None = None) -> int:
     return len(store.get(include=[])["ids"])
 
 
+def _owned_by(doc_id: str, project_id: str) -> dict[str, Any]:
+    """The filter for one document's chunks: its id and its project together.
+
+    Never the id alone. A `doc_id` is derived from the project and the caller's
+    own name for the file, so anyone who can guess a file name can work one
+    out; the project is what keeps one project's request from reaching
+    another's chunks.
+    """
+    return {"$and": [{"doc_id": doc_id}, {"project_id": project_id}]}
+
+
 class ChromaChunkStore:
     """The write side: one document's chunks, replaced as a unit."""
 
@@ -245,38 +259,60 @@ class ChromaChunkStore:
     def _store(self) -> Chroma:
         return self._explicit or open_vector_store(self._embedding_model)
 
-    async def write(self, *, doc_id: str, chunks: list[Document]) -> None:
-        """Replace everything stored for `doc_id` with `chunks`.
+    async def write(
+        self, *, doc_id: str, project_id: str, chunks: list[Document]
+    ) -> None:
+        """Replace everything stored for one document with `chunks`.
 
-        Delete first, rather than overwriting ids one by one: a shorter second
-        version would otherwise leave the tail of the first one behind, still
-        answering queries.
+        The new version is embedded before anything of the old one is
+        touched. Embedding is the step that fails (a rate limit, a provider
+        outage, a bad key), and a failure there must leave the version
+        already indexed answering, not a document with no chunks at all.
+        `aadd_documents` embeds every chunk before it writes any, so a failed
+        embedding writes nothing.
+
+        The new chunks are written over the old ones' ids (deterministic, so
+        this is a replace in place), and only then is what is left of the old
+        version removed: the tail of a longer one, which would otherwise go on
+        answering queries, and its chunks under another embedding model.
         """
-        await self.delete(doc_id=doc_id)
+        ids = [f"{doc_id}:{index}" for index in range(len(chunks))]
 
-        if not chunks:
-            return
+        if chunks:
+            await self._store.aadd_documents(documents=chunks, ids=ids)
 
-        # Deterministic ids, so this is a replace even if the delete missed.
-        await self._store.aadd_documents(
-            documents=chunks,
-            ids=[f"{doc_id}:{index}" for index, _ in enumerate(chunks)],
-        )
+        await self._remove(doc_id=doc_id, project_id=project_id, keeping=ids)
 
-    async def delete(self, *, doc_id: str) -> int:
-        """Remove every chunk belonging to one document, and say how many.
+    async def delete(self, *, doc_id: str, project_id: str) -> int:
+        """Remove every chunk of one project's document, and say how many."""
+        return await self._remove(doc_id=doc_id, project_id=project_id)
+
+    async def _remove(
+        self, *, doc_id: str, project_id: str, keeping: Collection[str] = ()
+    ) -> int:
+        """Remove one document's chunks, except `keeping` in this store's own
+        collection, and say how many went.
 
         Swept across every collection, not only this store's own: a document
         may have been indexed under a different embedding model than the one
-        deleting it, and a delete that missed it would leave chunks that still
-        answer queries with nothing left to name them.
+        now writing or deleting it, and a sweep that missed it would leave
+        chunks that still answer queries with nothing left to name them.
         """
+        own = self._store._collection.name
+        kept = set(keeping)
         removed = 0
 
         for store in _every_store():
-            existing = store.get(where={"doc_id": doc_id}, include=[])["ids"]
-            if existing:
-                await store.adelete(ids=existing)
-                removed += len(existing)
+            found = await asyncio.to_thread(
+                store.get, where=_owned_by(doc_id, project_id), include=[]
+            )
+            stale = [
+                chunk_id
+                for chunk_id in found["ids"]
+                if store._collection.name != own or chunk_id not in kept
+            ]
+            if stale:
+                await store.adelete(ids=stale)
+                removed += len(stale)
 
         return removed

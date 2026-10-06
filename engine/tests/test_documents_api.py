@@ -93,6 +93,63 @@ def test_deleting_an_unknown_document_is_not_an_error(client: TestClient) -> Non
     assert response.json()["deleted"] is False
 
 
+# --- one project cannot reach another's documents ----------------------------
+
+
+def test_another_project_cannot_delete_a_document(client: TestClient) -> None:
+    """A `doc_id` is derived from the project and the file's name, so it can
+    be worked out. Asked for by another project, it is a document that
+    project does not have: nothing is deleted, not the chunks, not the file,
+    not the record."""
+    from chatbot_engine.rag.vector_store import count_chunks
+    from chatbot_engine.settings import get_settings
+
+    record = _upload(client).json()
+
+    response = client.delete(
+        f"/documents/{record['doc_id']}", params={"project_id": "other"}
+    )
+
+    assert response.json() == {"doc_id": record["doc_id"], "deleted": False}
+    listed = client.get("/documents", params={"project_id": "support"}).json()
+    assert [d["doc_id"] for d in listed] == [record["doc_id"]]
+    assert count_chunks() == record["chunk_count"]
+    assert (get_settings().blob_dir / record["doc_id"]).exists()
+
+
+async def test_another_projects_delete_leaves_retrieval_alone(
+    client: TestClient,
+) -> None:
+    from chatbot_engine.agent.retriever import retrieve
+    from chatbot_engine.models.chat import AssistantConfig, ChatRequest
+
+    record = _upload(client).json()
+    client.delete(f"/documents/{record['doc_id']}", params={"project_id": "other"})
+
+    hits = await retrieve(
+        ChatRequest(
+            project=AssistantConfig(
+                project_id="support", name="S", system_prompt="s", retrieval="hybrid"
+            ),
+            message="cabin bag",
+        )
+    )
+
+    assert [document.metadata["doc_id"] for document, _ in hits] == [record["doc_id"]]
+
+
+def test_another_project_cannot_reindex_a_document(client: TestClient) -> None:
+    record = _upload(client).json()
+
+    response = client.post(
+        f"/documents/{record['doc_id']}/reindex?project_id=other", json={}
+    )
+
+    assert response.status_code == 404
+    listed = client.get("/documents", params={"project_id": "support"}).json()
+    assert listed[0]["updated_at"] == record["updated_at"]
+
+
 def test_an_unreadable_type_is_415(client: TestClient) -> None:
     response = _upload(client, external_id="notes.docx", mimetype="application/msword")
 
@@ -113,6 +170,30 @@ def test_a_document_with_no_text_is_422(client: TestClient) -> None:
 
     assert response.status_code == 422
     assert "OCR" in response.json()["detail"]
+
+
+def test_text_that_is_not_utf8_is_422_with_the_reason(client: TestClient) -> None:
+    """A clean refusal and a `failed` record that says why, not a 500."""
+    response = _upload(client, content="Préavis".encode("latin-1"))
+
+    assert response.status_code == 422
+    assert "not UTF-8" in response.json()["detail"]
+    listed = client.get("/documents", params={"project_id": "support"}).json()
+    assert listed[0]["status"] == "failed"
+    assert listed[0]["error"] == response.json()["detail"]
+
+
+def test_a_damaged_pdf_is_422_with_the_readers_words(client: TestClient) -> None:
+    response = client.put(
+        "/documents",
+        data={"project_id": "support", "external_id": "manual.pdf"},
+        files={"file": ("manual.pdf", b"%PDF-1.4\nnot a pdf", "application/pdf")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"].startswith("'manual.pdf' could not be read: ")
+    listed = client.get("/documents", params={"project_id": "support"}).json()
+    assert listed[0]["status"] == "failed"
 
 
 def test_a_rejected_document_is_recorded_as_failed(client: TestClient) -> None:

@@ -25,12 +25,14 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from chatbot_engine.agent.client import Totals, add_usage, build_chat_model
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.tracing import run_config
-from chatbot_engine.untrusted import visible
+from chatbot_engine.untrusted import unnumbered, visible
 
 logger = logging.getLogger(__name__)
 
 RERANK_SYSTEM = """\
-You rank passages by how well each one answers a question.
+You rank passages by how well each one answers a question. The question may
+come in several parts, one per line; a passage that answers any part of it is
+relevant.
 
 Read the question and the numbered passages. Reply with JSON only, of the form
 {"ranking": [3, 1, 2]}: every passage number, most relevant first. Judge only
@@ -46,14 +48,18 @@ async def rerank(
 ) -> list[Document]:
     """`candidates` in the model's order of relevance to `query`.
 
-    The call's token counts are added to `totals` when one is given.
+    `query` is what was searched for: one question, or a message that asks
+    several things as one per line, so a passage that answers the second is
+    judged as relevant as one that answers the first. The call's token counts
+    are added to `totals` when one is given.
     """
     if len(candidates) < 2:
         return candidates
 
-    # Passages are someone else's text: nothing a reader cannot see reaches the ranking model either.
+    # Passages are someone else's text: nothing a reader cannot see reaches
+    # the ranking model either, and no line of one passes for another's number.
     numbered = "\n\n".join(
-        f"[{index}]\n{visible(document.page_content)}"
+        f"[{index}]\n{unnumbered(visible(document.page_content))}"
         for index, document in enumerate(candidates, start=1)
     )
     # Imported here: `retriever` imports this module, and the config helper
