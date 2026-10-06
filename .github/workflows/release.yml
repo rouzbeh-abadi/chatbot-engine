@@ -29,38 +29,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+# Read the repository; the jobs that publish ask for more themselves.
 permissions:
   contents: read
 
 jobs:
-  # The tag is only worth publishing if it passes what `main` has to pass. This
-  # duplicates CI on purpose: a tag can point at any commit, including one that
-  # never ran through a pull request.
+  # The tag is only worth publishing if it passes what `main` has to pass: a
+  # tag can point at any commit, including one that never ran through a pull
+  # request. So the release runs CI itself, the whole of it (Postgres, every
+  # extra, lint, formatting, types, the tests, the images and the compose
+  # files), rather than a copy of some of its steps that drifts.
   verify:
-    name: Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-
-      - run: uv sync
-      - run: uv run pytest -q
-
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "24"
-          cache: npm
-          cache-dependency-path: examples/frontend/package-lock.json
-
-      - run: npm ci
-        working-directory: examples/frontend
-      - run: npx tsc --noEmit
-        working-directory: examples/frontend
-      - run: npm run test
-        working-directory: examples/frontend
+    name: CI
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
 
   images:
     name: Publish ${{ matrix.service }}
@@ -88,21 +71,21 @@ jobs:
             context: ./examples/frontend
             dockerfile: examples/frontend/Dockerfile
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       # arm64 is built under emulation, which is slow but means the images run
       # unchanged on Apple silicon and Graviton.
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
-      - uses: docker/login-action@v3
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}/${{ matrix.service }}
           # v1.4.2 publishes 1.4.2, 1.4, 1 and latest, so an adopter can pin as
@@ -115,7 +98,7 @@ jobs:
             type=sha
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -137,12 +120,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # Release notes are generated from the commits since the last tag, so
           # a shallow clone would produce an empty changelog.
           fetch-depth: 0
 
+      # The tag reaches the shell through `VERSION`, never spliced into the
+      # script: a tag name is text someone chose.
+      #
       # Two steps rather than one clever invocation: `--generate-notes` and
       # `--notes` are used separately here, so neither depends on how gh chooses
       # to merge them. The body is read back and appended to.
