@@ -6,12 +6,15 @@ needs nothing from this module beyond the environment variables it reads;
 and the choice when traces must stay on a server the operator controls.
 
 Either way every run carries the request id, the project id, the session id
-and the user id as metadata, so a trace links back to the engine's own log
-lines and to whatever conversation the caller keeps.
+and a pseudonym of the user id (`traced_user`) as metadata, so a trace links
+back to the engine's own log lines and to whatever conversation the caller
+keeps, without holding a phone number or an email address.
 """
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import logging
 import os
 from typing import TYPE_CHECKING, Any
@@ -110,6 +113,26 @@ def _handler_for(config: TracingConfig) -> Any:
     return handler
 
 
+def traced_user(user_id: str | None) -> str | None:
+    """The person as a trace names them: a pseudonym, never the id itself.
+
+    A caller's user id can be a phone number or an email address (a chat
+    app's person), and a trace store is no place for one. The pseudonym is
+    the same for the same id, so traces still group by person, and it is
+    keyed with the engine's API keys, so it cannot be undone by trying every
+    phone number; it changes when the keys do. The id itself still reaches
+    the tool servers, which need it.
+    """
+    if user_id is None:
+        return None
+    from chatbot_engine.settings import get_settings
+
+    keys = get_settings().credentials()
+    key = "\n".join(sorted(keys.values())).encode() or b"chatbot-engine"
+    digest = hmac.new(key, user_id.encode(), hashlib.sha256).hexdigest()
+    return f"user-{digest[:20]}"
+
+
 def run_config(request: ChatRequest, *, name: str) -> RunnableConfig:
     """The config every model call is made with: a name, the ids, the tracer.
 
@@ -121,18 +144,19 @@ def run_config(request: ChatRequest, *, name: str) -> RunnableConfig:
     """
     project = request.project
     handler = _handler_for(project.tracing) if project.tracing else _handler
+    user = traced_user(request.user_id)
     metadata: dict[str, Any] = {
         "request_id": request_id(),
         "project_id": project.project_id,
         "session_id": request.session_id,
-        "user_id": request.user_id,
+        "user_id": user,
         "agent": project.agent or "loop",
         "model": project.model,
     }
     if handler is not None:
         # Langfuse reads these to group traces by session and user.
         metadata["langfuse_session_id"] = request.session_id
-        metadata["langfuse_user_id"] = request.user_id
+        metadata["langfuse_user_id"] = user
         metadata["langfuse_tags"] = [project.project_id]
 
     config: RunnableConfig = {

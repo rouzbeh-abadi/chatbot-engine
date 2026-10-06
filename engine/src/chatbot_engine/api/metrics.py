@@ -1,8 +1,10 @@
 """GET /metrics, in Prometheus exposition format.
 
-Unauthenticated, like /health: a scraper is not a caller, and the numbers here
-are counts and durations, not content. Reachable only from wherever the engine
-is reachable, which in a deployment is the private network.
+The numbers here are counts and durations, not content, but they name the
+callers and the models. Locally the route is open, like /health; under
+`ENGINE_ENV=production` it needs the API key like any other caller, unless
+`ENGINE_METRICS_PUBLIC` opens it for a scraper that cannot send a header.
+`app.py` decides which, where the router is mounted.
 """
 
 from __future__ import annotations

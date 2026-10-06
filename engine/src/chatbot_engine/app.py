@@ -27,6 +27,7 @@ from chatbot_engine.api import (
     metrics,
 )
 from chatbot_engine.api.auth import require_api_key
+from chatbot_engine.api.body_limit import BodyLimitMiddleware
 from chatbot_engine.api.rate_limit import limit_chat, limit_eval
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
 from chatbot_engine.errors import (
@@ -74,6 +75,7 @@ def create_app() -> FastAPI:
     """Build the FastAPI app: exception handlers, then the routers."""
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_format)
+    production = settings.env == "production"
 
     app = FastAPI(
         title="Chatbot Engine",
@@ -83,6 +85,11 @@ def create_app() -> FastAPI:
             "request, so the engine stores none of it."
         ),
         lifespan=lifespan,
+        # The interactive docs and the schema are for building against the
+        # engine on a laptop, not a map for whoever reaches it in production.
+        docs_url=None if production else "/docs",
+        redoc_url=None if production else "/redoc",
+        openapi_url=None if production else "/openapi.json",
     )
 
     # Register most-specific first: Starlette matches handlers by walking the
@@ -127,14 +134,27 @@ def create_app() -> FastAPI:
         logger.warning("provider call failed: %s", provider_reason(exc))
         return JSONResponse(status_code=502, content={"detail": provider_reason(exc)})
 
+    # A JSON body over the cap is refused before it is read. Added first, so
+    # it runs inside the request id's middleware and a 413 carries the id.
+    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_body_bytes)
+
     # Every request gets an id, kept from the caller when it sent one.
     app.add_middleware(RequestIdMiddleware)
 
-    # Health and metrics are unauthenticated, so probes and scrapers can reach
-    # them.
+    # Health is unauthenticated, so probes can reach it. Metrics are too
+    # locally; in production they name callers and models, and need the key
+    # unless `ENGINE_METRICS_PUBLIC` opens them for a scraper.
     app.include_router(health.router)
     if settings.metrics_enabled:
-        app.include_router(metrics.router)
+        public = (
+            settings.metrics_public
+            if settings.metrics_public is not None
+            else not production
+        )
+        app.include_router(
+            metrics.router,
+            dependencies=[] if public else [Depends(require_api_key)],
+        )
 
     # Everything else requires the shared secret (see api/auth.py), and the
     # routes that spend provider credits are metered on top of it. On the

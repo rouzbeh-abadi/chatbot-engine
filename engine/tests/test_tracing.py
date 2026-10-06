@@ -41,9 +41,33 @@ def test_off_adds_the_ids_but_no_callbacks():
     assert config["metadata"]["request_id"] == "req-42"
     assert config["metadata"]["project_id"] == "shop"
     assert config["metadata"]["session_id"] == "sess-1"
-    assert config["metadata"]["user_id"] == "user-1"
+    assert config["metadata"]["user_id"] == tracing.traced_user("user-1")
     assert "project:shop" in config["tags"]
     assert "callbacks" not in config
+
+
+def test_a_trace_names_the_person_by_a_keyed_pseudonym(monkeypatch):
+    """A chat app's person is a phone number or an email address: the trace
+    groups by person without holding it, and the pseudonym cannot be undone
+    without the engine's keys."""
+    from chatbot_engine.settings import get_settings
+
+    monkeypatch.setenv("ENGINE_API_KEY", "first-key")
+    get_settings.cache_clear()
+    phone = tracing.traced_user("whatsapp:447700900123")
+    assert phone == tracing.traced_user("whatsapp:447700900123")
+    assert phone is not None and phone.startswith("user-")
+    assert "447700900123" not in phone
+    assert phone != tracing.traced_user("whatsapp:447700900124")
+    metadata = tracing.run_config(
+        _request().model_copy(update={"user_id": "whatsapp:447700900123"}), name="x"
+    )["metadata"]
+    assert metadata["user_id"] == phone
+
+    monkeypatch.setenv("ENGINE_API_KEY", "another-key")
+    get_settings.cache_clear()
+    assert tracing.traced_user("whatsapp:447700900123") != phone
+    assert tracing.traced_user(None) is None
 
 
 def test_missing_ids_are_left_out_rather_than_sent_as_null():
@@ -97,7 +121,7 @@ def test_langfuse_attaches_its_handler_and_its_grouping_keys():
     config = tracing.run_config(_request(), name="answer")
     assert len(config["callbacks"]) == 1
     assert config["metadata"]["langfuse_session_id"] == "sess-1"
-    assert config["metadata"]["langfuse_user_id"] == "user-1"
+    assert config["metadata"]["langfuse_user_id"] == tracing.traced_user("user-1")
     assert config["metadata"]["langfuse_tags"] == ["shop"]
 
 
