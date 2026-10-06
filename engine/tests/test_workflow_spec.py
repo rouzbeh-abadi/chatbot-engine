@@ -53,6 +53,15 @@ def test_a_well_formed_workflow_validates():
             "routes by its branches",
         ),
         (lambda d: d["nodes"].append({"id": "retrieve", "type": "end"}), "unique"),
+        (
+            lambda d: (
+                d["nodes"].append({"id": "stop", "type": "end"}),
+                d["edges"].extend(
+                    [{"from": "answer", "to": "stop"}, {"from": "stop", "to": "lookup"}]
+                ),
+            ),
+            "no edge may leave it",
+        ),
         (lambda d: d["nodes"].append({"id": "x", "type": "teleport"}), "teleport"),
     ],
 )

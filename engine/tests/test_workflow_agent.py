@@ -11,6 +11,7 @@ from test_agent_parity import (
     ScriptedModel,
     _no_retrieval,
     _rounds_with_a_tool_call,
+    _usage_chunk,
 )
 
 from chatbot_engine.agent.client import DEFAULT_UNAVAILABLE_MESSAGE
@@ -209,26 +210,31 @@ async def test_a_tool_that_is_not_offered_says_so_instead_of_failing_the_turn():
 
 async def test_a_model_step_that_runs_out_of_tool_rounds_ends_with_tool_limit():
     """The Chat Model step counts like the loop agent: two tool rounds, three
-    model calls, then `tool_limit` with the usage of every call."""
+    model calls, the call with tools off that answers, then `tool_limit`
+    with the usage of every call."""
     asks = _rounds_with_a_tool_call()[0]
+    answer = [AIMessageChunk(content="Sorry."), _usage_chunk(7, 3)]
     request = _request(None)
     request.project = request.project.model_copy(update={"max_tool_iterations": 2})
 
     events = await _run(
-        None, ScriptedModel(rounds=[asks, asks, asks], seen=[]), request=request
+        None,
+        ScriptedModel(rounds=[asks, asks, asks, answer], seen=[]),
+        request=request,
     )
 
     assert isinstance(events[-1], DoneEvent)
     assert events[-1].finish_reason == "tool_limit"
+    assert _text(events) == "Sorry."
     assert [e.tool for e in events if isinstance(e, ToolCallFinishedEvent)] == [
         "get_booking_status",
         "get_booking_status",
     ]
     usage = next(e for e in events if isinstance(e, UsageEvent))
     assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (
-        90,
-        30,
-        120,
+        97,
+        33,
+        130,
     )
 
 

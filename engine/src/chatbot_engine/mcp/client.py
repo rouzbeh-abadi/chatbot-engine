@@ -25,6 +25,7 @@ from mcp.client.streamable_http import (
 )
 from mcp.types import TextContent
 
+from chatbot_engine.agent.client import without_paths
 from chatbot_engine.api.streaming import describe
 from chatbot_engine.mcp.config import McpTarget, resolve_targets
 from chatbot_engine.models.chat import AssistantConfig
@@ -159,7 +160,9 @@ class McpToolProvider:
 
         # A server that cannot be reached, or fails to list, is left out rather
         # than failing the turn: the assistant carries on with the tools the
-        # other servers offer, and is told which are unavailable.
+        # other servers offer, and is told which are unavailable. The log
+        # names the server and keeps any address in the error to its host:
+        # a path may carry a credential.
         for target in targets:
             try:
                 tools.extend(await self._tools_of(target))
@@ -167,7 +170,7 @@ class McpToolProvider:
                 logger.warning(
                     "MCP server %r unavailable, its tools are left out: %s",
                     target.name,
-                    describe(exc),
+                    without_paths(describe(exc)),
                 )
 
         return tools
@@ -205,10 +208,6 @@ class McpToolProvider:
             self._discovered[key] = (now, tools)
 
         return tools
-
-    def forget_tools(self) -> None:
-        """Drop every cached tool list, so the next turn asks the servers again."""
-        self._discovered.clear()
 
     async def call_tool(
         self,

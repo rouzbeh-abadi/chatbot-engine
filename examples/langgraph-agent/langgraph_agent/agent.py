@@ -6,6 +6,7 @@ conditional edge. Same inputs, same events, same answer. The difference is that
 the control flow is data you can inspect and extend rather than a `for` loop.
 
     retrieve -> model -> (tool calls?) -> tools -> model -> ... -> END
+                       -> (rounds ran out) -> final, tools off -> END
 
 This lives outside the engine on purpose. The engine defines what an agent is
 and how one is found; picking LangGraph is an application decision, so it is
@@ -39,8 +40,10 @@ from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 
 from chatbot_engine.agent.client import (
+    TOOL_LIMIT_RESULT,
     FinishReason,
     add_totals,
+    asks_for_tools,
     build_chat_model,
     discover_tools,
     finish_reason_of,
@@ -48,9 +51,11 @@ from chatbot_engine.agent.client import (
     prompt_messages,
     run_tool_calls,
     stream_reply,
+    unanswered,
     unavailable_note,
     usage_event,
     usage_of,
+    without_tools,
 )
 from chatbot_engine.agent.retriever import (
     retrieve_with_usage,
@@ -65,7 +70,6 @@ from chatbot_engine.models.events import (
     TokenEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
-from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
 from langgraph_agent.runner import run_graph
 
@@ -110,9 +114,10 @@ class LangGraphAgent:
             # The tracer and the ids; the nodes' model calls inherit them.
             **run_config(request, name="graph"),
             # Retrieval, a model step and a tool step per allowed round, the
-            # final model step and finish make 2N + 3; one more so the limit
-            # is never what stops a legal turn.
-            "recursion_limit": 2 * request.project.max_tool_iterations + 4,
+            # last model step, the call with tools off when the rounds ran
+            # out, and finish make 2N + 4; one more so the limit is never
+            # what stops a legal turn.
+            "recursion_limit": 2 * request.project.max_tool_iterations + 5,
         }
         async for event in run_graph(
             graph,
@@ -153,21 +158,30 @@ class LangGraphAgent:
                 "usage": spent,
             }
 
+        async def stream_into_events(
+            runnable: Any, messages: list[BaseMessage]
+        ) -> AIMessageChunk | None:
+            """One streamed call, its text pushed as tokens; the whole reply,
+            or None when the model produced nothing at all."""
+            reply: AIMessageChunk | None = None
+            async for item in stream_reply(lambda: runnable.astream(messages)):
+                if isinstance(item, str):
+                    await events.put(TokenEvent(text=item))
+                else:
+                    reply = item
+            return reply
+
         async def model_node(state: _State) -> _State:
             tools = await tools_of()
-            model = build_chat_model(request.project)
+            # `stream_reply` does the retrying, so the client does none.
+            model = build_chat_model(request.project, max_retries=0)
             bound = model.bind_tools(tools) if tools else model
 
-            reply: AIMessageChunk | None = None
-            async for chunk in stream_reply(
-                lambda: bound.astream(state["messages"]),
-                retries=get_settings().provider_max_retries,
-            ):
-                if chunk.text:
-                    await events.put(TokenEvent(text=chunk.text))
-                reply = chunk if reply is None else reply + chunk
-
-            assert reply is not None
+            reply = await stream_into_events(bound, state["messages"])
+            if reply is None:
+                # The model produced nothing at all: an empty answer, as the
+                # loop agent ends one, with nothing to add to the turn.
+                return {"model_name": model.model_name, "finish_reason": "stop"}
             return {
                 "messages": [reply],
                 "usage": usage_of(reply),
@@ -182,14 +196,19 @@ class LangGraphAgent:
             than reimplementing it: two agents that ran tools differently, or
             reported them differently, would be a bug waiting to happen. It
             yields the started and finished events and the `ToolMessage` that
-            answers each call.
+            answers each call, and answers a call whose arguments could not be
+            read with what was wrong, without running it.
             """
             tools = await tools_of()
             server_for = {tool["name"]: tool["server"] for tool in tools}
-            calls = getattr(state["messages"][-1], "tool_calls", []) or []
+            last = state["messages"][-1]
+            calls = getattr(last, "tool_calls", []) or []
+            invalid = getattr(last, "invalid_tool_calls", []) or []
 
             results: list[BaseMessage] = []
-            async for item in run_tool_calls(calls, request, self._tools, server_for):
+            async for item in run_tool_calls(
+                calls, request, self._tools, server_for, invalid=invalid
+            ):
                 if isinstance(item, ToolMessage):
                     results.append(item)
                 else:
@@ -197,44 +216,71 @@ class LangGraphAgent:
 
             return {"messages": results, "rounds": 1}
 
+        async def final_node(state: _State) -> _State:
+            """The rounds ran out with the model still asking for tools.
+
+            Its calls are answered as not run, and it is called once more with
+            its tools off, so the turn ends with an answer rather than in
+            silence: the loop agent's last call, made the same way.
+            """
+            tools = await tools_of()
+            model = build_chat_model(request.project, max_retries=0)
+            closed = unanswered(state["messages"][-1], TOOL_LIMIT_RESULT)
+            reply = await stream_into_events(
+                without_tools(model, tools), [*state["messages"], *closed]
+            )
+            out: _State = {
+                "messages": [*closed, *([reply] if reply is not None else [])],
+                "model_name": model.model_name,
+                "finish_reason": "tool_limit",
+            }
+            if reply is not None:
+                out["usage"] = usage_of(reply)
+            return out
+
         async def finish_node(state: _State) -> _State:
             await events.put(
                 usage_event(
                     price_usage(state.get("usage", {}), state.get("model_name"))
                 )
             )
-            # Arriving here with a tool request still open means the rounds
-            # ran out: the same `tool_limit` the loop agent reports.
-            last = state["messages"][-1] if state.get("messages") else None
-            limited = bool(getattr(last, "tool_calls", None))
+            # `tool_limit` when the rounds ran out, `length` when the last
+            # reply was cut: the same reasons the loop agent reports.
             await events.put(
-                DoneEvent(
-                    finish_reason="tool_limit"
-                    if limited
-                    else state.get("finish_reason", "stop")
-                )
+                DoneEvent(finish_reason=state.get("finish_reason", "stop"))
             )
             return {}
 
         def next_step(state: _State) -> str:
-            """The one branch in the turn: did the model ask for a tool, and may it still?"""
+            """The one branch in the turn: did the model ask for a tool, and may it still?
+
+            A reply cut at `max_output_tokens` runs none of its calls: the
+            parser would mend a cut call into arguments the model never
+            finished.
+            """
             last = state["messages"][-1]
-            wants_tools = bool(getattr(last, "tool_calls", None))
-            allowed = state.get("rounds", 0) < request.project.max_tool_iterations
-            return "tools" if wants_tools and allowed else "finish"
+            if not asks_for_tools(last) or state.get("finish_reason") == "length":
+                return "finish"
+            if state.get("rounds", 0) < request.project.max_tool_iterations:
+                return "tools"
+            return "final"
 
         graph = StateGraph(_State)  # ty: ignore[invalid-argument-type]  a TypedDict with reducers is what LangGraph documents
         graph.add_node("retrieve", retrieve_node)
         graph.add_node("model", model_node)
         graph.add_node("tools", tools_node)
+        graph.add_node("final", final_node)
         graph.add_node("finish", finish_node)
 
         graph.add_edge(START, "retrieve")
         graph.add_edge("retrieve", "model")
         graph.add_conditional_edges(
-            "model", next_step, {"tools": "tools", "finish": "finish"}
+            "model",
+            next_step,
+            {"tools": "tools", "final": "final", "finish": "finish"},
         )
         graph.add_edge("tools", "model")
+        graph.add_edge("final", "finish")
         graph.add_edge("finish", END)
 
         return graph.compile()

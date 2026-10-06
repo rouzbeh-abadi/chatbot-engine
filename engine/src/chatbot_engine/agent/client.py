@@ -11,25 +11,35 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+import re
 import time
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal, cast
 
+import httpx
 import openai
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
     AIMessageChunk,
     BaseMessage,
     HumanMessage,
+    InvalidToolCall,
     SystemMessage,
     ToolCall,
     ToolMessage,
 )
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 
-from chatbot_engine.models.chat import AssistantConfig, Attachment, ChatRequest
+from chatbot_engine.models.chat import (
+    AssistantConfig,
+    Attachment,
+    ChatRequest,
+    Message,
+)
 from chatbot_engine.models.events import (
     ToolCallFinishedEvent,
     ToolCallStartedEvent,
@@ -134,6 +144,12 @@ def start_meter() -> Totals:
     return meter
 
 
+def turn_meter() -> Totals | None:
+    """What the turn running in this context has spent so far, or None when
+    no meter was started for it (`start_meter`)."""
+    return _METER.get()
+
+
 def add_usage(totals: Totals, message: BaseMessage, *, utility: bool = False) -> None:
     """Add one model reply's token counts to `totals`, and to the turn's meter.
 
@@ -203,7 +219,8 @@ class Usage:
     cost_usd: float | None = None
     #: Why the last reply ended: `stop`; `length` when `max_output_tokens` cut
     #: it; `tool_limit` when the model was still asking for tools after
-    #: `max_tool_iterations` rounds. What the turn's `done` event reports.
+    #: `max_tool_iterations` rounds, and answered with its tools off. What
+    #: the turn's `done` event reports.
     finish_reason: FinishReason = "stop"
 
 
@@ -217,7 +234,10 @@ def build_chat_model(
     """Create the chat model using the assistant config and engine settings.
 
     `max_retries` and `timeout_s` stand in for the engine's settings for one
-    call that must finish within a caller's patience (reading an image).
+    call. A model whose calls stream through `stream_reply` is built with
+    `max_retries=0`: `stream_reply` retries the whole call, and the client
+    retrying underneath it would multiply the attempts. Reading an image
+    must finish within a caller's patience.
     """
     settings = settings or get_settings()
 
@@ -323,18 +343,19 @@ def file_frames(attachments: Sequence[Attachment], *, limit: int | None = None) 
     return "\n\n".join(frames)
 
 
-def attachments_block(request: ChatRequest) -> str:
+def attachments_block(request: ChatRequest, *, limit: int | None = None) -> str:
     """The files of the conversation as one section before the message, or "" when there are none.
 
     Named files the conversation no longer carries (`ChatRequest.omitted`) are
     listed after them, so the model knows a file it is asked about once
-    existed.
+    existed. `limit` cuts each file's text, as `file_frames` does.
     """
     if not request.attachments and not request.omitted:
         return ""
     parts = []
     if request.attachments:
-        parts.append(f"{ATTACHMENTS_HEADING}\n\n{file_frames(request.attachments)}")
+        frames = file_frames(request.attachments, limit=limit)
+        parts.append(f"{ATTACHMENTS_HEADING}\n\n{frames}")
     if request.omitted:
         names = ", ".join(file_name(name) for name in request.omitted)
         parts.append(OMITTED_TEMPLATE.format(names=names))
@@ -348,29 +369,75 @@ _HISTORY_MESSAGE = {
 }
 
 
-def to_messages(request: ChatRequest, context: str = "") -> list[BaseMessage]:
-    """Convert chat history, retrieved context, and the new question into model messages.
+def person_turn(
+    request: ChatRequest, context: str = "", *, file_chars: int | None = None
+) -> HumanMessage:
+    """The person's turn: the extracts and the files, then the message.
 
     The extracts and the person's files travel in the person's own turn,
     before the question they are about: text the chatbot did not write never
     speaks in the system role, and the question stays last, where a model
-    reads it best. Nothing invisible reaches the model from any turn.
+    reads it best. `file_chars` cuts each file's text to fit a budget.
     """
-    messages: list[BaseMessage] = [
-        _HISTORY_MESSAGE[turn.role](visible(turn.content)) for turn in request.history
-    ]
-
     parts = []
     if context:
         # `to_context` has already cleaned each extract and shown any closer as `[/extracts]`.
         parts.append(f"{EXTRACTS_HEADING}\n\n<extracts>\n{context}\n</extracts>")
-    files = attachments_block(request)
+    files = attachments_block(request, limit=file_chars)
     if files:
         parts.append(files)
     parts.append(visible(request.message))
-    messages.append(HumanMessage("\n\n".join(parts)))
+    return HumanMessage("\n\n".join(parts))
 
-    return messages
+
+#: Said where the extracts were cut to keep the prompt within its budget.
+EXTRACTS_CUT = "[Further extracts were left out to keep the prompt within its limit.]"
+
+
+def extracts_within(context: str, chars: int) -> str:
+    """The numbered extracts, the first of them that fit in `chars` characters.
+
+    The extracts come best first, so the last go: cut where an extract
+    begins when one does within the room, with a line saying the rest were
+    left out.
+    """
+    if len(context) <= chars:
+        return context
+    room = max(0, chars - len(EXTRACTS_CUT) - 2)
+    cut = context.rfind("\n\n[", 0, room)
+    kept = context[: cut if cut > 0 else room].rstrip()
+    return f"{kept}\n\n{EXTRACTS_CUT}" if kept else EXTRACTS_CUT
+
+
+def history_messages(turns: Sequence[Message]) -> list[BaseMessage]:
+    """The history's turns as model messages, with nothing invisible left in any."""
+    return [_HISTORY_MESSAGE[turn.role](visible(turn.content)) for turn in turns]
+
+
+def history_that_fits(history: Sequence[Message], room: int) -> list[Message]:
+    """The newest turns of the history whose text fits in `room` characters.
+
+    The oldest turns go first, and a turn that does not fit ends the history
+    there: a conversation with a gap in its middle reads as one that never
+    happened.
+    """
+    kept: list[Message] = []
+    for turn in reversed(history):
+        room -= len(turn.content)
+        if room < 0:
+            break
+        kept.append(turn)
+    kept.reverse()
+    return kept
+
+
+def to_messages(request: ChatRequest, context: str = "") -> list[BaseMessage]:
+    """Convert chat history, retrieved context, and the new question into model messages.
+
+    The whole history, then the person's turn (`person_turn`). Nothing
+    invisible reaches the model from any turn.
+    """
+    return [*history_messages(request.history), person_turn(request, context)]
 
 
 def prompt_messages(
@@ -386,7 +453,13 @@ def prompt_messages(
     the notes the backend appended to the prompt reach the model the same way
     whichever agent runs the turn. `extra_system` is appended to the system
     prompt (a workflow step's own instructions); `prior` is what this turn has
-    already produced -- replies and tool results -- and follows the conversation.
+    already produced, replies and tool results, and follows the conversation.
+
+    The prompt is kept under `ENGINE_PROMPT_CHARS`. The history takes the
+    room the rest leaves, its oldest turns left out first. When even no
+    history is too much, the extracts' tail goes next (they come best
+    first), then each file is cut to an even share of what is left. The
+    system prompt, the message and `prior` are never cut.
     """
     system = request.project.system_prompt
     if extra_system:
@@ -400,27 +473,95 @@ def prompt_messages(
     if request.attachments:
         system = f"{system}\n\n{ATTACHMENTS_RULES}"
 
-    return [SystemMessage(content=system), *to_messages(request, context), *prior]
+    # The room the person's turn and the history share.
+    room = (
+        get_settings().prompt_chars
+        - len(system)
+        - sum(len(message.text) for message in prior)
+    )
+    turn = person_turn(request, context)
+    if len(turn.text) > room and context:
+        over = len(turn.text) - room
+        context = extracts_within(context, max(0, len(context) - over))
+        turn = person_turn(request, context)
+        logger.info(
+            "left out the last extracts to keep the prompt under ENGINE_PROMPT_CHARS"
+        )
+    if len(turn.text) > room and request.attachments:
+        over = len(turn.text) - room
+        files = sum(len(attachment.text) for attachment in request.attachments)
+        share = max(0, (files - over) // len(request.attachments))
+        turn = person_turn(request, context, file_chars=share)
+        logger.info(
+            "cut each file to %d characters to keep the prompt under "
+            "ENGINE_PROMPT_CHARS",
+            share,
+        )
+    history = history_that_fits(request.history, room - len(turn.text))
+    if len(history) < len(request.history):
+        logger.info(
+            "left out the oldest %d of %d turns of the history to keep the prompt "
+            "under ENGINE_PROMPT_CHARS",
+            len(request.history) - len(history),
+            len(request.history),
+        )
+
+    return [
+        SystemMessage(content=system),
+        *history_messages(history),
+        turn,
+        *prior,
+    ]
 
 
 #: How much of each file a hand-off's transcript carries: enough for a ticket
 #: to show what the person sent, not the whole of a long document.
 TRANSCRIPT_FILE_CHARS = 2_000
 
+#: How many of the newest turns the query rewrite reads, and how much of
+#: each: enough to resolve "it" or "the second one" in the message, without
+#: a long conversation making every turn's rewrite cost more. A long turn
+#: keeps its start and, longer, its end, where a list just offered usually is.
+REWRITE_TURNS = 6
+REWRITE_TURN_CHARS = 2_000
+
+
+def _cut(text: str, chars: int) -> str:
+    """`text` cut to about `chars` characters: its first quarter and its end."""
+    if len(text) <= chars:
+        return text
+    head = chars // 4
+    return f"{text[:head]} … {text[-(chars - head) :]}"
+
 
 def transcript(
-    request: ChatRequest, *, include_message: bool = False, include_files: bool = False
+    request: ChatRequest,
+    *,
+    include_message: bool = False,
+    include_files: bool = False,
+    last: int | None = REWRITE_TURNS,
+    turn_chars: int | None = REWRITE_TURN_CHARS,
 ) -> str:
     """The conversation as `role: content` lines, one per turn.
 
     What the query rewrite reads, and what a hand-off passes to the tool that
-    raises the ticket or sends the email; `include_message` adds the message
-    being answered as the last line, `include_files` the start of each file
-    the person sent, after the lines, so the person who takes over sees them.
+    raises the ticket or sends the email. `last` keeps only the newest turns
+    and `turn_chars` cuts each to its start and end, as the rewrite needs
+    unless given; a hand-off passes None for both, for all of it.
+    `include_message` adds the message being answered as the last line,
+    `include_files` the start of each file the person sent, after the lines,
+    so the person who takes over sees them. Nothing invisible is left in any
+    of it.
     """
-    lines = [f"{turn.role}: {turn.content}" for turn in request.history]
+    turns = request.history if last is None else request.history[-last:] if last else []
+    lines = []
+    for turn in turns:
+        content = visible(turn.content)
+        if turn_chars is not None:
+            content = _cut(content, turn_chars)
+        lines.append(f"{turn.role}: {content}")
     if include_message:
-        lines.append(f"user: {request.message}")
+        lines.append(f"user: {visible(request.message)}")
     text = "\n".join(lines)
     if include_files and request.attachments:
         text += "\n\nFiles the person sent, as their text:\n\n" + file_frames(
@@ -442,6 +583,30 @@ def unavailable_message(project: AssistantConfig) -> str:
     return project.unavailable_message or DEFAULT_UNAVAILABLE_MESSAGE
 
 
+#: A URL, as far as its host, then whatever follows it: a userinfo part is
+#: matched apart so it can be dropped too.
+_URL = re.compile(
+    r"(?P<scheme>\b[a-z][a-z0-9+.-]*://)(?:[^/\s'\"<>@]*@)?"
+    r"(?P<host>[^/?#\s'\"<>]+)(?P<rest>[^\s'\"<>]*)",
+    re.IGNORECASE,
+)
+
+
+def without_paths(text: str) -> str:
+    """`text` with every URL in it cut to its scheme and host, for a log line.
+
+    A tool server's address may carry a credential in its path or query, as
+    the application's own `/api/mcp/<id>/<token>` does, and an error message
+    often quotes the address it failed on.
+    """
+
+    def host_only(match: re.Match[str]) -> str:
+        cut = "/…" if match["rest"] or "@" in match[0] else ""
+        return f"{match['scheme']}{match['host']}{cut}"
+
+    return _URL.sub(host_only, text)
+
+
 async def discover_tools(
     tools_provider: ToolProvider, project: AssistantConfig
 ) -> list[dict[str, Any]]:
@@ -455,8 +620,12 @@ async def discover_tools(
     try:
         return [dict(tool) for tool in await tools_provider.list_tools(project)]
     except Exception as exc:
-        urls = ", ".join(server.url for server in project.mcp_servers)
-        logger.warning("could not discover tools from %s: %s", urls, exc)
+        # The servers by name, never by address: an address may carry a
+        # credential, and a log is no place for one.
+        names = ", ".join(server.name for server in project.mcp_servers)
+        logger.warning(
+            "could not discover tools from %s: %s", names, without_paths(str(exc))
+        )
         return []
 
 
@@ -500,17 +669,52 @@ def failed_tool_text(name: str, exc: Exception, project: AssistantConfig) -> str
     )
 
 
+def clipped_result(text: str, limit: int | None = None) -> str:
+    """A tool result as the model reads it.
+
+    Whole when it fits in `limit` characters (`ENGINE_TOOL_RESULT_CHARS`
+    unless given); otherwise its start and a line saying how much was left
+    out, so the model knows it has not seen all of it. A result is sent
+    again with every later model call of the turn, so one that ran to
+    megabytes would be paid for each round.
+    """
+    limit = get_settings().tool_result_chars if limit is None else limit
+    if len(text) <= limit:
+        return text
+    return (
+        f"{text[:limit]}\n\n[The result was cut here: {len(text) - limit:,} more "
+        "characters were left out.]"
+    )
+
+
+#: What the model reads for a call whose arguments were not a JSON object.
+#: The streamed reply's parser cannot read them, so the call is not made;
+#: the model is told, and may call the tool again in its next round.
+INVALID_ARGUMENTS_TEXT = (
+    "Tool {name!r} was not called: its arguments were not a JSON object. "
+    "Call it again with arguments that match its schema."
+)
+
+#: What a failed tool event says for such a call.
+INVALID_ARGUMENTS_ERROR = "not called: the arguments were not a JSON object"
+
+
 async def run_tool_calls(
     calls: Sequence[ToolCall],
     request: ChatRequest,
     tools_provider: ToolProvider,
     server_for: Mapping[str, str],
+    *,
+    invalid: Sequence[InvalidToolCall] = (),
 ) -> AsyncIterator[ToolCallStartedEvent | ToolCallFinishedEvent | ToolMessage]:
     """Run the tools the model asked for, narrating each as it goes.
 
     For each call this yields a started event, runs the tool over MCP, yields a
     finished event with the outcome and timing, and then yields the `ToolMessage`
     the caller appends to the conversation so the model can use the result.
+    The message holds the result cut to `ENGINE_TOOL_RESULT_CHARS`
+    (`clipped_result`), and the whole of it as its `artifact`, which is
+    never sent to a model.
 
     A tool that raises does not end the turn: the failure is reported as
     `ok=false`, and its error text is fed back as the tool message, so the model
@@ -522,6 +726,11 @@ async def run_tool_calls(
             `user_id` and `session_id` forwarded to the tool server.
         tools_provider: Runs a named tool on a named server over MCP.
         server_for: Maps each tool name to the server that provides it.
+        invalid: The calls in the same reply whose arguments could not be
+            read (`AIMessage.invalid_tool_calls`). None of them runs; each is
+            reported as failed and answered with what was wrong, so the
+            model can call the tool again, and the reply's every call has a
+            result, as providers require.
 
     Yields:
         A started event, a finished event, and a `ToolMessage` per call, in order.
@@ -564,7 +773,73 @@ async def run_tool_calls(
         )
         # tool_call_id pairs this result with the specific call it answers;
         # a result is a stranger's text too, and loses what a reader cannot see.
-        yield ToolMessage(content=visible(result), tool_call_id=call["id"] or "")
+        text = visible(result)
+        yield ToolMessage(
+            content=clipped_result(text), artifact=text, tool_call_id=call["id"] or ""
+        )
+
+    for index, call in enumerate(invalid, start=len(calls)):
+        name = call.get("name") or ""
+        call_id = call.get("id") or f"call-{index}"
+        yield ToolCallStartedEvent(
+            call_id=call_id, tool=name, server=server_for.get(name)
+        )
+        yield ToolCallFinishedEvent(
+            call_id=call_id,
+            tool=name,
+            ok=False,
+            duration_ms=0,
+            error=INVALID_ARGUMENTS_ERROR,
+        )
+        yield ToolMessage(
+            content=INVALID_ARGUMENTS_TEXT.format(name=name),
+            tool_call_id=call.get("id") or "",
+        )
+
+
+#: What the model reads for each call it asked for once the turn's tool
+#: rounds had run out, before the one call it then makes with its tools off.
+TOOL_LIMIT_RESULT = (
+    "Not run: this turn has made all the tool calls it may. Answer the visitor "
+    "now with what you already have, and say plainly what you could not do."
+)
+
+#: What a later model call reads for a call in a reply cut at
+#: `max_output_tokens`, which was not run.
+CUT_CALL_RESULT = "Not run: the reply was cut off before this call was complete."
+
+
+def asks_for_tools(reply: BaseMessage) -> bool:
+    """Whether a reply asks for tools: any call, readable or not."""
+    return bool(
+        getattr(reply, "tool_calls", None) or getattr(reply, "invalid_tool_calls", None)
+    )
+
+
+def unanswered(reply: BaseMessage, text: str) -> list[ToolMessage]:
+    """A result saying `text` for every call `reply` makes.
+
+    What closes a reply whose calls will not run, so the conversation stays
+    one a provider accepts: a call with no result after it is refused (a
+    400 from OpenAI-style APIs) by the next model call that sends it back.
+    """
+    calls = [
+        *(getattr(reply, "tool_calls", None) or []),
+        *(getattr(reply, "invalid_tool_calls", None) or []),
+    ]
+    return [
+        ToolMessage(content=text, tool_call_id=call.get("id") or "") for call in calls
+    ]
+
+
+def without_tools(model: BaseChatModel, tools: Sequence[dict[str, Any]]) -> Runnable:
+    """The model for a call that must answer in prose: its tools declared, none to call.
+
+    `tool_choice: none` rather than no tools at all: a conversation that
+    holds tool calls and their results is refused by some providers when no
+    tools come with it.
+    """
+    return model.bind_tools(tools, tool_choice="none") if tools else model
 
 
 async def stream_completion(
@@ -583,7 +858,14 @@ async def stream_completion(
     4. If the model requests a tool, execute it and add the result to the conversation.
     5. Call the model again with the tool result.
     6. Repeat until the model produces a normal answer with no more tool calls,
-       or asks for tools again once `max_tool_iterations` rounds have run.
+       or asks for tools again once `max_tool_iterations` rounds have run;
+       then it is called once more with its tools off, and answers.
+
+    A call whose arguments cannot be read is not made: the model is told so,
+    in that call's result, and may try again in its next round. A reply cut
+    at `max_output_tokens` ends the turn with `length` and runs none of its
+    calls, since the parser would mend a cut call into arguments the model
+    never finished.
 
     Args:
         request: The chat turn to answer. Supplies the assistant config
@@ -607,8 +889,9 @@ async def stream_completion(
     server_for = {tool["name"]: tool["server"] for tool in tools}
 
     # The system prompt leads, then the running conversation; the model is
-    # bound to the tools when there are any, and told which could not be reached.
-    model = build_chat_model(request.project)
+    # bound to the tools when there are any, and told which could not be
+    # reached. `stream_reply` does the retrying, so the client does none.
+    model = build_chat_model(request.project, max_retries=0)
     bound = model.bind_tools(tools) if tools else model
     messages = prompt_messages(
         request, context, extra_system=unavailable_note(request.project, tools)
@@ -618,7 +901,6 @@ async def stream_completion(
     # calls, and reporting only the last one would understate the total.
     totals = dict(prior) if prior else empty_totals()
 
-    retries = get_settings().provider_max_retries
     config = run_config(request, name="answer")
 
     # One model call more than the tool rounds allowed, so the last round's
@@ -627,17 +909,11 @@ async def stream_completion(
     limit = request.project.max_tool_iterations
     for rounds_done in range(limit + 1):
         reply: AIMessageChunk | None = None
-
-        async for chunk in stream_reply(
-            lambda: bound.astream(messages, config=config), retries=retries
-        ):
-            if chunk.text:
-                yield chunk.text
-
-            # Chunks add up into the whole message, and only the whole message
-            # has usable `tool_calls`: a fragment cannot know whether the model
-            # was part-way through asking for a tool.
-            reply = chunk if reply is None else reply + chunk
+        async for item in stream_reply(lambda: bound.astream(messages, config=config)):
+            if isinstance(item, str):
+                yield item
+            else:
+                reply = item
 
         if reply is None:
             # The model produced nothing at all. An empty answer, which is what
@@ -648,27 +924,40 @@ async def stream_completion(
         add_usage(totals, reply)
         messages.append(reply)
 
-        if not reply.tool_calls:
-            yield price_usage(
-                totals, model.model_name, finish_reason=finish_reason_of(reply)
-            )
+        finish = finish_reason_of(reply)
+        if finish == "length" or not asks_for_tools(reply):
+            # Done, or cut at `max_output_tokens`: then even a call the reply
+            # was making is not run, as its arguments may be cut short too.
+            yield price_usage(totals, model.model_name, finish_reason=finish)
             return
 
         if rounds_done == limit:
             break
 
-        async for item in run_tool_calls(
-            reply.tool_calls, request, tools_provider, server_for
+        async for event in run_tool_calls(
+            reply.tool_calls,
+            request,
+            tools_provider,
+            server_for,
+            invalid=reply.invalid_tool_calls,
         ):
-            if isinstance(item, ToolMessage):
-                messages.append(item)
+            if isinstance(event, ToolMessage):
+                messages.append(event)
             else:
                 # A tool started/finished event, on its way to the UI.
-                yield item
+                yield event
 
-    # The model was still asking for tools when the rounds ran out. What it
-    # said so far has streamed; the turn ends and says why, rather than
-    # failing after the client has shown text.
+    # The model was still asking for tools when the rounds ran out. Its calls
+    # are answered as not run, and it is called once more with its tools off,
+    # so the turn ends with an answer rather than in silence; the `done`
+    # event still says why.
+    messages.extend(unanswered(messages[-1], TOOL_LIMIT_RESULT))
+    final = without_tools(model, tools)
+    async for item in stream_reply(lambda: final.astream(messages, config=config)):
+        if isinstance(item, str):
+            yield item
+        else:
+            add_usage(totals, item)
     yield price_usage(totals, model.model_name, finish_reason="tool_limit")
 
 
@@ -679,58 +968,79 @@ RETRY_BACKOFF_S = 0.5
 def is_transient(exc: BaseException) -> bool:
     """Whether a model call failed in a way a retry can fix.
 
-    Rate limits, upstream 5xx and dropped connections come and go; a 400 or an
-    authentication failure will not change on the next attempt.
+    Rate limits, upstream 5xx and dropped connections come and go, and so do
+    an error the provider sends inside a stream it had started (an
+    `openai.APIError` with no status) and a connection that breaks while the
+    stream is read (an `httpx` transport error, which the client library
+    passes on unwrapped). A 400 or an authentication failure will not change
+    on the next attempt, and neither will a response the library could not
+    read.
     """
-    try:
-        import openai
-    except ImportError:  # pragma: no cover - openai ships with langchain-openai
-        return False
     if isinstance(exc, openai.RateLimitError | openai.APIConnectionError):
         return True
     if isinstance(exc, openai.APIStatusError):
         return exc.status_code >= 500
-    return False
+    if isinstance(exc, openai.APIResponseValidationError):
+        return False
+    return isinstance(exc, openai.APIError | httpx.TransportError)
 
 
 async def stream_reply(
     open_stream: Callable[[], AsyncIterator[BaseMessage]],
     *,
-    retries: int,
+    retries: int | None = None,
     backoff_s: float = RETRY_BACKOFF_S,
-) -> AsyncIterator[AIMessageChunk]:
-    """One model call, streamed, retried while nothing has reached the caller.
+) -> AsyncIterator[str | AIMessageChunk]:
+    """One model call, streamed: its text as it arrives, then the whole reply.
 
-    `open_stream` starts the call; it is invoked again on each retry. The
-    provider client already retries a request that fails outright. This
-    covers the stream that opens and then breaks before its first token,
-    which the client cannot retry because the response has started. Once a
-    token has been yielded the failure is passed on: the caller has shown
-    text that a replay would duplicate. Every agent streams through here, so
-    they all get the same retry.
+    Yields each piece of text as a `str` as soon as it arrives, then, once
+    the stream has ended, the reply summed from all of its chunks, once, as
+    an `AIMessageChunk`; nothing more when the model produced nothing at
+    all. Only the whole reply has usable `tool_calls`: a fragment cannot know
+    whether the model was part-way through asking for a tool.
+
+    `open_stream` starts the call, and is invoked again on each retry: up to
+    `retries` times (`ENGINE_PROVIDER_MAX_RETRIES` unless given), with a
+    doubling delay, while the failure is one a retry can fix (`is_transient`)
+    and no text has reached the caller. That covers a request that fails
+    outright and a stream that breaks before its first token. Each attempt
+    sums its reply afresh, so a tool call streamed before a break is never
+    counted twice. Once text has been yielded the failure is passed on: the
+    caller has shown text that a replay would duplicate.
+
+    This is the one layer that retries a streamed call; the model is built
+    with `max_retries=0`, or the client's retries would multiply these.
+    Every agent streams through here, so they all get the same retry.
     """
-    for attempt in range(retries + 1):
+    attempts = get_settings().provider_max_retries if retries is None else retries
+    for attempt in range(attempts + 1):
+        reply: AIMessageChunk | None = None
         emitted = False
         try:
             async for chunk in open_stream():
-                if chunk.text:
-                    emitted = True
                 # A chat model streams AIMessageChunks; the client library's
                 # annotation is the base message, so narrow here once.
-                yield cast(AIMessageChunk, chunk)
-            return
+                piece = cast(AIMessageChunk, chunk)
+                reply = piece if reply is None else reply + piece
+                if piece.text:
+                    emitted = True
+                    yield piece.text
         except Exception as exc:
-            if emitted or attempt >= retries or not is_transient(exc):
+            if emitted or attempt >= attempts or not is_transient(exc):
                 raise
             delay = backoff_s * 2**attempt
             logger.warning(
                 "model call failed before its first token (%s); retry %d/%d in %.1fs",
                 type(exc).__name__,
                 attempt + 1,
-                retries,
+                attempts,
                 delay,
             )
             await asyncio.sleep(delay)
+            continue
+        if reply is not None:
+            yield reply
+        return
 
 
 #: The reasons a reply can end that `price_usage` passes on to the `done` event.

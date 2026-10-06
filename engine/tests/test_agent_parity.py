@@ -20,11 +20,11 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
 
 from chatbot_engine.agent.chat_agent import ChatAgent
-from chatbot_engine.agent.client import DEFAULT_UNAVAILABLE_MESSAGE
+from chatbot_engine.agent.client import DEFAULT_UNAVAILABLE_MESSAGE, TOOL_LIMIT_RESULT
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest, McpServerConfig
 from chatbot_engine.models.events import (
     DoneEvent,
@@ -223,14 +223,17 @@ async def test_a_reply_that_stopped_to_call_a_tool_is_not_length(which: str) -> 
 async def test_running_out_of_tool_rounds_ends_the_turn_with_tool_limit(
     which: str,
 ) -> None:
-    """The model keeps asking; after `max_tool_iterations` rounds the turn
-    ends and says why, instead of failing after text has streamed."""
+    """The model keeps asking; after `max_tool_iterations` rounds it is
+    called once more with its tools off, so the turn ends with an answer,
+    and the turn says why."""
     asks = _rounds_with_a_tool_call()[0]
-    rounds = [asks, asks, asks]  # one more than allowed, never a final answer
+    # One more than allowed, never a final answer; then the call with tools off.
+    rounds = [asks, asks, asks, [AIMessageChunk(content="Sorry."), _usage_chunk(7, 3)]]
     request = _request()
     request.project = request.project.model_copy(update={"max_tool_iterations": 2})
+    model = ScriptedModel(rounds=rounds, seen=[])
 
-    events = await _run(which, rounds, FakeTools(), request=request)
+    events = await _run(which, rounds, FakeTools(), model=model, request=request)
 
     assert isinstance(events[-1], DoneEvent)
     assert events[-1].finish_reason == "tool_limit"
@@ -239,13 +242,21 @@ async def test_running_out_of_tool_rounds_ends_the_turn_with_tool_limit(
         "get_booking_status",
         "get_booking_status",
     ]
-    # Two tool rounds, three model calls: the last round's results reach the
-    # model before the cut, and both agents count the same way.
+    assert "".join(e.text for e in events if isinstance(e, TokenEvent)) == "Sorry."
+    # The third call's request is answered as not run before the last call,
+    # so the conversation that call sends is one a provider accepts.
+    last_call = model.seen[-1]
+    assert isinstance(last_call[-1], ToolMessage)
+    assert last_call[-1].tool_call_id == "c1"
+    assert last_call[-1].content == TOOL_LIMIT_RESULT
+    # Two tool rounds, three model calls and the one with tools off: the last
+    # round's results reach the model before the cut, and both agents count
+    # the same way.
     usage = next(e for e in events if isinstance(e, UsageEvent))
     assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (
-        90,
-        30,
-        120,
+        97,
+        33,
+        130,
     )
 
 

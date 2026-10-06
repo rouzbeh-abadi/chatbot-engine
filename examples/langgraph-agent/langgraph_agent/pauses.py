@@ -8,7 +8,10 @@ and when it paused. The record is what makes a resume safe:
 
 - a `thread_id` from one project or conversation cannot resume another's turn;
 - a workflow edited while a turn waited is not resumed into a different graph;
-- a turn nobody answered is forgotten after `pause_ttl_s`, state and all.
+- a turn nobody answered is forgotten after `pause_ttl_s`, state and all;
+- a pause is resumed once: the request that resumes it claims its record
+  first, so a second request with the same answer (a double click, a retry)
+  finds nothing waiting.
 
 Only a workflow that contains an ask step is compiled with the checkpointer,
 so turns that never pause write nothing to disk, and a finished turn's state
@@ -134,6 +137,47 @@ class Pauses:
                 row = await cursor.fetchone()
             pause = Pause(*row) if row else None
         if pause is not None and time.time() - pause.paused_at > self._ttl_s:
+            await self.forget(thread_id)
+            return None
+        return pause
+
+    async def claim(
+        self, thread_id: str, project_id: str, session_id: str
+    ) -> Pause | None:
+        """Take the paused turn under `thread_id` for one resume, or None.
+
+        The record is removed as it is read, in one step, so of two requests
+        resuming the same turn only one gets it; the other finds nothing
+        waiting, as for a turn that expired. A pause from another project or
+        conversation is neither returned nor removed. The turn's saved state
+        stays for the resume to read: a turn that pauses again is recorded
+        again, and one that ends forgets its state.
+        """
+        await self.saver()
+        if self._conn is None:
+            # No await between the look and the removal: atomic in one loop.
+            pause = self._records.get(thread_id)
+            if (
+                pause is None
+                or pause.project_id != project_id
+                or pause.session_id != session_id
+            ):
+                return None
+            del self._records[thread_id]
+        else:
+            # One statement, so two engines on one file cannot both delete it.
+            async with self._conn.execute(
+                "DELETE FROM workflow_pauses"
+                " WHERE thread_id = ? AND project_id = ? AND session_id = ?"
+                " RETURNING thread_id, project_id, session_id, spec_hash, paused_at",
+                (thread_id, project_id, session_id),
+            ) as cursor:
+                row = await cursor.fetchone()
+            await self._conn.commit()
+            if row is None:
+                return None
+            pause = Pause(*row)
+        if time.time() - pause.paused_at > self._ttl_s:
             await self.forget(thread_id)
             return None
         return pause

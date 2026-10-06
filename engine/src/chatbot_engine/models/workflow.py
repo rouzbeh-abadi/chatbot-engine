@@ -76,7 +76,13 @@ class ReplyNode(_Node):
 
 
 class HandoffNode(_Node):
-    """Tell the visitor a person will follow up, and mark the turn handed off."""
+    """Tell the visitor a person will follow up, and mark the turn handed off.
+
+    With a `tool`, the tool is called first, and the message is said only
+    when the call worked: a visitor is never promised a person nobody was
+    told about. When it fails, or the tool is not offered right now, the
+    visitor hears the assistant's `unavailable_message` and the turn ends.
+    """
 
     type: Literal["handoff"]
     message: str = Field(min_length=1, max_length=2000)
@@ -166,7 +172,7 @@ class AskNode(_Node):
 
 
 class EndNode(_Node):
-    """Finish the turn."""
+    """Finish the turn. No edge may leave it."""
 
     type: Literal["end"]
 
@@ -228,7 +234,14 @@ class WorkflowSpec(BaseModel):
                     raise ValueError(
                         f"condition {n.id!r} routes by its branches, not by edges"
                     )
-            elif n.type != "end" and sum(e.from_ == n.id for e in self.edges) > 1:
+            elif n.type == "end":
+                # An end that led somewhere would not end the turn: the steps
+                # after it would run.
+                if any(e.from_ == n.id for e in self.edges):
+                    raise ValueError(
+                        f"end {n.id!r} finishes the turn, so no edge may leave it"
+                    )
+            elif sum(e.from_ == n.id for e in self.edges) > 1:
                 raise ValueError(f"node {n.id!r} has more than one outgoing edge")
             if n.type == "ask":
                 for field, target in (

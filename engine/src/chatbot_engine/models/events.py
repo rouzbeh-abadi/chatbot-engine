@@ -150,9 +150,11 @@ class DoneEvent(_Event):
     """Always last. `finish_reason` says why the turn ended."""
 
     type: Literal["done"] = "done"
-    #: `stop`: the model finished. `length`: cut at `max_output_tokens`.
-    #: `tool_limit`: the model was still asking for tools after
-    #: `max_tool_iterations` rounds; the answer so far was streamed. `error`:
+    #: `stop`: the model finished, or the turn ended with the assistant's
+    #: `unavailable_message` (a failed tool step or hand-off, or the turn's
+    #: deadline). `length`: cut at `max_output_tokens`. `tool_limit`: the
+    #: model was still asking for tools after `max_tool_iterations` rounds,
+    #: and answered once more with its tools off. `error`:
     #: the turn failed after the response started (an `error` event precedes).
     #: `input_required`: the turn paused on a question (an `input_required`
     #: event precedes) and continues when the answer is sent with `resume`.

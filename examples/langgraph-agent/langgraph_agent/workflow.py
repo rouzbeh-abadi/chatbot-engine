@@ -35,9 +35,13 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
 
 from chatbot_engine.agent.client import (
+    CUT_CALL_RESULT,
+    TOOL_LIMIT_RESULT,
     FinishReason,
     add_totals,
+    asks_for_tools,
     build_chat_model,
+    clipped_result,
     discover_tools,
     file_frames,
     finish_reason_of,
@@ -46,10 +50,12 @@ from chatbot_engine.agent.client import (
     run_tool_calls,
     stream_reply,
     transcript,
+    unanswered,
     unavailable_message,
     unavailable_note,
     usage_event,
     usage_of,
+    without_tools,
 )
 from chatbot_engine.agent.retriever import (
     retrieve_with_usage,
@@ -72,6 +78,7 @@ from chatbot_engine.models.events import (
 from chatbot_engine.models.workflow import (
     AskNode,
     ConditionNode,
+    EndNode,
     HandoffNode,
     ModelNode,
     ReplyNode,
@@ -184,7 +191,8 @@ class _State(TypedDict, total=False):
     model_name: str
     #: Set by a condition node; read by its routing function.
     route: str
-    #: Set by a tool step that failed with `on_error: stop`: the turn ends there.
+    #: Set by a tool step that failed with `on_error: stop`, or a hand-off
+    #: whose tool failed: the turn ends there.
     halted: bool
     #: The message that started the turn. A resumed request carries the
     #: answer as its message, so `{{message}}` reads this instead.
@@ -436,20 +444,26 @@ class WorkflowAgent:
         }
         thread_id = f"{project_id}:{uuid.uuid4().hex}"
         if request.resume is not None:
+            # Claimed before anything runs, so a second request with the same
+            # answer (a double click, a retry) finds nothing waiting and is
+            # told so, rather than running the rest of the turn again.
             pause = (
-                await self.pauses.find(request.resume.thread_id) if can_pause else None
+                await self.pauses.claim(
+                    request.resume.thread_id, project_id, session_id
+                )
+                if can_pause
+                else None
             )
             problem = None
-            if (
-                pause is None
-                or pause.project_id != project_id
-                or pause.session_id != session_id
-            ):
+            if pause is None:
                 problem = (
                     "resume_expired",
                     "That question is no longer waiting for an answer. Please ask again.",
                 )
             elif pause.spec_hash != spec_hash(spec):
+                # It can never be resumed into the graph it paused in, so
+                # its state goes with the record this request claimed.
+                await self.pauses.forget(pause.thread_id)
                 problem = (
                     "resume_changed",
                     "The chatbot's workflow changed while the question waited. Please ask again.",
@@ -473,45 +487,45 @@ class WorkflowAgent:
 
         outcome: dict[str, Any] = {}
         spoke = False
+        waiting = False
         try:
             async for event in run_graph(graph, start, config, events, outcome):
                 spoke = spoke or (isinstance(event, TokenEvent) and bool(event.text))
                 yield event
-        except Exception:
-            if saver is not None:
+
+            asked = (outcome.get("values") or {}).get("__interrupt__") or []
+            if saver is None or not asked:
+                return
+
+            question = asked[0].value
+            await self.pauses.record(
+                Pause(thread_id, project_id, session_id, spec_hash(spec), time.time())
+            )
+            waiting = True
+            snapshot = await graph.aget_state(config)
+            values = snapshot.values
+            if not question.get("error"):
+                # After a reply to what the visitor said, the question follows as its own paragraph.
+                yield TokenEvent(text=("\n\n" if spoke else "") + question["prompt"])
+            yield InputRequiredEvent(thread_id=thread_id, **question)
+            # What this part of the turn spent: nothing on a plain refusal, the reading on a reply that was read.
+            spent = {
+                k: v - values.get("reported", {}).get(k, 0)
+                for k, v in values.get("usage", {}).items()
+            }
+            model_name = (
+                values.get("model_name")
+                or request.project.model
+                or get_settings().chat_model
+            )
+            yield usage_event(price_usage(spent, model_name))
+            yield DoneEvent(finish_reason="input_required")
+        finally:
+            # A turn that is not waiting on a question keeps nothing: it
+            # finished, failed, or was stopped (the caller went away, or the
+            # turn's deadline passed), and nothing will resume it.
+            if saver is not None and not waiting:
                 await self.pauses.forget(thread_id)
-            raise
-
-        asked = (outcome.get("values") or {}).get("__interrupt__") or []
-        if saver is None:
-            return
-        if not asked:
-            # Finished: nothing to resume, so nothing is kept.
-            await self.pauses.forget(thread_id)
-            return
-
-        question = asked[0].value
-        await self.pauses.record(
-            Pause(thread_id, project_id, session_id, spec_hash(spec), time.time())
-        )
-        snapshot = await graph.aget_state(config)
-        values = snapshot.values
-        if not question.get("error"):
-            # After a reply to what the visitor said, the question follows as its own paragraph.
-            yield TokenEvent(text=("\n\n" if spoke else "") + question["prompt"])
-        yield InputRequiredEvent(thread_id=thread_id, **question)
-        # What this part of the turn spent: nothing on a plain refusal, the reading on a reply that was read.
-        spent = {
-            k: v - values.get("reported", {}).get(k, 0)
-            for k, v in values.get("usage", {}).items()
-        }
-        model_name = (
-            values.get("model_name")
-            or request.project.model
-            or get_settings().chat_model
-        )
-        yield usage_event(price_usage(spent, model_name))
-        yield DoneEvent(finish_reason="input_required")
 
     # --- nodes --------------------------------------------------------------
 
@@ -532,7 +546,13 @@ class WorkflowAgent:
                 discovered = await discover_tools(self._tools, project)
             return discovered
 
-        def render(template: str, state: _State) -> str:
+        def render(template: str, state: _State, *, clip: bool = False) -> str:
+            """The template with its placeholders filled in. With `clip`, for
+            text a model reads, each variable is cut as a tool result is
+            (`ENGINE_TOOL_RESULT_CHARS`): a step's prompt goes in the system
+            message, which the prompt's budget never cuts, and a variable can
+            hold a whole tool result. A Send Message step and a tool's
+            arguments get the variable whole."""
             values = {
                 "message": state.get("message") or request.message,
                 "user_id": request.user_id or "",
@@ -547,7 +567,8 @@ class WorkflowAgent:
                     # field of the JSON object it holds: {{vars.slots.note}}.
                     name, _, path = key[5:].partition(".")
                     value = vars_.get(name, "")
-                    return field_of(value, path) if path else value
+                    text = field_of(value, path) if path else value
+                    return clipped_result(text) if clip else text
                 return values.get(key, "")
 
             return re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}", sub, template)
@@ -575,7 +596,38 @@ class WorkflowAgent:
                     if isinstance(item, ToolCallFinishedEvent):
                         ok = item.ok
                     await events.put(item)
-            return ok, (str(message.content) if ok else ""), message
+            # The whole result, from the message's artifact: its content is
+            # cut to what a model reads, and a variable may hold a list of
+            # options longer than that.
+            whole = message.artifact if isinstance(message.artifact, str) else None
+            return ok, ((whole or str(message.content)) if ok else ""), message
+
+        async def not_offered(
+            tool: str, arguments: dict[str, str], call_id: str
+        ) -> ToolMessage:
+            """A tool that is not offered right now, reported like a failed call.
+
+            Its server is down, no longer has it, or does not allow it. The
+            started and finished events go out, so the log shows the call
+            that could not be made, and the message is what a model reads.
+            """
+            await events.put(
+                ToolCallStartedEvent(
+                    call_id=call_id, tool=tool, arguments=dict(arguments)
+                )
+            )
+            await events.put(
+                ToolCallFinishedEvent(
+                    call_id=call_id,
+                    tool=tool,
+                    ok=False,
+                    duration_ms=0,
+                    error="tool unavailable: its server could not be reached, does not offer it, or does not allow it",
+                )
+            )
+            return ToolMessage(
+                content=f"Tool {tool!r} is unavailable right now.", tool_call_id=call_id
+            )
 
         async def retrieve(_: _State) -> _State:
             hits, spent = await retrieve_with_usage(request)
@@ -588,7 +640,8 @@ class WorkflowAgent:
             async def step(state: _State) -> _State:
                 tools = await tools_of() if node.tools else []
                 server_for = {t["name"]: t["server"] for t in tools}
-                model = build_chat_model(project)
+                # `stream_reply` does the retrying, so the client does none.
+                model = build_chat_model(project, max_retries=0)
                 bound = model.bind_tools(tools) if tools else model
                 # Tools this step may use that could not be reached: the model
                 # is told, so it says it cannot help with that now.
@@ -597,7 +650,7 @@ class WorkflowAgent:
                     request,
                     state.get("context", ""),
                     extra_system="\n\n".join(
-                        p for p in (render(node.prompt, state), note) if p
+                        p for p in (render(node.prompt, state, clip=True), note) if p
                     ),
                     prior=state.get("messages", [])[state.get("since", 0) :],
                 )
@@ -605,33 +658,62 @@ class WorkflowAgent:
                 usage: dict[str, int] = {}
                 text = ""
                 finish: FinishReason = "stop"
-                retries = get_settings().provider_max_retries
+
+                async def call(runnable: Any) -> AIMessageChunk | None:
+                    """One streamed call on the step so far; its text is
+                    spoken unless the step keeps the reply in a variable."""
+                    reply: AIMessageChunk | None = None
+                    async for item in stream_reply(
+                        lambda: runnable.astream(messages + new)
+                    ):
+                        if isinstance(item, str):
+                            if node.var is None:
+                                await events.put(TokenEvent(text=item))
+                        else:
+                            reply = item
+                    return reply
 
                 # One model call more than the tool rounds allowed, as the
                 # loop agent counts: the last round's results reach the model,
                 # and only a request for another round ends as `tool_limit`.
+                # Every call this step leaves in the turn's messages has a
+                # result after it, so a later model step that reads them
+                # sends nothing a provider refuses.
                 limit = project.max_tool_iterations
                 for rounds_done in range(limit + 1):
-                    reply: AIMessageChunk | None = None
-                    async for chunk in stream_reply(
-                        lambda: bound.astream(messages + new), retries=retries
-                    ):
-                        if chunk.text and node.var is None:
-                            await events.put(TokenEvent(text=chunk.text))
-                        reply = chunk if reply is None else reply + chunk
+                    reply = await call(bound)
                     if reply is None:
                         break
                     usage = add_totals(usage, usage_of(reply))
                     new.append(reply)
                     text = reply.text or ""
                     finish = finish_reason_of(reply)
-                    if not reply.tool_calls:
+                    if not asks_for_tools(reply):
+                        break
+                    if finish == "length":
+                        # Cut at `max_output_tokens`: its calls may be cut
+                        # short too, so none of them runs.
+                        new.extend(unanswered(reply, CUT_CALL_RESULT))
                         break
                     if rounds_done == limit:
+                        # The rounds ran out: the calls are answered as not
+                        # run, and the model answers once more with its tools
+                        # off, so the step ends with words, not in silence.
                         finish = "tool_limit"
+                        new.extend(unanswered(reply, TOOL_LIMIT_RESULT))
+                        final = await call(without_tools(model, tools))
+                        if final is not None:
+                            usage = add_totals(usage, usage_of(final))
+                            new.append(final)
+                            new.extend(unanswered(final, TOOL_LIMIT_RESULT))
+                            text = final.text or ""
                         break
                     async for item in run_tool_calls(
-                        reply.tool_calls, request, self._tools, server_for
+                        reply.tool_calls,
+                        request,
+                        self._tools,
+                        server_for,
+                        invalid=reply.invalid_tool_calls,
                     ):
                         if isinstance(item, ToolMessage):
                             new.append(item)
@@ -655,7 +737,8 @@ class WorkflowAgent:
             labels = list(node.branches)
 
             async def step(state: _State) -> _State:
-                model = build_chat_model(utility_config(project))
+                # `stream_reply` does the retrying, so the client does none.
+                model = build_chat_model(utility_config(project), max_retries=0)
                 prompt = [
                     SystemMessage(
                         content="Answer with exactly one of these labels and nothing else: "
@@ -670,13 +753,13 @@ class WorkflowAgent:
                 # Streamed like every other call, so a streaming-only model
                 # (the test double included) is enough.
                 reply: AIMessageChunk | None = None
-                async for chunk in stream_reply(
+                async for item in stream_reply(
                     lambda: model.astream(
                         prompt, config=run_config(request, name=f"condition:{node.id}")
-                    ),
-                    retries=get_settings().provider_max_retries,
+                    )
                 ):
-                    reply = chunk if reply is None else reply + chunk
+                    if not isinstance(item, str):
+                        reply = item
                 if reply is None:
                     reply = AIMessageChunk(content="")
                 answer = (reply.text or "").strip().lower()
@@ -719,28 +802,10 @@ class WorkflowAgent:
                 }
                 call_id = f"wf-{node.id}"
                 if server is None:
-                    # Not offered right now: its server is down, no longer has
-                    # it, or does not allow it. Reported like a failed call, so
+                    # Not offered right now: reported like a failed call, so
                     # the log shows it, and handled like one.
-                    await events.put(
-                        ToolCallStartedEvent(
-                            call_id=call_id, tool=node.tool, arguments=dict(arguments)
-                        )
-                    )
-                    await events.put(
-                        ToolCallFinishedEvent(
-                            call_id=call_id,
-                            tool=node.tool,
-                            ok=False,
-                            duration_ms=0,
-                            error="tool unavailable: its server could not be reached, does not offer it, or does not allow it",
-                        )
-                    )
                     ok, result = False, ""
-                    message = ToolMessage(
-                        content=f"Tool {node.tool!r} is unavailable right now.",
-                        tool_call_id=call_id,
-                    )
+                    message = await not_offered(node.tool, arguments, call_id)
                 else:
                     ok, result, message = await call_one(
                         node.tool, arguments, call_id, {node.tool: server}
@@ -776,33 +841,51 @@ class WorkflowAgent:
 
         def handoff_node(node: HandoffNode):
             async def step(state: _State) -> _State:
-                text = render(node.message, state)
-                await events.put(TokenEvent(text=text))
-                out: _State = {
-                    "vars": {"handed_off": "true"},
-                    "messages": [AIMessageChunk(content=text)],
-                }
                 if node.tool:
+                    # The tool first, the promise after: the visitor is told
+                    # a person will follow up only once someone has been told.
                     tools = await tools_of()
                     server = next(
                         (t["server"] for t in tools if t["name"] == node.tool), None
                     )
-                    if server:
-                        # The reason and the conversation so far, with the
-                        # start of each file the person sent, so a ticket
-                        # tool or a hand-off email has all of it.
-                        await call_one(
-                            node.tool,
-                            {
-                                "reason": render(node.reason, state),
-                                "transcript": transcript(
-                                    request, include_message=True, include_files=True
-                                ),
-                            },
-                            f"wf-{node.id}",
-                            {node.tool: server},
+                    call_id = f"wf-{node.id}"
+                    # The reason and the whole conversation, with the start of
+                    # each file the person sent, so a ticket tool or a
+                    # hand-off email has all of it.
+                    arguments = {
+                        "reason": render(node.reason, state),
+                        "transcript": transcript(
+                            request,
+                            include_message=True,
+                            include_files=True,
+                            last=None,
+                            turn_chars=None,
+                        ),
+                    }
+                    if server is None:
+                        await not_offered(node.tool, arguments, call_id)
+                        ok = False
+                    else:
+                        ok, _, _ = await call_one(
+                            node.tool, arguments, call_id, {node.tool: server}
                         )
-                return out
+                    if not ok:
+                        # Nobody was told, so nobody is promised: the visitor
+                        # hears that this cannot be done now, as a failed
+                        # tool step says it, and the steps after it do not run.
+                        said = unavailable_message(project)
+                        await events.put(TokenEvent(text=said))
+                        return {
+                            "messages": [AIMessageChunk(content=said)],
+                            "halted": True,
+                            "finish_reason": "stop",
+                        }
+                text = render(node.message, state)
+                await events.put(TokenEvent(text=text))
+                return {
+                    "vars": {"handed_off": "true"},
+                    "messages": [AIMessageChunk(content=text)],
+                }
 
             return step
 
@@ -847,7 +930,8 @@ class WorkflowAgent:
             node: AskNode, question: str, raw: str, options: list[AskOption]
         ) -> tuple[Verdict, dict[str, int]]:
             """What a reply is, read by the utility model, and what reading it used."""
-            model = build_chat_model(utility_config(project))
+            # `stream_reply` does the retrying, so the client does none.
+            model = build_chat_model(utility_config(project), max_retries=0)
             asks_for = _ASKS_FOR[node.input]
             if node.input == "choice":
                 asks_for += ":\n" + "\n".join(
@@ -868,13 +952,13 @@ class WorkflowAgent:
                 ),
             ]
             reply: AIMessageChunk | None = None
-            async for chunk in stream_reply(
+            async for item in stream_reply(
                 lambda: model.astream(
                     prompt, config=run_config(request, name=f"ask:{node.id}")
-                ),
-                retries=get_settings().provider_max_retries,
+                )
             ):
-                reply = chunk if reply is None else reply + chunk
+                if not isinstance(item, str):
+                    reply = item
             if reply is None:
                 return Verdict("answered", raw), {}
             return parse_verdict(reply.text or "", raw), usage_of(reply, utility=True)
@@ -939,7 +1023,7 @@ class WorkflowAgent:
 
                 try:
                     verdict, usage = await read_reply(
-                        node, render(node.prompt, state), raw, options
+                        node, render(node.prompt, state, clip=True), raw, options
                     )
                 except Exception as exc:
                     # The reading could not be had. Once, the question is asked
@@ -1033,9 +1117,10 @@ class WorkflowAgent:
                     RetrievalEvent(query=request.message, sources=to_source_refs(hits))
                 )
                 context = to_context(hits)
-                model = build_chat_model(project)
+                # `stream_reply` does the retrying, so the client does none.
+                model = build_chat_model(project, max_retries=0)
                 note = (
-                    f'You just asked the visitor: "{render(node.prompt, state)}". '
+                    f'You just asked the visitor: "{render(node.prompt, state, clip=True)}". '
                     "Their reply does not answer it. Reply to what they said, briefly."
                 )
                 if then_ask:
@@ -1047,13 +1132,11 @@ class WorkflowAgent:
                     prior=state.get("messages", [])[state.get("since", 0) :],
                 )
                 reply: AIMessageChunk | None = None
-                async for chunk in stream_reply(
-                    lambda: model.astream(messages),
-                    retries=get_settings().provider_max_retries,
-                ):
-                    if chunk.text:
-                        await events.put(TokenEvent(text=chunk.text))
-                    reply = chunk if reply is None else reply + chunk
+                async for item in stream_reply(lambda: model.astream(messages)):
+                    if isinstance(item, str):
+                        await events.put(TokenEvent(text=item))
+                    else:
+                        reply = item
                 out: _State = {
                     "context": context,
                     "usage": dict(spent),
@@ -1158,7 +1241,14 @@ class WorkflowAgent:
                     graph.add_edge(leave, "__finish__")
                 if node.on_decline is None:
                     graph.add_edge(declined, "__finish__")
-            elif isinstance(node, ToolNode) and node.on_error == "stop":
+            elif isinstance(node, EndNode):
+                # The schema refuses an edge out of an end; this holds even
+                # for a spec that was never validated.
+                graph.add_edge(node.id, "__finish__")
+            elif (isinstance(node, ToolNode) and node.on_error == "stop") or (
+                isinstance(node, HandoffNode) and node.tool
+            ):
+                # A step that may halt the turn: a failed call ends it there.
                 after = spec.next_of(node.id) or "__finish__"
                 graph.add_conditional_edges(
                     node.id,

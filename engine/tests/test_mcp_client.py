@@ -347,3 +347,69 @@ async def test_a_server_with_its_own_headers_is_not_cached() -> None:
         await provider.list_tools(config)
 
     assert len(opened) == 2
+
+
+# --- what the logs say ----------------------------------------------------------
+
+#: The application's own tool server: its address carries the assistant's token.
+TOKENED = "https://chatfrom.example/api/mcp/a1b2/tok_SECRET123"
+
+
+async def test_a_server_that_cannot_be_reached_is_logged_by_name_not_by_address(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    config = CONFIG.model_copy(
+        update={
+            "mcp_servers": [
+                McpServerConfig(name="app", url=TOKENED, allowed_tools=["book"])
+            ]
+        }
+    )
+
+    @asynccontextmanager
+    async def session(target, **kwargs):
+        raise ConnectionError(f"Client error '401 Unauthorized' for url '{target.url}'")
+        yield  # pragma: no cover
+
+    with patch.object(mcp_client, "_session", session), caplog.at_level("WARNING"):
+        await McpToolProvider(timeout_s=1).list_tools(config)
+
+    assert "'app'" in caplog.text
+    assert "https://chatfrom.example/…" in caplog.text
+    assert "tok_SECRET123" not in caplog.text
+
+
+async def test_a_failed_discovery_names_the_servers_and_not_their_addresses(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from chatbot_engine.agent.client import discover_tools
+
+    class Broken:
+        async def list_tools(self, config):
+            raise RuntimeError(f"cannot reach {TOKENED}")
+
+    config = CONFIG.model_copy(
+        update={
+            "mcp_servers": [
+                McpServerConfig(name="app", url=TOKENED, allowed_tools=["book"])
+            ]
+        }
+    )
+
+    with caplog.at_level("WARNING"):
+        assert await discover_tools(Broken(), config) == []
+
+    assert "could not discover tools from app:" in caplog.text
+    assert "tok_SECRET123" not in caplog.text
+    assert "/api/mcp" not in caplog.text
+
+
+def test_an_address_in_a_log_line_keeps_its_host_only() -> None:
+    from chatbot_engine.agent.client import without_paths
+
+    assert without_paths(f"failed on {TOKENED}.") == (
+        "failed on https://chatfrom.example/…"
+    )
+    assert without_paths("http://user:pw@host:8200/mcp?key=1") == "http://host:8200/…"
+    assert without_paths("http://down") == "http://down"
+    assert without_paths("no address here") == "no address here"
