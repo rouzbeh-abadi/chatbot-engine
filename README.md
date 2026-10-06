@@ -48,10 +48,13 @@ is required to run the engine.
   reported as an event inside the stream, so the caller never receives a
   duplicated answer.
 - **Bounded turns:** `max_output_tokens` caps the length of one reply and
-  `max_tool_iterations` caps the number of tool rounds. The final `done` event
-  reports which limit ended the turn, as `length` or `tool_limit`, so the
-  interface can inform the user instead of the turn failing after text has
-  streamed.
+  `max_tool_iterations` caps the number of tool rounds, after which the model
+  answers once more with its tools off. The final `done` event reports which
+  limit ended the turn, as `length` or `tool_limit`, so the interface can
+  inform the user instead of the turn failing after text has streamed. A turn
+  that runs past `ENGINE_TURN_DEADLINE_S` (120 seconds) ends there with the
+  assistant's `unavailable_message`, and a prompt that would pass
+  `ENGINE_PROMPT_CHARS` loses its oldest history first.
 - **Any model:** The model is selected per request. OpenAI, Anthropic, Google,
   DeepSeek and others are available through OpenRouter.
 - **Any language:** Retrieval works across languages, so a question in one
@@ -59,8 +62,9 @@ is required to run the engine.
   reply language is controlled by the system prompt, which your backend owns.
 - **Document ingestion:** Upload a file and the engine extracts the text,
   chunks it, embeds it and stores it. Markdown, plain text and PDF are
-  supported. Identical bytes uploaded again are detected by content hash and
-  skipped.
+  supported; a PDF is read in a process of its own, within a time and a
+  length. Identical bytes uploaded again are detected by content hash and
+  skipped, unless they are to be cut or embedded differently.
 - **Files in the conversation.** `POST /extract` reads a PDF, text, Markdown or image a person sends mid-conversation into text and keeps nothing (an image through a vision model, billed as a chat turn); a chat request carries the text as `attachments`, which every call of the chat model puts before the message as what the person gave it to read, never as instructions. Reading is bounded in time and size, in a process of its own.
 - **Pluggable agents:** The built-in agent is a plain LangChain tool loop with
   no framework dependency. Other agents are Python packages installed next to
@@ -73,7 +77,7 @@ is required to run the engine.
   [docs/agents.md](docs/agents.md).
 - **Tracing:** With `ENGINE_TRACING` set, every model call in a turn is sent to
   LangSmith or Langfuse, hosted or self-hosted, tagged with the request,
-  project, session and user ids. An assistant can also carry its own Langfuse
+  project and session ids and a pseudonym of the user id. An assistant can also carry its own Langfuse
   keys. See the Tracing section of [DEPLOYMENT.md](DEPLOYMENT.md).
 - **Chunking strategies:** Documents can be split by fixed size, by Markdown
   heading or by page. The strategy is set per project, and the page strategy
@@ -112,7 +116,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.24
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.26
 ```
 
 The readiness endpoint reports whether a provider key is set, whether the
@@ -187,9 +191,11 @@ still generating. The answer tokens follow, then the usage, then `done`.
 
 Every turn ends with `done`. Its `finish_reason` is `stop` for a normal end,
 `length` when the reply reached `max_output_tokens`, `tool_limit` when the
-model was still requesting tools after `max_tool_iterations` rounds, and
-`error` when an `error` event preceded it. A backend usually converts these
-lines into server-sent events for the browser.
+model was still requesting tools after `max_tool_iterations` rounds (it then
+answers once more with its tools off), and `error` when an `error` event
+preceded it. A turn that passes `ENGINE_TURN_DEADLINE_S` ends with the
+assistant's `unavailable_message` and `stop`, not an error. A backend usually
+converts these lines into server-sent events for the browser.
 
 ### Step 5. Give it tools
 
@@ -270,9 +276,11 @@ step type.
 ### Step 7. Run it in production
 
 Set an API key and enable production mode. The engine then requires the
-`X-API-Key` header on every request except the health endpoints, and refuses
-to start if any setting still has a development default. Tracing is enabled
-with `ENGINE_TRACING` and the keys of the tracing backend.
+`X-API-Key` header on every request except the health endpoints, `/metrics`
+included unless `ENGINE_METRICS_PUBLIC=true`, serves no interactive docs or
+`/openapi.json`, and refuses to start if any setting still has a development
+default. Tracing is enabled with `ENGINE_TRACING` and the keys of the tracing
+backend.
 
 ```bash
 docker run -d --name engine -p 8100:8100 \
@@ -283,7 +291,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_LANGFUSE_PUBLIC_KEY=pk-lf-... \
   -e ENGINE_LANGFUSE_SECRET_KEY=sk-lf-... \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.24
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.26
 ```
 
 [DEPLOYMENT.md](DEPLOYMENT.md) covers the remaining topics, including rate
@@ -397,11 +405,15 @@ the model credentials. The caller supplies the dataset.
 **System prompt.** A judge model scores the assistant's behaviour against a
 rubric, checking that it refuses what it should, stays grounded in the
 documents and does not invent policies. By default the assistant's own model
-grades; `POST /judge` takes a `judge_model` to grade with another one, at
-temperature 0, since a model grading its own answers tends to be kind to
-them. A case may also carry an `answer`, which is graded as it is instead of
-being asked: send a few answers whose right score you know, and you can tell
-whether the judge can be trusted before you trust its other scores.
+grades; `POST /judge` takes a `judge_model` to grade with another one, since
+a model grading its own answers tends to be kind to them. Either way grading
+runs at temperature 0. The cases are answered with the chatbot's tools
+offered but never run, so an evaluation books, emails and changes nothing,
+and the judge sees which tools each answer called. A case whose turn failed,
+or ran out of time, is reported as an error, with no score, rather than graded. A case may also
+carry an `answer`, which is graded as it is instead of being asked: send a
+few answers whose right score you know, and you can tell whether the judge
+can be trusted before you trust its other scores.
 
 ```bash
 make eval                       # score the system prompt (the stack must be running)
@@ -417,6 +429,51 @@ relevant chunks).
 make eval-rag                        # score retrieval (needs the engine's eval extra)
 make eval-rag ARGS="--only follow_up"
 ```
+
+**Baseline.** The example project's 55 cases over its nine knowledge
+documents, scored on 8 September 2026 with engine 0.1.0: answers by
+`openai/gpt-5-mini` with hybrid retrieval and no rerank, judged by
+`google/gemini-2.5-flash-lite`, for $0.28 in 25 minutes.
+
+| category    | cases | faithfulness | answer relevancy | context precision | context recall |
+|-------------|------:|-------------:|-----------------:|------------------:|---------------:|
+| single_turn |    42 |         0.86 |             0.70 |              0.82 |           0.98 |
+| follow_up   |    10 |         0.90 |             0.62 |              0.76 |           0.95 |
+| negative    |     3 |         0.35 |             0.21 |              0.00 |           0.00 |
+| overall     |    55 |         0.83 |             0.66 |              0.76 |           0.92 |
+
+The chunk that holds the answer is almost always retrieved. Answer relevancy
+is the weakest number, because the metric scores an honest "the documents do
+not say" as zero. The negative cases, questions the knowledge base does not
+answer, score near zero by construction; the overall row above includes them,
+and from 0.1.26 the overall averages leave them out.
+[docs/retrieval.md](docs/retrieval.md#baseline) explains how to read each
+column and what a run costs.
+
+## Limitations
+
+- **Formats.** The knowledge base takes PDF, plain text and Markdown. A
+  scanned PDF has no text until it has been through OCR, which the engine
+  does not do. By default one document gives the index at most 2,000,000
+  characters (`ENGINE_INDEX_MAX_CHARS`), and a PDF must be read within 60
+  seconds (`ENGINE_INDEX_READ_TIMEOUT_S`).
+- **Languages in keyword search.** The BM25 half of hybrid retrieval splits
+  words at spaces, so for Chinese, Japanese or Thai the vector half carries
+  the question alone.
+- **Scores.** A source's score is the cosine of two embeddings only for a
+  model whose vectors are of unit length, as OpenAI's are, and a `min_score`
+  tuned for one embedding model does not carry over to another.
+- **Several instances.** Embedded Chroma belongs to one process, so several
+  engine instances need a Chroma server. Each instance keeps its own keyword
+  index, and a document uploaded through one is keyword-searchable on the
+  others within a minute.
+- **Prompt injection.** Extracts, files and tool results reach the model as
+  data, cleaned of hidden characters and unable to close their frame. That
+  lowers the odds of a planted instruction working; it does not rule it out.
+  Anything a tool does for a person needs a check the model cannot make up.
+- **Evaluation.** The example dataset is small, and a single case moves by
+  0.2 or more between otherwise identical runs, so compare category rows
+  rather than cases.
 
 ## Project layout
 

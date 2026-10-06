@@ -82,8 +82,17 @@ zero is not "off" for them (the engine refuses to start): `ENGINE_EXTRACT_TIMEOU
 `ENGINE_EXTRACT_CONCURRENCY` (2) how many may run at once, past which a reading
 is refused with `503` and `Retry-After`.
 
+Knowledge documents have the same kind of bounds when they are indexed:
+`ENGINE_INDEX_READ_TIMEOUT_S` (60) and `ENGINE_INDEX_MAX_CHARS` (2,000,000). A
+turn ends at `ENGINE_TURN_DEADLINE_S` (120) with the assistant's
+`unavailable_message`; a request body over `ENGINE_MAX_BODY_BYTES` is a `413`;
+a model reads at most `ENGINE_TOOL_RESULT_CHARS` of one tool result, and a
+prompt holds at most `ENGINE_PROMPT_CHARS`, the oldest history going first.
+
 Set `ENGINE_ENV=production` and the engine refuses to start without a key at
-all, rather than serving openly. See [DEPLOYMENT.md](../DEPLOYMENT.md).
+all, rather than serving openly; it then serves no `/docs`, `/redoc` or
+`/openapi.json`, and `/metrics` needs a key too. See
+[DEPLOYMENT.md](../DEPLOYMENT.md).
 
 **What the engine deliberately does not do: end-user identity.** An engine that
 decided *which person* may ask something would need your user model, and it has
@@ -94,7 +103,8 @@ no business having one. That check belongs in the service calling it.
 Every response carries `X-Request-Id`, kept from the caller when it sent a
 well-formed one, forwarded to the tool server, and stamped on every log line.
 Each chat turn produces one log line with caller, agent, model, tokens, cost,
-tool calls and outcome. `GET /metrics` serves Prometheus metrics for the same.
+tool calls and outcome. `GET /metrics` serves Prometheus metrics for the same
+(behind the key in production, or with `ENGINE_METRICS_PUBLIC=false`).
 See [DEPLOYMENT.md](../DEPLOYMENT.md#observability).
 
 ## Agents

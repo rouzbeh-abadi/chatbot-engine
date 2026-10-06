@@ -36,6 +36,40 @@ So a long PDF page is still split, but only within the page, and every piece
 still names that page. Structure decides the boundaries; the cap keeps the
 pieces usable.
 
+## A heading is never a chunk on its own
+
+A Markdown heading followed by a paragraph longer than `chunk_size` used to
+be cut off from it: the heading, a subheading or two, and nothing else made a
+chunk of a few dozen characters. Retrieved, it took one of the `top_k` places
+and was cited with nothing to show, and the paragraph it introduced lost its
+title.
+
+Since 0.1.26 a piece that holds only headings goes to the start of the piece
+after it, the text it introduces, in every strategy. Under `headings`, a
+section that is only headings (a heading followed straight away by the next
+one at its level) goes to the start of the next section in the same way. Such
+a chunk may run a heading's length past `chunk_size`. A heading with nothing
+after it joins the text before it, and a document of nothing but headings
+keeps them as cut.
+
+The change is in how a document is cut, so a document indexed before 0.1.26
+gains it when it is re-indexed or uploaded again. Most never had such a
+heading: the example knowledge base, at the default size, has none.
+
+## The section an extract is from
+
+Under `headings`, each extract the model reads opens with its number, its
+file and the heading trail of its section:
+
+```text
+[2] faq.md > Fares > Flexible fare
+Changes are free until departure ...
+```
+
+so a chunk whose own text does not name its subject still says what it is
+about. The trail travels in that header line, not in the text that was
+embedded, so it needs no re-index: every document chunked by headings has it.
+
 ## A strategy that does not suit the document falls back
 
 The strategy is set once per project, but documents vary. Rather than invent
@@ -81,15 +115,21 @@ fails silently at upload and only shows up later as poor retrieval.
 
 Every document record carries the settings it was indexed with,
 `chunking_strategy`, `chunk_size` and `chunk_overlap`, after the engine's
-defaults filled in what the caller left out. `GET /documents` returns them, so
-a caller can compare each document with its current settings and list the
-ones that are out of date.
+defaults filled in what the caller left out, and since 0.1.26 the
+`embedding_model` that made its vectors. `GET /documents` returns them, so a
+caller can compare each document with its current settings and list the ones
+that are out of date.
 
 Re-uploading identical bytes answers `unchanged` and does no work only when
-the settings match too. The same file sent with a different size or strategy
-is cut again. A document indexed by an engine before 0.1.10 has no recorded
-settings; it counts as current unless the upload names chunking explicitly,
-so upgrading the engine never re-embeds a knowledge base by itself.
+the settings match too. The same file sent with a different size, strategy or
+embedding model is cut and embedded again; answered `unchanged`, a document
+sent with a new model would stay where that model's queries never look. A
+document recorded as `received`, because the engine had no key to embed with,
+is embedded once it has one. A document indexed by an engine before 0.1.10
+has no recorded settings, and one indexed before 0.1.26 no recorded model;
+each counts as current unless the upload names chunking, or a model,
+explicitly, so upgrading the engine never re-embeds a knowledge base by
+itself.
 
 ## Changing the strategy means re-indexing
 
@@ -109,9 +149,10 @@ curl -X POST "localhost:8100/documents/$DOC_ID/reindex?project_id=support" \
 Settings work as on upload. An empty body rebuilds with the engine's current
 defaults, after a change to `ENGINE_CHUNK_SIZE` for example, and a field left
 out takes the engine's default. The response is the rebuilt record. `404`
-means no such document, `501` means the engine keeps no originals, and `422`
-means settings that cannot work together: `chunk_size` runs from 100 to 8000
-characters, `chunk_overlap` from 0 to 2000 and must be smaller than the size.
+means the project has no such document, `501` means the engine keeps no
+originals, and `422` means settings that cannot work together: `chunk_size`
+runs from 100 to 8000 characters, `chunk_overlap` from 0 to 2000 and must be
+smaller than the size.
 Both routes answer `422` for those, and nothing is stored.
 
 To rebuild the example knowledge base from source instead, `make seed`

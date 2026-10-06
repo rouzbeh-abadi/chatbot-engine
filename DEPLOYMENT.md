@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.24
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.24
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.24
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.24
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.26
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.26
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.26
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.26
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -47,7 +47,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.24 && git push origin v0.1.24
+git tag v0.1.26 && git push origin v0.1.26
 ```
 
 The Release workflow runs the full test suite, publishes the three images, and
@@ -77,6 +77,10 @@ RuntimeError: refusing to start with BACKEND_ENV=production:
 
 A refused start fails the health check, so the container never enters a load
 balancer.
+
+In production the engine also serves no interactive docs or schema (`/docs`,
+`/redoc`, `/openapi.json`), which are for building against it on a laptop,
+and `GET /metrics` needs the API key; see [Observability](#observability).
 
 ## Secrets
 
@@ -226,10 +230,13 @@ outcome, and the duration. A turn the client abandoned is logged as
 those fields, for a collector that indexes them; the default is text for a
 terminal. The backend has the same switch, `BACKEND_LOG_FORMAT`.
 
-**Metrics** at the engine's `GET /metrics`, in Prometheus format,
-unauthenticated like `/health`: turns by caller, agent and outcome; turn
-latency; tokens and cost by model; tool calls by result.
-`ENGINE_METRICS_ENABLED=false` removes the route.
+**Metrics** at the engine's `GET /metrics`, in Prometheus format: turns by
+caller, agent and outcome; turn latency; tokens and cost by model; tool calls
+by result. Locally the route is open, like `/health`. Under
+`ENGINE_ENV=production` it needs `X-API-Key` like any other caller, since its
+counts name the callers and the models, so a scraper sends a key of its own.
+`ENGINE_METRICS_PUBLIC=true` opens it for a scraper on a private network that
+cannot send a header. `ENGINE_METRICS_ENABLED=false` removes the route.
 
 Not included: distributed tracing. The request id gives the correlation;
 spans and a trace backend are a deployment's own choice.
@@ -245,9 +252,12 @@ response, latency and tokens, where an operator can open it:
 | `langsmith` | `ENGINE_LANGSMITH_API_KEY`, optional `ENGINE_LANGSMITH_PROJECT` | LangChain's hosted LangSmith |
 | `langfuse` | `ENGINE_LANGFUSE_PUBLIC_KEY`, `ENGINE_LANGFUSE_SECRET_KEY`, optional `ENGINE_LANGFUSE_HOST`; the image has the `tracing` extra | Langfuse cloud, or a self-hosted Langfuse at the host you name |
 
-Every trace carries the request id, the project id, the session id and the
-user id, the same ids as the log lines, so a trace, a log line and a
-conversation in the calling application all meet on one id. A misconfigured
+Every trace carries the request id, the project id and the session id, the
+same ids as the log lines, so a trace, a log line and a conversation in the
+calling application all meet on one id. The user id is traced as a pseudonym
+(`user-` and a keyed hash), since it can be a phone number or an email
+address: traces still group by person, and the hash is keyed with the
+engine's API keys, so it changes when they do. A misconfigured
 destination stops the engine at startup rather than recording nothing.
 
 Traces contain prompts and retrieved text. For a product that handles other
@@ -322,18 +332,44 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   readiness probe should gate on that field. The status code stays 200 so the
   body is readable.
 - **Logs** go to stdout at `ENGINE_LOG_LEVEL` (default `INFO`). Anything the
-  startup check found but did not block on is logged as a warning at boot.
+  startup check found but did not block on is logged as a warning at boot. A
+  tool server that cannot be reached is logged by its `name`, and an address
+  in the error is cut to its host, since a path may carry a credential.
 - **Streaming.** Chat is server-sent events. A proxy in front must not buffer
   `/api/chat`; the bundled nginx config shows the three settings involved.
 - **Provider retries and timeouts.** A model stream that fails before its
-  first token (rate limit, provider 5xx, dropped connection) is retried up
-  to `ENGINE_PROVIDER_MAX_RETRIES` times (default 3), doubling from half a
+  first token (rate limit, provider 5xx, dropped connection, an error the
+  provider sends inside the stream) is retried up to
+  `ENGINE_PROVIDER_MAX_RETRIES` times (default 3), doubling from half a
   second; a call that has streamed text is not retried, and the failure
-  reaches the caller as an `error` event. `ENGINE_PROVIDER_TIMEOUT_S`
-  (default 60) bounds one provider call. Set the retries to 0 if a proxy in
-  front of OpenRouter already retries, or the two will compound. Reading an
-  image for `POST /extract` is never retried and waits at most 45 s, so a
-  call that is billed is also answered within the caller's patience.
+  reaches the caller as an `error` event. That is the only layer that retries
+  a streamed call; the provider client retries the calls that are not
+  streamed (the query rewrite, the rerank, the judge), with the same count.
+  `ENGINE_PROVIDER_TIMEOUT_S` (default 60) bounds one provider call. Set the
+  retries to 0 if a proxy in front of OpenRouter already retries, or the two
+  will compound. Reading an image for `POST /extract` is never retried and
+  waits at most 45 s, so a call that is billed is also answered within the
+  caller's patience.
+- **Turn deadline.** `ENGINE_TURN_DEADLINE_S` (default 120) is the longest one
+  chat turn may take, retrieval, model calls, retries and tool calls
+  together. Past it the turn stops where it is and ends with the assistant's
+  `unavailable_message`, a `usage` event and `done` with `stop`, so a provider
+  that keeps failing or a tool server that does not answer cannot hold a
+  request open for minutes.
+- **Prompt and tool result sizes.** `ENGINE_PROMPT_CHARS` (default 400,000,
+  about 100,000 tokens of English) is the most one model call's prompt may
+  hold. Past it the oldest turns of the history are left out first; when no
+  history at all is still too much, the last extracts go, then each file is
+  cut to an even share. The system prompt and the message are never cut.
+  Lower it for a model with a smaller context window.
+  `ENGINE_TOOL_RESULT_CHARS` (default 20,000) is the most of one tool result
+  the model reads, since a result is sent again with every later model call
+  of the turn; the rest is cut, with a line saying how much was left out.
+- **Request size.** `ENGINE_MAX_BODY_BYTES` (default 8 MiB) is the largest
+  JSON body the engine reads. A larger one is refused with 413 before it is
+  read, at once when its `Content-Length` says so and otherwise as soon as it
+  grows past the cap. `PUT /documents` and `POST /extract` keep their own
+  limit of 25 MB.
 - **Reading files for a chat.** `ENGINE_EXTRACT_TIMEOUT_S` (default 20)
   bounds the reading of one document for `POST /extract`: it runs in a
   process of its own, bounded in CPU time and memory where the system allows,
@@ -341,3 +377,10 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   `ENGINE_EXTRACT_CONCURRENCY` (default 2) is how many such readings may run
   at once; past it a reading is refused with 503 and `Retry-After` rather
   than queued, so files cannot fill the box.
+- **Reading knowledge documents.** A PDF uploaded to the knowledge base is
+  read the same way, in a process of its own, with bounds sized for indexing:
+  `ENGINE_INDEX_READ_TIMEOUT_S` (default 60) for the reading, and
+  `ENGINE_INDEX_MAX_CHARS` (default 2,000,000) for the text one document may
+  give. A document past either is a `failed` record that says why, and the
+  upload answers 422. Plain text and Markdown are decoded in place, within the
+  same character bound.

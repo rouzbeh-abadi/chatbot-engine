@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.25
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.26
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -113,31 +113,62 @@ depend on it.
 | `token` | repeatedly, as the answer streams |
 | `tool_call_started`, `tool_call_finished` | around each tool call |
 | `usage` | once, after the answer |
-| `done` | last; `finish_reason` is `stop`, `length` (cut at `max_output_tokens`) or `tool_limit` (still asking for tools after `max_tool_iterations` rounds) |
+| `input_required` | when the turn pauses on a question (the `workflow` agent's `ask` step), just before `done` |
+| `done` | last; `finish_reason` is `stop`, `length` (cut at `max_output_tokens`), `tool_limit` (still asking for tools after `max_tool_iterations` rounds, then answered with its tools off), `input_required` (paused on a question; the answer comes with `resume`) or `error` (after an `error` event) |
 
 **System prompt.** Send `request.project.system_prompt` to the model ahead of
 the conversation. This is not visible in the event stream: an agent that omits
 it still emits a well-formed stream, and only the content of the answer
 changes. The persona, the grounding rules and any notes the backend appended
-to the prompt are all lost.
+to the prompt are all lost. Build the prompt with `prompt_messages`, which
+also keeps it under `ENGINE_PROMPT_CHARS` (400,000 characters by default): the
+history takes the room the rest leaves, its oldest turns left out first; when
+no history at all is still too much, the last extracts go, then each file is
+cut to an even share. The system prompt, the message, and the replies and
+tool results the turn has already produced are not cut to fit.
 
 **Model calls.** Stream through `chatbot_engine.agent.client.stream_reply`.
-It retries a stream that fails before
-its first token on rate limits, provider 5xx and dropped connections, and
-passes the failure on once text has been shown. Build the model with
-`build_chat_model`, which applies the assistant's `max_output_tokens`, and
-read the reason a reply ended with `finish_reason_of`.
+It yields the reply's text as plain strings as it arrives, then the whole
+reply once, as an `AIMessageChunk` summed from the stream, which is the one
+to read `tool_calls` from. It is the one layer that retries: on a rate
+limit, a provider 5xx, a dropped connection, an error the provider sends
+inside the stream, or a connection that breaks while it is read, up to
+`ENGINE_PROVIDER_MAX_RETRIES` times, and only while no text has reached the
+caller. Each attempt sums its reply afresh, so a tool call streamed before a
+break is never asked for twice. Build the model with `build_chat_model(...,
+max_retries=0)`, which applies the assistant's `max_output_tokens`; without
+`max_retries=0` the provider client retries underneath `stream_reply` and the
+attempts multiply. Read the reason a reply ended with `finish_reason_of`.
 
-**Tool execution.** Use `chatbot_engine.agent.client.run_tool_calls`. It
+**Tool execution.** Use `chatbot_engine.agent.client.run_tool_calls`, passing
+the reply's `tool_calls` and, as `invalid`, its `invalid_tool_calls`. It
 forwards the caller's `user_id` and `session_id` to the tool server, reports a
 failed tool as `ok=false` rather than ending the turn, and feeds the result back
-as a `ToolMessage`. Two agents that ran tools differently would report them
+as a `ToolMessage`, cut to `ENGINE_TOOL_RESULT_CHARS` (20,000 characters) with
+a line saying how much was left out, and whole in its `artifact`, which no
+model reads. A call whose arguments were not a JSON object is not made: it is
+reported as failed (`error`: `not called: the arguments were not a JSON
+object`), and the model reads what was wrong in its result and may call again
+in its next round. Two agents that ran tools differently would report them
 differently.
 
-**Tool rounds.** After `max_tool_iterations` rounds with the model still
-asking for tools, end the turn with `usage` and `done` saying `tool_limit`.
-What the model said so far has streamed; failing at that point would leave
-the caller with text and an error.
+**Tool rounds.** A reply cut at `max_output_tokens` runs none of its calls,
+since the partial-JSON parser would mend a cut call into arguments the model
+never finished; the turn ends with `length`. After `max_tool_iterations`
+rounds with the model still asking for tools, answer each call it asked for
+with `TOOL_LIMIT_RESULT` (`unanswered`), call the model once more with its
+tools declared but none to be called (`without_tools`, which sends
+`tool_choice: none`), stream that answer, and end the turn with `usage` and
+`done` saying `tool_limit`. A turn never ends in silence that way, and the
+conversation never holds a call without a result, which OpenAI-style APIs
+refuse.
+
+**Deadline.** Every turn, whichever agent runs it, ends at
+`ENGINE_TURN_DEADLINE_S` (120 seconds by default): the agent router stops the
+agent where it is (a provider being retried, a tool server that does not
+answer) and ends the turn with the assistant's `unavailable_message` as a
+`token`, a `usage` event for what it had spent when it had not reported it,
+and `done` saying `stop`. An agent needs to do nothing for this.
 
 **Cost.** Retrieve with `retrieve_with_usage()`, which returns the hits and
 the token counts of retrieval's own model calls, and pass those counts to
@@ -146,8 +177,25 @@ it made. Price with `chatbot_engine.agent.client.price_usage`, so both agents
 price a turn identically.
 
 `engine/tests/test_agent_parity.py` asserts these points for `loop` and
-`graph`, including the `length` and `tool_limit` endings;
+`graph`, including the `length` and `tool_limit` endings, and
+`engine/tests/test_tool_call_checks.py` the unreadable and cut calls;
 `engine/tests/test_workflow_agent.py` covers the same for `workflow`.
+
+### Evaluations
+
+`POST /judge` answers its cases with the same agents, built for it alone and
+given `EvalToolProvider` (`chatbot_engine/eval/prompt_evaluation.py`) in place
+of the MCP provider. It lists the chatbot's tools exactly as a chat would, so
+the model is offered the same choices, and runs none of them: every call
+returns `(not run in an evaluation)` and is recorded for the case, and the
+judge's transcript shows the calls each case asked for. An evaluation of a
+support assistant therefore books, emails and changes nothing, however often
+it runs. A case whose turn ended with an `error` event, raised, or was stopped
+at `ENGINE_TURN_DEADLINE_S` is reported as an error (`score` null, `reason`
+starting `error:`) rather than graded as a bad answer, and a run where every case failed makes no grading call. The
+grading runs at temperature 0, and without the project's answer cap, whether
+`judge_model` names another model or the project's own grades; every case is
+still graded in the one call.
 
 ## The bundled plugin
 
@@ -172,8 +220,9 @@ workflow = "langgraph_agent.workflow:build"
 ```
 
 What the plugin does not do is reimplement the engine. Its nodes call the
-engine's helpers: `stream_reply` for every model call (so the first-token
-retry applies), `run_tool_calls` for every tool call (so timing, failure
+engine's helpers: `stream_reply` for every model call, on a model built with
+no retries of its own (so the one retry layer applies), `run_tool_calls` for
+every tool call (so timing, failure
 handling and the started and finished events are the engine's), `retrieve_with_usage`
 and `price_usage`. The plugin's own code is the graph shape and `runner.py`,
 which runs the compiled graph as a task and drains the queue its nodes push
@@ -187,22 +236,31 @@ graph = StateGraph(_State)
 graph.add_node("retrieve", retrieve_node)
 graph.add_node("model", model_node)
 graph.add_node("tools", tools_node)
+graph.add_node("final", final_node)
 graph.add_node("finish", finish_node)
 
 graph.add_edge(START, "retrieve")
 graph.add_edge("retrieve", "model")
-graph.add_conditional_edges("model", next_step, {"tools": "tools", "finish": "finish"})
+graph.add_conditional_edges(
+    "model",
+    next_step,
+    {"tools": "tools", "final": "final", "finish": "finish"},
+)
 graph.add_edge("tools", "model")
+graph.add_edge("final", "finish")
 graph.add_edge("finish", END)
 
 return graph.compile()
 ```
 
 ```text
-START -> retrieve -> model -+-(tool calls)-> tools -+
-                            |                       | (back to model)
-                            +-(none)-> finish -> END
+START -> retrieve -> model -+-(tool calls)------> tools -> (back to model)
+                            +-(rounds ran out)--> final, tools off -> finish -> END
+                            +-(none, or cut)----> finish -> END
 ```
+
+`final` is the loop agent's last call made the same way: the calls the model
+asked for are answered as not run, and it answers with its tools off.
 
 Installation is what makes it appear:
 
@@ -263,13 +321,13 @@ other agent, so the caller's UI needs nothing new.
 | Node | Does |
 | --- | --- |
 | `retrieve` | searches the knowledge base; later model steps see the passages |
-| `model` | calls the assistant's model with the prompt, the conversation and the retrieved passages, streams the reply as the answer, and runs the tools it asks for, up to `max_tool_iterations` rounds (`tools: false` disables them; running out ends the turn with `tool_limit`); the reply is capped by `max_output_tokens`; `prompt` appends instructions for this step; `var` stores the reply in a variable instead of speaking it |
+| `model` | calls the assistant's model with the prompt, the conversation and the retrieved passages, streams the reply as the answer, and runs the tools it asks for, up to `max_tool_iterations` rounds (`tools: false` disables them; running out, the model answers once more with its tools off and the turn ends with `tool_limit`); the reply is capped by `max_output_tokens`, and a reply cut there runs none of its calls; `prompt` appends instructions for this step; `var` stores the reply in a variable instead of speaking it. Every call the step leaves in the turn has a result, so a later model step never sends one a provider refuses |
 | `condition` | asks the utility model (`ENGINE_UTILITY_MODEL`, temperature 0) one question about the message, expecting one of the branch labels, and follows that branch; the answer is matched exactly, then as a whole word, and the first label is the fallback. Every message starts the workflow again, so the model also reads the last six turns of the history (system and empty turns left out, each cut to its first 150 and last 350 characters), told to choose by the message and use them only to see what it replies to: a "yes", an email address or a code is routed by the question it answers. On the first message it reads the message alone. It also reads the start of the newest two files the person sent (`attachments`, 1,500 characters each, since 0.1.24) and the retrieved passages |
-| `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the result text in `var`; reported as `tool_call_started` and `tool_call_finished` with the real duration. When the call fails or the tool is not offered right now (its server is down, or no longer has it), `on_error: "stop"` (the default) streams the assistant's `unavailable_message` and ends the turn, so steps that assume the call worked never run; `on_error: "continue"` goes on with `var` empty |
+| `tool` | calls one tool, allowlisted on one of the assistant's `mcp_servers`, with templated arguments, through the same runner as a model's own tool calls, and stores the whole result text in `var`, even past `ENGINE_TOOL_RESULT_CHARS`, which only cuts what a model reads; reported as `tool_call_started` and `tool_call_finished` with the real duration. When the call fails or the tool is not offered right now (its server is down, or no longer has it), `on_error: "stop"` (the default) streams the assistant's `unavailable_message` and ends the turn, so steps that assume the call worked never run; `on_error: "continue"` goes on with `var` empty |
 | `reply` | streams a fixed, templated text as the answer |
-| `handoff` | streams a message, sets `vars.handed_off` to `true`, and, when `tool` is named, calls it with `reason` (templated, with a default) and the transcript (the history and the message as `role: content` lines, then the start of each file the person sent, 2,000 characters each, since 0.1.24) through the same runner, so a ticket or an email can be raised and the call shows in the log |
+| `handoff` | when `tool` is named, calls it first, with `reason` (templated, with a default) and the transcript (the whole history and the message as `role: content` lines, then the start of each file the person sent, 2,000 characters each, since 0.1.24) through the same runner, so a ticket or an email can be raised and the call shows in the log; then streams the message and sets `vars.handed_off` to `true`. The message is said only when the call worked: since 0.1.26, a call that fails, or a tool that is not offered right now (reported as a failed call), streams the assistant's `unavailable_message` instead and ends the turn, so the visitor is never promised a person nobody was told about. Without a `tool`, it streams the message |
 | `ask` | pauses the turn to ask the visitor one thing (`input`: `text`, `phone`, `email`, `url`, or `choice` with `options` or `options_from` a variable holding a JSON list), and continues with the answer in `var` (and a choice's label in `<var>_label`); `optional` allows skipping, which leaves both empty. With `understand` (on by default) the reply is read first: an answer in other words keeps only the value, a visitor who declines goes to `on_decline` (or hears `decline_reply`), and a reply that does not answer is replied to and asked again up to `retries` times, then goes to `on_other`. See "Asking the visitor" below |
-| `end` | finishes the turn; the same as a node with no outgoing edge |
+| `end` | finishes the turn; the same as a node with no outgoing edge. No edge may leave it |
 
 Templates in `prompt` (a Chat Model step's and a question's), `text`,
 `message` and tool arguments may use `{{message}}`, `{{user_id}}`,
@@ -278,10 +336,14 @@ field of the JSON object a variable holds (a string as it is, anything else
 as JSON, and nothing when it is not there, as an unset variable reads); a
 condition also sets `vars.condition_<id>` to the label it chose. A Chat Model
 step's prompt is rendered into its instructions, so a variable holding a
-visitor's answer or a tool's result is best named there as data. A node with
+visitor's answer or a tool's result is best named there as data. In text a
+model reads (a Chat Model step's prompt, and a question's when its reply is
+read), each variable is cut at `ENGINE_TOOL_RESULT_CHARS`, as a tool result
+is; a Send Message step and a tool's arguments get it whole. A node with
 no outgoing edge ends the turn, after which the agent emits the `usage` and
 `done` events. The schema refuses unknown node ids,
-unreachable nodes, a condition with edges, and a node with two outgoing
+unreachable nodes, a condition with edges, an `end` with an edge out of it,
+and a node with two outgoing
 edges, and takes at most 40 nodes and 80 edges; `max_steps` (default 30)
 caps the visits in one turn. Every node
 appears as a step in the trace when tracing is on. Without a `workflow`, the
@@ -324,6 +386,12 @@ What the step guarantees:
   within `ENGINE_PAUSE_TTL_S`, and for the same workflow; a finished turn's
   state is deleted, and a workflow with no `ask` step never touches the
   checkpointer.
+- **A question is resumed once.** The request that resumes it claims the
+  pause before anything runs, so a second request with the same `thread_id`
+  (a double click, a client that retried) gets `resume_expired` instead of
+  running the rest of the turn again. A request from another project or
+  session claims nothing. A resumed turn that is stopped on its way, by the
+  caller going away or the turn's deadline, keeps no state.
 - **A choice with no options is skipped,** leaving the variable empty, so a
   tool that found no slots does not produce an empty question.
 - **A reply is read before it is kept** (`understand`, on by default), since

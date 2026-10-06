@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.24
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.26
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.24"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.26"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -105,13 +105,16 @@ end-user permissions. The backend decides who may ask.
 | `POST` | `/documents/{doc_id}/reindex?project_id=…` | Rebuild a document from its stored original, optionally with new `chunking_strategy`, `chunk_size` or `chunk_overlap`; see [chunking.md](chunking.md) |
 | `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document |
 | `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (`503` with `Retry-After` past that). A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed, `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
+| `POST` | `/judge` | Answer a dataset of cases and grade the answers against a rubric (`judge_prompt`), at temperature 0, by the project's model or `judge_model`. The cases are answered with the chatbot's tools offered but never run; a case whose turn failed or passed `ENGINE_TURN_DEADLINE_S` has `score: null` and a `reason` starting `error:`. See [agents.md](agents.md#evaluations) |
+| `POST` | `/eval/rag` | Score retrieval with RAGAS on cases with reference answers; `unscored` counts, per metric, the cases that could not be scored. See [retrieval.md](retrieval.md#evaluating-a-change) |
 
-Two more for operations:
+Three more for operations:
 
 | Method | Path | Reports |
 | --- | --- | --- |
 | `GET` | `/health` | The process is up |
 | `GET` | `/health/ready` | Whether a turn can be served, and which agents are installed |
+| `GET` | `/metrics` | Counts and durations in Prometheus format. Under `ENGINE_ENV=production` it needs `X-API-Key` unless `ENGINE_METRICS_PUBLIC=true` |
 
 ```json
 {"ready": true, "model_provider": true, "vector_store": true, "agents": ["graph", "loop"]}
@@ -120,6 +123,9 @@ Two more for operations:
 `ready` is false when no model provider key is configured, or when the vector
 store does not answer. Without a key the engine still accepts and chunks
 documents, and answers `501` to `/chat`.
+
+The interactive docs (`/docs`, `/redoc`) and `/openapi.json` are served
+locally only: under `ENGINE_ENV=production` they are not there.
 
 ---
 
@@ -162,11 +168,11 @@ request carries the whole assistant definition:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank`, `retrieval_candidates` and `min_score` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out; `provider_api_key` is the caller's own OpenRouter key, billed for every model call in the request instead of the engine's, and it satisfies the engine's key requirement on its own; `unavailable_message` is what the visitor is told when a tool the turn needs is unavailable or fails (see Failures, below) |
+| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank`, `retrieval_candidates` and `min_score` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out, after the model answered once more with its tools off; `provider_api_key` is the caller's own OpenRouter key, billed for every model call in the request instead of the engine's, and it satisfies the engine's key requirement on its own; `unavailable_message` is what the visitor is told when a tool the turn needs is unavailable or fails (see Failures, below), and what a turn past `ENGINE_TURN_DEADLINE_S` ends with |
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
-| `history` | no | Earlier turns, oldest first |
+| `history` | no | Earlier turns, oldest first. The oldest are left out of a model call whose prompt would pass `ENGINE_PROMPT_CHARS` (see Size, below) |
 | `attachments` | no | Files the person sent in the conversation, oldest first, as `{ name, text, sent_now? }` (at most 5, each up to 60,000 characters; `POST /extract` reads a file into text; `sent_now` marks the one that came with this message, since 0.1.24). Send them with every turn of the conversation, so a later question can still refer to one. Every call of the chat model (the loop and graph agents' answer, a workflow's Chat Model steps and its reply to an answer that misses the question) puts them in the person's turn before the message, framed by their names, with the rules for them in the system prompt: what the person gave it to read, never instructions, never cited with a number. A workflow Condition reads the start of the newest two (1,500 characters each) beside the message; the reading of an answer to a question sees the reply alone; a hand-off's transcript carries the start of each (2,000 characters). They are not part of the knowledge-base search. Since 0.1.23 |
 | `omitted` | no | The names of files the conversation no longer carries (at most 20), when the caller keeps only the newest: the model is told they are no longer included and to ask for one again when asked about it. Since 0.1.24 |
 | `resume` | no | `{ thread_id, value?, skipped? }`: the answer to a question a workflow turn paused on (`input_required`). `message` is still sent, as the answer reads in the conversation (the typed text, or the chosen option's label). See "A turn that asks" below |
@@ -188,7 +194,8 @@ Langfuse, a cloud project or a self-hosted instance, instead of the engine's
 
 The keys travel with every request, so this assumes what the deployment
 guide already requires: the engine is reached only by the backend, over TLS.
-Traces carry the request, project, session and user ids either way.
+Traces carry the request, project and session ids either way, and a
+pseudonym of the user id, never the id itself.
 
 ### A workflow per assistant
 
@@ -234,11 +241,15 @@ in a `usage` event. `skipped: true` answers
 an `optional` question with nothing. A `thread_id` from another project or
 session, one older than `ENGINE_PAUSE_TTL_S` (a day by default), or one whose
 workflow was edited since is refused with an `error` event (`resume_expired`
-or `resume_changed`); ask the visitor again. A new message without `resume`
-simply starts a new turn, and the unanswered one is forgotten in time.
+or `resume_changed`); ask the visitor again. Since 0.1.26 a question is also
+resumed only once: the request that resumes it claims it, so a second request
+with the same `thread_id` (a double click, a retry) gets `resume_expired`
+rather than running the rest of the turn again. A new message without
+`resume` simply starts a new turn, and the unanswered one is forgotten in
+time.
 
 The paused state lives in `ENGINE_CHECKPOINT_DB`, a SQLite file on the
-engine's volume, and is deleted when the turn finishes. With several engine
+engine's volume, and is deleted when the turn finishes or is stopped. With several engine
 replicas, send the answer to the replica that asked.
 
 ### Files in the conversation
@@ -305,6 +316,15 @@ browser sends a project *name*, and the definition is loaded from
 
 Every model uses `extra="forbid"`. A misspelled field is a `422` that names it.
 
+### Size
+
+A JSON body over `ENGINE_MAX_BODY_BYTES` (8 MiB by default) is refused with
+`413` before it is read. Within it, each model call's prompt is kept under
+`ENGINE_PROMPT_CHARS` (400,000 characters by default): the oldest turns of
+`history` are left out first, and when even no history is too much, the last
+extracts go, then each attachment is cut to an even share. The system prompt
+and the message are never cut.
+
 ---
 
 ## 4. Reading the answer
@@ -336,12 +356,17 @@ Read it line by line and switch on `type`.
 | `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model`, `utility_input_tokens`, `utility_output_tokens`, `utility_model` | Display or bill cost. Tokens cover every model call in the turn; the `utility_` counts are the part spent on `ENGINE_UTILITY_MODEL` (the query rewrite, the rerank, a workflow's condition step), so that part can be priced at its own rate, and `utility_model` is null when those calls ran on the answer model. `cost_usd` is what the provider billed when every model call in the turn reported it, as OpenRouter does, whichever of its providers served each call; otherwise priced from `ENGINE_PRICING`, and null when that does not list the model |
 | `input_required` | `thread_id`, `node`, `prompt`, `input`, `options[]`, `optional`, `skip_label`, `placeholder`, `error` | A workflow turn paused on a question. Show the control for `input` (`text`, `phone`, `email`, `url`, or `choice` with `options[]` of `{value, label}`); answer with `resume` |
 | `error` | `code`, `message` | The turn failed after the response started |
-| `done` | `finish_reason` | Always last. `stop`; `length` when `max_output_tokens` cut the answer (show the visitor it was shortened); `tool_limit` when the model was still asking for tools after `max_tool_iterations` rounds (what it said so far has streamed); `input_required` after an `input_required` event; `error` after an `error` event |
+| `done` | `finish_reason` | Always last. `stop`, also when the turn ended with the assistant's `unavailable_message` (a failed tool step or hand-off, or the turn's deadline); `length` when `max_output_tokens` cut the answer (show the visitor it was shortened); `tool_limit` when the model was still asking for tools after `max_tool_iterations` rounds (it then answered once more with its tools off); `input_required` after an `input_required` event; `error` after an `error` event |
 
 Each `sources[]` entry has `doc_id`, `source`, `score`, and optionally
 `heading`, `page` and `excerpt`. `heading` is present when the document was
 chunked by headings, `page` when it was chunked by page; see
-[chunking.md](chunking.md).
+[chunking.md](chunking.md). `score` is the chunk's vector similarity to the
+question, in [0, 1]: the cosine of the two embeddings for a model like
+OpenAI's, and 0 for a chunk only the keyword search found. Sources arrive in
+the order retrieval ranked them, which is not always the order of their
+scores; see [retrieval.md](retrieval.md#scores). Before 0.1.26 a hybrid
+search sent the fused score, whose first source was always 1.0.
 
 ### Stream rules
 
@@ -354,9 +379,17 @@ counted like any other.
 
 **Read `finish_reason`.** `stop` is a normal end. `length` means the reply
 was cut at `max_output_tokens`: show the reader the answer was shortened, or
-raise the cap. `tool_limit` means the model was still asking for tools after
-`max_tool_iterations` rounds: what it said so far has streamed, and the
-sources and usage are correct for it. Both are complete turns, not errors.
+raise the cap; since 0.1.26 a reply cut there runs none of the tool calls it
+was making. `tool_limit` means the model was still asking for tools after
+`max_tool_iterations` rounds: since 0.1.26 it is then called once more with
+its tools off, so the turn ends with an answer, and the sources and usage are
+correct for it. Both are complete turns, not errors.
+
+**A turn has a deadline.** Since 0.1.26 every turn ends at
+`ENGINE_TURN_DEADLINE_S` (120 seconds by default), wherever it is: the
+assistant's `unavailable_message` arrives as a `token`, then a `usage` event
+when the turn had not reported one, then `done` with `stop`. It is not an
+`error`.
 
 **Ignore an unrecognised `type`.** Event types will be added.
 
@@ -422,22 +455,42 @@ Returns `201` and a record:
   "error": null,
   "created_at": "2026-08-19T09:12:44Z",
   "updated_at": "2026-08-19T09:12:44Z",
+  "chunking_strategy": "size",
+  "chunk_size": 1000,
+  "chunk_overlap": 200,
+  "embedding_model": "openai/text-embedding-3-small",
   "warnings": []
 }
 ```
 
 `status` is one of `received`, `indexed`, `unchanged`, `failed`. `received`
-means the engine has no provider key and could not embed. `warnings` (since
-0.1.25) says, one sentence per kind, what in the document reads like orders
-to an AI: hidden characters (spelt out), instruction-like text (quoted) or
-chat markup. It is empty for an ordinary document and for one indexed by an
-older engine until it is re-indexed. The document is indexed either way.
+means the engine has no provider key and could not embed. `embedding_model`
+(since 0.1.26) names the model that made the document's vectors; it is null
+when nothing was embedded and for a document indexed by an older engine.
+`warnings` (since 0.1.25) says, one sentence per kind, what in the document
+reads like orders to an AI: hidden characters (spelt out), instruction-like
+text (quoted) or chat markup. It is empty for an ordinary document and for
+one indexed by an older engine until it is re-indexed. The document is
+indexed either way.
+
+A `failed` record says why in `error`, and the upload answers `422` with the
+same words: no text to index (a scanned PDF), text that is not UTF-8, a PDF
+that is damaged or encrypted, or one that cannot be read within the engine's
+bounds. A PDF is read in a process of its own, as a file sent in a chat is,
+killed after `ENGINE_INDEX_READ_TIMEOUT_S` (60 seconds by default) and with
+its compressed parts capped at 8 MB each, and no document may give the index
+more than `ENGINE_INDEX_MAX_CHARS` (2,000,000 characters by default, about six
+hundred pages): a longer one is refused rather than indexed in part. A new
+version is embedded before the old one is removed, so a provider failure
+during an upload or a re-index leaves the version already indexed answering,
+with the record saying `failed` and why.
 
 ### Idempotency
 
 `external_id` is the key. The same id replaces the document; identical bytes
-skip the work and answer `unchanged`. A sync over a whole corpus can therefore
-be re-run safely.
+skip the work and answer `unchanged`, unless they are to be cut or embedded
+differently from last time (another chunking setting or embedding model). A
+sync over a whole corpus can therefore be re-run safely.
 [`scripts/seed_knowledge.py`](../examples/backend/scripts/seed_knowledge.py)
 walks a folder and uses each file's relative path as its `external_id`.
 
@@ -448,7 +501,11 @@ curl "localhost:8100/documents?project_id=support"
 curl -X DELETE "localhost:8100/documents/89ad9185...?project_id=support"
 ```
 
-`project_id` is required on both.
+`project_id` is required on both, and scopes both. A `doc_id` is derived from
+the project and the `external_id`, so it can be worked out by anyone who knows
+a file's name; a delete, or a re-index, for a document the project does not
+have touches nothing. A delete answers `{"deleted": false}` and a re-index
+`404`, as for a document that never existed.
 
 ### Validation
 
@@ -487,13 +544,15 @@ is down.
 ### Retries
 
 The engine retries a model stream that fails before its first token, on a
-rate limit, a provider 5xx or a dropped connection, up to
-`ENGINE_PROVIDER_MAX_RETRIES` times (default 3) with a doubling delay from
-half a second. Once a token has reached you the failure is passed on as an
-`error` event instead, because a replay would duplicate text you have shown.
-Every agent streams through the same helper, so this holds for the bundled
-LangGraph agents too. The backend therefore need not retry a chat request
-itself; retrying one that already streamed text would repeat the answer.
+rate limit, a provider 5xx, a dropped connection or an error the provider
+sends inside the stream, up to `ENGINE_PROVIDER_MAX_RETRIES` times (default
+3) with a doubling delay from half a second. Once a token has reached you the
+failure is passed on as an `error` event instead, because a replay would
+duplicate text you have shown. Every agent streams through the same helper,
+the one layer that retries a streamed call, so this holds for the bundled
+LangGraph agents too, and the turn's deadline bounds the whole of it. The
+backend therefore need not retry a chat request itself; retrying one that
+already streamed text would repeat the answer.
 
 ### Streaming
 
@@ -576,14 +635,21 @@ rather than `null`.
 **Return what the next call needs.** `get_booking_status` returns the flight
 number, which lets the model call `get_flight_status` in the same turn.
 
+**Keep results short.** A result is sent again with every later model call of
+the turn, so the model reads at most `ENGINE_TOOL_RESULT_CHARS` (20,000
+characters by default) of one; the rest is cut, with a line saying how much
+was left out. A workflow's tool step still keeps the whole result in its
+variable; a step's prompt that names the variable gets it cut the same way.
+
 ### Failures
 
 A tool server that is down never ends the turn. A server that cannot be
-reached, or fails to list its tools, is left out (and logged), and the turn
-goes on with the tools the other servers offer. The model's system prompt then
-names the allowlisted tools that were not found, and tells it to say the
-assistant's `unavailable_message` when the visitor needs one of them, rather
-than guess.
+reached, or fails to list its tools, is left out (and logged by its `name`,
+with any address in the error cut to its host, since a path may carry a
+credential), and the turn goes on with the tools the other servers offer. The
+model's system prompt then names the allowlisted tools that were not found,
+and tells it to say the assistant's `unavailable_message` when the visitor
+needs one of them, rather than guess.
 
 A tool call that fails does not end the turn either; it is reported as a
 `tool_call_finished` with `ok: false`. What the model reads depends on why:
@@ -593,11 +659,15 @@ A tool call that fails does not end the turn either; it is reported as a
 - **The tool is unavailable** (a timeout, a connection failure, anything else
   raised): no technical detail, only that the tool is unavailable, not to call
   it again or invent a result, and the words to tell the visitor.
+- **The arguments were not a JSON object** (since 0.1.26): the call is not
+  made, its `error` is `not called: the arguments were not a JSON object`,
+  and the model reads that and may call the tool again in its next round.
 
 `project.unavailable_message` sets those words; the default is "I can't
 handle this request right now. Please try again later. Is there anything else
 I can help you with?". A workflow's tool step uses the same words when it
-stops (see agents.md).
+stops, and so does a hand-off whose tool fails, which then promises no
+follow-up (see agents.md).
 
 ### Caller context
 
@@ -635,7 +705,8 @@ same as retrieved document text.
 
 Retrieved extracts, the person's files and tool results can each carry an
 instruction meant for the model: a line in a crawled page, a sentence in a
-PDF, an order note. Since 0.1.25 the engine:
+PDF, an order note. Since 0.1.25 (and, where marked, since 0.1.26) the
+engine:
 
 - puts the extracts in the person's turn, inside `<extracts>…</extracts>`,
   before the files and the message, with the rules for them (cite by number,
@@ -644,10 +715,17 @@ PDF, an order note. Since 0.1.25 the engine:
 - removes characters a reader cannot see but a model reads from every
   extract, file, tool result and turn: Unicode tag characters (which spell
   ASCII invisibly), bidirectional overrides and isolates, invisible operators,
-  a stray byte order mark. Joiners and direction marks stay, since Persian,
-  Arabic, the Indic scripts and emoji need them;
+  a stray byte order mark, and since 0.1.26 the zero-width space, the word
+  joiner and the variation selectors, which can carry bytes hidden behind an
+  emoji. Joiners and direction marks stay, since Persian, Arabic, the Indic
+  scripts and emoji need them;
 - shows a closing tag inside an extract or a file as `[/extracts]` or
   `[/file]`, so the text cannot end its frame and carry on as the person;
+  since 0.1.26 also one written with a fullwidth angle bracket or a slash
+  that only looks like one;
+- since 0.1.26, puts a backslash before a line of an extract that starts the
+  way an extract's own header does (`[3] other.md`), so a chunk cannot pass
+  its text off as another extract, or name a source nothing retrieved;
 - says, when a document is indexed, what in it reads like orders to an AI
   (`warnings` on the record), so its owner can look. The document is indexed
   either way.

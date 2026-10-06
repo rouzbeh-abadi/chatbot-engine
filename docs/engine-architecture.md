@@ -13,7 +13,7 @@ code that fulfils it:
 | --- | --- | --- |
 | Answer a chat turn | `POST /chat` | Retrieve context, call the model, run requested tools, stream the answer |
 | Ingest a document | `PUT /documents` | Extract, chunk, embed, store |
-| Grade the system prompt | `POST /judge` | Answer a dataset, score each answer against a rubric; optionally with another model as the judge, and answers supplied to test the judge itself |
+| Grade the system prompt | `POST /judge` | Answer a dataset with the chatbot's tools offered but never run, score each answer against a rubric; optionally with another model as the judge, and answers supplied to test the judge itself |
 | Grade retrieval | `POST /eval/rag` | Answer a dataset, score retrieval with RAGAS |
 
 There is no top-level branching. Tracing any one operation from its route to the
@@ -37,7 +37,7 @@ every implementation on one screen:
 | Port | Implementation | Location |
 | --- | --- | --- |
 | `Agent` | `AgentRouter`, over `ChatAgent` and any installed plugin | `agent/router.py` |
-| `ToolProvider` | `McpToolProvider` | `mcp/client.py` |
+| `ToolProvider` | `McpToolProvider`; for `/judge`, `EvalToolProvider` over it, which lists the tools and runs none | `mcp/client.py`, `eval/prompt_evaluation.py` |
 | `IngestPipeline` | `DocumentIngestPipeline` | `rag/pipeline.py` |
 | `DocumentRegistry` | `SqliteDocumentRegistry` | `documents/sqlite_registry.py` |
 | `BlobStore` | `DocumentBlobs` | `documents/blobs.py` |
@@ -57,12 +57,17 @@ flowchart LR
 1. **`api/chat.py`** receives the request, checks the two preconditions that
    can still become a status code (a provider key, 501; a known agent name,
    422), then opens an NDJSON stream. Anything that fails after that point
-   arrives inside the stream as an `error` event followed by `done`.
+   arrives inside the stream as an `error` event followed by `done`. A body
+   over `ENGINE_MAX_BODY_BYTES` never reaches it: `api/body_limit.py` answers
+   413 before the body is read.
 2. **`services/chat.py`** delegates to the agent. The layer exists so the route
    depends on one object rather than on the agent's construction, and so a test
    can hand the route any agent. It contains no logic.
 3. **`agent/router.py`** picks the agent the assistant config asked for, then
    delegates. Both agents emit the same events, so nothing downstream changes.
+   It also holds every turn, whichever agent runs it, to
+   `ENGINE_TURN_DEADLINE_S`, ending one that passes it with the assistant's
+   `unavailable_message`.
 4. **`agent/chat_agent.py`** is the only agent the engine ships: it runs the
    turn (retrieve, emit sources, stream the answer, emit `done`) and translates
    raw model output into typed events. Any other agent, including the bundled
@@ -72,16 +77,23 @@ flowchart LR
    fuse the rankings, rerank with the model when enabled, and return the hits
    and the numbered context, each extract cleaned of what a reader cannot see
    and unable to close its frame (`untrusted.py`). The extracts travel in the
-   person's turn, never the system role. See [retrieval.md](retrieval.md).
+   person's turn, never the system role. See [retrieval.md](retrieval.md) for
+   the retrieval itself, and "Text the chatbot did not write" in
+   [backend-integration.md](backend-integration.md#text-the-chatbot-did-not-write)
+   for how the extracts are framed.
 6. **`agent/client.py`** runs the model-and-tool loop: discover the MCP tools,
    call the model, execute any requested tool through the `ToolProvider`, return
    the result to the model, and repeat until it produces a final answer or the
-   rounds run out (`tool_limit`). Its helpers are what every agent shares:
-   `stream_reply` retries a stream that breaks before its first token,
-   `run_tool_calls` narrates and times each tool call, `finish_reason_of`
-   reads why a reply ended, `price_usage` prices the turn. The bundled
-   LangGraph plugin calls the same helpers from its nodes. This is the densest
-   file in the engine, reflecting the inherent complexity of the tool loop.
+   rounds run out (`tool_limit`), when it answers once more with its tools
+   off. Its helpers are what every agent shares: `prompt_messages` builds the
+   prompt within `ENGINE_PROMPT_CHARS`, `stream_reply` is the one place a
+   streamed call is retried (only before its first token), `run_tool_calls`
+   narrates and times each tool call and cuts its result to
+   `ENGINE_TOOL_RESULT_CHARS`,
+   `finish_reason_of` reads why a reply ended, `price_usage` prices the turn.
+   The bundled LangGraph plugin calls the same helpers from its nodes. This is
+   the densest file in the engine, reflecting the inherent complexity of the
+   tool loop.
 
 ## Document ingestion path
 
@@ -98,14 +110,22 @@ Storage fans out to three of them: `ChromaChunkStore` for vectors,
 `DocumentBlobs` for the original file, and `SqliteDocumentRegistry` for the
 record.
 
+A PDF is read in a process of its own (`documents/bounded.py`), killed at a
+deadline and capped in the text it may give, as a file sent in a chat is. A
+new version's chunks are embedded before the old version's are removed, so a
+provider failure leaves the document answering as it did. A delete or a
+re-index starts from the project's own record, and the chunks are always
+addressed by project and document together.
+
 How the document is cut before embedding is configurable per project. See
 `rag/splitter.py`, described in [chunking.md](chunking.md).
 
 ## Directory reference
 
 ```text
-api/          HTTP surface: routes, auth, rate limits, streaming, and
-              dependencies.py, the record of what is wired to what
+api/          HTTP surface: routes, auth, rate limits, the body limit,
+              streaming, and dependencies.py, the record of what is wired
+              to what
 ports/        the interfaces every other module depends on
 agent/        the chat turn: router (which agent), registry (which exist),
               chat_agent (the built-in), retriever (RAG), client (model loop)
