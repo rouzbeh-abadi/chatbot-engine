@@ -288,9 +288,11 @@ def test_a_judge_model_grades_at_temperature_0_without_the_answer_cap_and_the_pr
     )
 
 
-def test_without_a_judge_model_the_project_model_grades_as_before(
+def test_without_a_judge_model_the_project_model_grades_at_temperature_0(
     monkeypatch, project: dict[str, object]
 ) -> None:
+    """The project's own model grades, as before, but at temperature 0 and
+    without the answer cap, so one run grades like the next."""
     import asyncio
 
     from chatbot_engine.eval.prompt_evaluation import evaluate_dataset
@@ -299,7 +301,8 @@ def test_without_a_judge_model_the_project_model_grades_as_before(
     seen: dict[str, object] = {}
     _graded(monkeypatch, seen)
     config = AssistantConfig(
-        **project | {"model": "openai/gpt-5-mini", "temperature": 0.7}
+        **project
+        | {"model": "openai/gpt-5-mini", "temperature": 0.7, "max_output_tokens": 300}
     )
 
     report = asyncio.run(
@@ -309,8 +312,15 @@ def test_without_a_judge_model_the_project_model_grades_as_before(
         )
     )
 
-    assert seen["config"] is config
+    judged_with = seen["config"]
+    assert isinstance(judged_with, AssistantConfig)
+    assert (
+        judged_with.model,
+        judged_with.temperature,
+        judged_with.max_output_tokens,
+    ) == ("openai/gpt-5-mini", 0.0, None)
     assert report.model == "openai/gpt-5-mini"
+    assert (config.temperature, config.max_output_tokens) == (0.7, 300)
 
 
 # --- the provider's refusal, passed on -----------------------------------------

@@ -19,7 +19,7 @@ from fastapi import Depends
 from chatbot_engine.agent.router import AgentRouter
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
-from chatbot_engine.eval.prompt_evaluation import evaluate_dataset
+from chatbot_engine.eval.prompt_evaluation import EvalToolProvider, evaluate_dataset
 from chatbot_engine.mcp.client import McpToolProvider
 from chatbot_engine.models.evals import (
     JudgeReport,
@@ -59,9 +59,11 @@ def get_agent() -> Agent:
 def get_judge() -> Judge:
     """Scores an eval run against a rubric the caller supplies.
 
-    Needs the agent, since it answers every case before grading it.
+    Answers every case before grading it, with agents of its own: the same
+    agents `/chat` runs, given the chatbot's tools to list but never to run
+    (`EvalToolProvider`), so an evaluation books, emails and changes nothing.
     """
-    agent = get_agent()
+    agent = AgentRouter(tools=EvalToolProvider(get_tool_provider()))
 
     async def judge(request: JudgeRequest) -> JudgeReport:
         return await evaluate_dataset(request, agent=agent)

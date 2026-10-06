@@ -44,7 +44,8 @@ class JudgeRequest(BaseModel):
     #: model grading its own answers tends to be kind to them. It grades at
     #: temperature 0, so one run grades like the next, and without the
     #: project's answer cap, which is sized for answers, not for grading.
-    #: Omitted, the project's model grades, as before.
+    #: Omitted, the project's model grades its own answers, at temperature 0
+    #: as well.
     judge_model: str | None = Field(default=None, min_length=1)
 
 
@@ -196,3 +197,7 @@ class RagReport(BaseModel):
     by_category: list[RagCategorySummary] = Field(default_factory=list)
     #: Which model computed the metrics, so two runs can be compared.
     model: str | None = None
+    #: For each metric, how many cases RAGAS could not score (it failed or
+    #: gave no number). Each average is over the cases that were scored, so a
+    #: metric with many here averages fewer cases than the others.
+    unscored: dict[str, int] = Field(default_factory=dict)

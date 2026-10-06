@@ -91,3 +91,5 @@ class RagReport(BaseModel):
     by_category: list[RagCategorySummary] = Field(default_factory=list)
     #: Which model computed the metrics, so two runs can be compared.
     model: str | None = None
+    #: For each metric, how many cases could not be scored (engine 0.1.26).
+    unscored: dict[str, int] = Field(default_factory=dict)

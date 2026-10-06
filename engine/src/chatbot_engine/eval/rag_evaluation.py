@@ -8,6 +8,15 @@ turn uses, then scores four things with RAGAS.
 - **answer relevancy** - does the answer address the question that was asked.
 - **context precision** - are the retrieved chunks relevant, best ones first.
 - **context recall** - did retrieval find the context the reference answer needs.
+
+The `negative` cases, questions the knowledge base does not answer, are
+reported in their own category and left out of the overall average: the right
+answer to one is a refusal, which these metrics cannot reward, so averaged in
+they would pull every overall number down by construction.
+
+A metric that cannot be scored for a case (the judge's reply did not parse, a
+call failed) leaves that cell empty, is logged with its reason, and is
+counted, so a run that lost half its faithfulness cells says so.
 """
 
 from __future__ import annotations
@@ -15,6 +24,7 @@ from __future__ import annotations
 import importlib
 import logging
 import math
+from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
@@ -39,12 +49,18 @@ from chatbot_engine.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
+#: The category of the cases the knowledge base does not answer, averaged
+#: apart from the rest.
+NEGATIVE = "negative"
+
 
 class _NoTools:
     """A tool provider that offers nothing.
 
     Retrieval cases never call a tool, so binding none keeps the answer grounded
-    in the retrieved context and skips the round-trip to the tool server.
+    in the retrieved context and skips the round-trip to the tool server. The
+    evaluated assistant allows no tool either (`_without_tools`), so its
+    prompt does not say that tools are missing.
     """
 
     async def list_tools(self, config: AssistantConfig) -> list[Mapping[str, Any]]:
@@ -73,6 +89,17 @@ _METRICS = (
 )
 
 
+def _without_tools(project: AssistantConfig) -> AssistantConfig:
+    """`project` with no MCP servers.
+
+    The answer is scored against what retrieval found, so no tool is called.
+    Left with its servers and offered no tools, the assistant would be told
+    in its prompt that every tool it allows is unavailable right now, a line
+    no real turn carries and one the answer could repeat.
+    """
+    return project.model_copy(update={"mcp_servers": []})
+
+
 def _averages(results: list[RagCaseResult]) -> RagMetricAverages:
     """Mean of each metric across `results`, skipping the ones scored null."""
     means: dict[str, float | None] = {}
@@ -84,6 +111,12 @@ def _averages(results: list[RagCaseResult]) -> RagMetricAverages:
         ]
         means[metric] = round(sum(scores) / len(scores), 3) if scores else None
     return RagMetricAverages(**means)
+
+
+def _overall(results: list[RagCaseResult]) -> RagMetricAverages:
+    """The averages over the cases the knowledge base answers: every case but
+    the `negative` ones, which `by_category` reports on their own."""
+    return _averages([result for result in results if result.category != NEGATIVE])
 
 
 def _by_category(results: list[RagCaseResult]) -> list[RagCategorySummary]:
@@ -167,7 +200,9 @@ async def _answer_and_contexts(
     correct answer as off-topic for answering a question they cannot see. A
     first-turn question is returned as it was asked.
     """
-    request = ChatRequest(project=project, message=case.question, history=case.history)
+    request = ChatRequest(
+        project=_without_tools(project), message=case.question, history=case.history
+    )
     queries = await rewrite_queries(request)
     hits, spent = await retrieve_with_usage(request, queries=queries)
     contexts = [document.page_content for document, _ in hits]
@@ -184,30 +219,45 @@ async def _answer_and_contexts(
     return answer, queries[0], contexts
 
 
-async def _score(metric, /, **kwargs) -> float | None:
+async def _score(
+    metric, /, *, name: str, case: str, unscored: Counter[str], **kwargs
+) -> float | None:
     """One metric's value for one case, or None if it could not be computed.
 
-    A single metric failing (an empty retrieval, a model hiccup) should leave a
-    gap in the row, not abort the whole run.
+    A single metric failing (an empty retrieval, a model hiccup, a judge reply
+    that does not parse) should leave a gap in the row, not abort the whole
+    run. The gap is logged with its reason and counted in `unscored` under
+    the metric's `name`.
     """
     try:
         result = await metric.ascore(**kwargs)
-    except Exception:
+    except Exception as exc:
+        logger.warning("rag eval: no %s for case %s: %s", name, case, exc)
+        unscored[name] += 1
         return None
 
     value = result.value
     if isinstance(value, (int, float)) and not math.isnan(value):
         return float(value)
+    logger.warning("rag eval: no %s for case %s: the score was %r", name, case, value)
+    unscored[name] += 1
     return None
 
 
 async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
     """Answer every case, then score its retrieval with RAGAS."""
+    report, unscored = await _evaluate(request)
+    return report.model_copy(update={"unscored": unscored})
+
+
+async def _evaluate(request: RagEvalRequest) -> tuple[RagReport, dict[str, int]]:
+    """The report, and how many cases each metric could not be scored for."""
     faithfulness, answer_relevancy, precision, recall = _build_metrics(
         request.project.provider_api_key
     )
 
     results: list[RagCaseResult] = []
+    unscored: Counter[str] = Counter()
     total = len(request.cases)
     for index, case in enumerate(request.cases, start=1):
         answer, question, contexts = await _answer_and_contexts(request.project, case)
@@ -223,21 +273,35 @@ async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
                 contexts=contexts,
                 faithfulness=await _score(
                     faithfulness,
+                    name="faithfulness",
+                    case=case.id,
+                    unscored=unscored,
                     user_input=question,
                     response=answer,
                     retrieved_contexts=contexts,
                 ),
                 answer_relevancy=await _score(
-                    answer_relevancy, user_input=question, response=answer
+                    answer_relevancy,
+                    name="answer_relevancy",
+                    case=case.id,
+                    unscored=unscored,
+                    user_input=question,
+                    response=answer,
                 ),
                 context_precision=await _score(
                     precision,
+                    name="context_precision",
+                    case=case.id,
+                    unscored=unscored,
                     user_input=question,
                     reference=case.reference,
                     retrieved_contexts=contexts,
                 ),
                 context_recall=await _score(
                     recall,
+                    name="context_recall",
+                    case=case.id,
+                    unscored=unscored,
                     user_input=question,
                     retrieved_contexts=contexts,
                     reference=case.reference,
@@ -245,9 +309,18 @@ async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
             )
         )
 
-    return RagReport(
+    counts = {metric: unscored[metric] for metric in _METRICS}
+    if unscored:
+        logger.warning(
+            "rag eval: of %d cases, could not score %s",
+            total,
+            ", ".join(f"{metric} for {n}" for metric, n in counts.items() if n),
+        )
+
+    report = RagReport(
         results=results,
-        overall=_averages(results),
+        overall=_overall(results),
         by_category=_by_category(results),
         model=get_settings().rag_judge_model,
     )
+    return report, counts
