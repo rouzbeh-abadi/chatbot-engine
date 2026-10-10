@@ -96,9 +96,6 @@ class PlantedTools(Tools):
         return f'{{"status": "confirmed", "note": "{PLANTED}"}}'
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_tool_result_templated_into_a_model_step_never_speaks_in_the_system_role():
     """Docs: "No text the chatbot did not write is ever in the system role"
     (backend-integration.md, "Text the chatbot did not write"; ChatFrom
@@ -116,9 +113,6 @@ async def test_a_tool_result_templated_into_a_model_step_never_speaks_in_the_sys
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_the_visitors_message_templated_into_a_model_step_never_speaks_in_the_system_role():
     spec = {
         "start": "answer",
@@ -144,9 +138,6 @@ async def test_the_visitors_message_templated_into_a_model_step_never_speaks_in_
 # --- WORKFLOW-2: invisible characters survive templating ----------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_invisible_characters_in_the_message_never_reach_a_model_through_a_template():
     """Docs: invisible characters are removed "from every extract, file, tool
     result and turn before a model reads them" (claim 2). `render()` fills
@@ -174,9 +165,6 @@ async def test_invisible_characters_in_the_message_never_reach_a_model_through_a
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_invisible_characters_in_an_answer_never_reach_a_model_through_a_template():
     """An email answer passes the engine's check with tag characters in it
     (`_EMAIL` is `[^@\\s]+@...`), is kept as it is without a reading, and a
@@ -376,9 +364,6 @@ ASK_EMAIL_THEN_WAIT = {
 }
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-5 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_an_unanswered_question_is_forgotten_after_the_ttl_while_the_engine_serves(
     tmp_path,
 ):
@@ -500,9 +485,6 @@ async def test_a_resumed_turn_does_not_report_the_cut_of_a_reply_before_the_paus
 # --- WORKFLOW-7: a visitor's words in the server log --------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-7 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_reading_that_is_not_json_does_not_put_the_visitors_words_in_the_log(
     caplog,
 ):

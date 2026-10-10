@@ -124,9 +124,6 @@ def _case(case_id: str, question: str = "Refunds?") -> dict:
 # --- that named its public key said --------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="EVALTRACE-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_projects_traces_go_to_its_own_langfuse_not_to_one_another_tenant_registered_first(
     langfuse_clean,
 ):
@@ -168,9 +165,6 @@ def test_a_projects_traces_go_to_its_own_langfuse_not_to_one_another_tenant_regi
 # --- for the life of the process -----------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="EVALTRACE-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_per_assistant_langfuse_clients_are_bounded_by_the_cache_cap(
     langfuse_clean, monkeypatch
 ):
@@ -205,9 +199,6 @@ def test_per_assistant_langfuse_clients_are_bounded_by_the_cache_cap(
 # --- EVALTRACE-3: a credential in an MCP server's address reaches the log ------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="EVALTRACE-3 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_mcp_servers_address_is_never_logged_with_its_path(capsys, monkeypatch):
     """DEPLOYMENT.md: "an address in the error is cut to its host, since a
     path may carry a credential". ChatFrom's own actions server carries the
@@ -223,14 +214,12 @@ def test_an_mcp_servers_address_is_never_logged_with_its_path(capsys, monkeypatc
     saved_level = root.level
     configure_logging("INFO", "text")
 
-    def factory(headers=None, timeout=None, auth=None):
-        return httpx2.AsyncClient(
-            transport=httpx2.MockTransport(lambda request: httpx2.Response(503)),
-            headers=headers,
-            timeout=timeout,
-        )
+    async def unavailable(self, request):
+        return httpx2.Response(503, request=request)
 
-    monkeypatch.setattr(mcp_client, "create_mcp_http_client", factory)
+    # Under the engine's own client (since 0.1.27 it makes one with a capped
+    # transport rather than the SDK's `create_mcp_http_client`).
+    monkeypatch.setattr(httpx2.AsyncHTTPTransport, "handle_async_request", unavailable)
     config = AssistantConfig(
         project_id="bot",
         name="Bot",
@@ -395,9 +384,6 @@ def test_one_evaluation_request_cannot_carry_an_unbounded_number_of_cases():
 # --- EVALTRACE-6: a visitor's answer to an Ask step reaches the engine log -----
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-7 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_reading_that_is_not_json_is_logged_without_the_visitors_words(caplog):
     """ChatFrom's docs/ethics.md: "The server's log carries ids, never a
     visitor's words." The engine runs on that server. When the utility

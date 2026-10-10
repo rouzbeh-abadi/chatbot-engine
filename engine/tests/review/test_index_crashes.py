@@ -395,9 +395,6 @@ def test_a_kill_while_the_original_is_written_leaves_one_whole_version(
 # ---------------------- INGEST-16: first upload killed, file kept forever
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-16 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_first_upload_killed_mid_index_leaves_no_file_nothing_can_delete(
     tmp_path: Path, local_client
 ) -> None:

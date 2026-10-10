@@ -15,10 +15,11 @@ def _upload(
     content: bytes = MARKDOWN,
     external_id: str = "baggage.md",
     mimetype: str = "text/markdown",
+    project_id: str = "support",
 ):
     return client.put(
         "/documents",
-        data={"project_id": "support", "external_id": external_id},
+        data={"project_id": project_id, "external_id": external_id},
         files={"file": ("baggage.md", content, mimetype)},
     )
 
@@ -314,3 +315,71 @@ def test_reindexing_an_unknown_document_is_404(client: TestClient) -> None:
     response = client.post("/documents/nope/reindex?project_id=support", json={})
 
     assert response.status_code == 404
+
+
+# --- forgetting a project (X-9, INGEST-4) --------------------------------------
+
+
+def test_a_purge_removes_every_document_of_the_project_and_refuses_new_ones(
+    client: TestClient,
+) -> None:
+    from chatbot_engine.rag.vector_store import open_vector_store
+
+    _upload(client, project_id="gone", external_id="a.md")
+    _upload(client, project_id="gone", external_id="b.md")
+    kept = _upload(client, project_id="kept", external_id="a.md").json()
+
+    response = client.delete("/projects/gone")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["project_id"] == "gone"
+    assert body["knowledge"]["documents"] == 2
+    assert client.get("/documents", params={"project_id": "gone"}).json() == []
+    chunks = open_vector_store().get(where={"project_id": "gone"}, include=[])
+    assert chunks["ids"] == []
+    # Another project is untouched.
+    assert [
+        d["doc_id"]
+        for d in client.get("/documents", params={"project_id": "kept"}).json()
+    ] == [kept["doc_id"]]
+    # A crawl still running for the deleted chatbot cannot put pages back.
+    again = _upload(client, project_id="gone", external_id="c.md")
+    assert again.status_code == 409
+    assert "deleted a moment ago" in again.json()["detail"]
+
+
+def test_a_purge_removes_chunks_no_record_names(client: TestClient) -> None:
+    """Left by a write the volume cut short, or an engine from before the
+    record was written first."""
+    from langchain_core.documents import Document
+
+    from chatbot_engine.rag.vector_store import open_vector_store
+
+    open_vector_store().add_documents(
+        [
+            Document(
+                page_content="orphan", metadata={"project_id": "gone", "doc_id": "x"}
+            )
+        ],
+        ids=["x:0"],
+    )
+
+    body = client.delete("/projects/gone").json()
+
+    assert body["knowledge"]["orphaned_chunks"] == 1
+    assert (
+        open_vector_store().get(where={"project_id": "gone"}, include=[])["ids"] == []
+    )
+
+
+def test_forgetting_a_session_answers_how_many_paused_turns_went(
+    client: TestClient,
+) -> None:
+    response = client.delete("/projects/shop/sessions/s-1")
+    assert response.status_code == 200
+    assert response.json() == {
+        "project_id": "shop",
+        "session_id": "s-1",
+        "paused_turns": 0,
+    }

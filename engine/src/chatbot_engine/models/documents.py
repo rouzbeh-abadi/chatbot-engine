@@ -80,6 +80,39 @@ class ReindexRequest(BaseModel):
     embedding_model: str | None = None
 
 
+class PurgedDocuments(BaseModel):
+    """What a project purge removed from the knowledge base."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    documents: int
+    #: Chunks of the project no record named.
+    orphaned_chunks: int
+    #: Uploads under way when it ran; each keeps nothing.
+    uploads_cancelled: int
+
+
+class ProjectPurged(BaseModel):
+    """The answer to `DELETE /projects/{project_id}`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    knowledge: PurgedDocuments
+    #: Turns that paused on a question, forgotten with what they held.
+    paused_turns: int
+
+
+class SessionForgotten(BaseModel):
+    """The answer to `DELETE /projects/{project_id}/sessions/{session_id}`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    project_id: str
+    session_id: str
+    paused_turns: int
+
+
 class DeleteResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

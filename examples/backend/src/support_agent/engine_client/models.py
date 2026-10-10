@@ -152,6 +152,8 @@ class EngineChatRequest(BaseModel):
     omitted: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
         default_factory=list, max_length=20
     )
+    # What is known about the person from earlier conversations (engine 0.1.28).
+    notes: str = Field(default="", max_length=10_000)
     # The answer to a question a paused workflow turn asked (`input_required`).
     resume: ResumeInput | None = None
 

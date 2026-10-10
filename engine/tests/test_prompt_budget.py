@@ -125,11 +125,12 @@ async def test_a_workflow_variable_keeps_the_whole_result(monkeypatch):
 
 
 async def test_a_variable_in_a_steps_prompt_is_cut_as_a_result_is(monkeypatch):
-    """A Chat Model step's prompt goes in the system message, which the
-    prompt's budget never cuts: a variable holding a whole tool result is
-    cut there, as the result itself is for the model."""
+    """A variable a Chat Model step's prompt names goes in the person's turn
+    as data, and a whole tool result in it is cut there, as the result
+    itself is for the model; the system message keeps only the step's own
+    words."""
     pytest.importorskip("langgraph_agent.workflow")
-    from langchain_core.messages import AIMessageChunk, SystemMessage
+    from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
 
     from langgraph_agent.workflow import WorkflowAgent
 
@@ -162,8 +163,11 @@ async def test_a_variable_in_a_steps_prompt_is_cut_as_a_result_is(monkeypatch):
 
     assert "".join(e.text for e in events if isinstance(e, TokenEvent)) == "On its way."
     system = next(m for m in model.seen[0] if isinstance(m, SystemMessage))
-    assert "29,000 more characters were left out" in str(system.content)
-    assert len(str(system.content)) < 2_000
+    turn = next(m for m in model.seen[0] if isinstance(m, HumanMessage))
+    assert "The booking: [data: s]" in str(system.content)
+    assert "r" * 100 not in str(system.content)
+    assert "29,000 more characters were left out" in str(turn.content)
+    assert len(str(turn.content)) < 2_000
 
 
 # --- the prompt's budget ----------------------------------------------------

@@ -484,3 +484,86 @@ async def test_an_encoding_that_was_not_asked_for_is_refused() -> None:
     async with _capped(answer, 1024) as client:
         with pytest.raises(McpResponseRefusedError, match="'br'"):
             await client.get("https://mcp.example/mcp")
+
+
+# --- MCP-2: a redirect is followed only within the server's own origin --------
+
+
+async def test_a_redirect_within_the_server_is_followed():
+    """`/mcp` to `/mcp/` is how many servers answer the address without its
+    slash; it stays on the server's origin, so it is followed. A redirect to
+    another origin is refused (engine/tests/review/test_mcp*.py, MCP-2)."""
+    import json as _json
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Server(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def _send(self, status: int, body: bytes = b"", **headers: str) -> None:
+            self.send_response(status)
+            for name, value in headers.items():
+                self.send_header(name.replace("_", "-"), value)
+            self.send_header("content-length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self):
+            self._send(405)
+
+        def do_DELETE(self):
+            self._send(200)
+
+        def do_POST(self):
+            n = int(self.headers.get("content-length") or 0)
+            message = _json.loads(self.rfile.read(n) or b"{}")
+            if self.path == "/mcp":
+                return self._send(307, location="/mcp/")
+            if "id" not in message:
+                return self._send(202)
+            results = {
+                "initialize": {
+                    "protocolVersion": message.get("params", {}).get("protocolVersion"),
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "slash", "version": "1"},
+                },
+                "tools/list": {
+                    "tools": [
+                        {
+                            "name": "lookup",
+                            "description": "d",
+                            "inputSchema": {"type": "object"},
+                        }
+                    ]
+                },
+            }
+            body = _json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": message["id"],
+                    "result": results[message["method"]],
+                }
+            )
+            self._send(200, body.encode(), content_type="application/json")
+
+    server = HTTPServer(("127.0.0.1", 0), Server)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        config = AssistantConfig(
+            project_id="p",
+            name="p",
+            system_prompt=".",
+            mcp_servers=[
+                McpServerConfig(
+                    name="s",
+                    url=f"http://127.0.0.1:{server.server_address[1]}/mcp",
+                    allowed_tools=["lookup"],
+                )
+            ],
+        )
+        tools = await McpToolProvider(timeout_s=5).list_tools(config)
+    finally:
+        server.shutdown()
+
+    assert [t["name"] for t in tools] == ["lookup"]

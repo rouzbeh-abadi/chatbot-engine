@@ -26,6 +26,7 @@ import hashlib
 import logging
 import sqlite3
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,32 @@ def spec_hash(spec: WorkflowSpec) -> str:
     return hashlib.sha256(spec.model_dump_json(by_alias=True).encode()).hexdigest()
 
 
+#: How often, at most, paused turns past their time are forgotten while the
+#: store is used (seconds).
+_PRUNE_EVERY_S = 60.0
+
+#: How long saved state that no paused turn names is kept after it was last
+#: written (seconds): far longer than any turn runs, so a turn still running,
+#: in this process or another sharing the file, is never caught.
+_ORPHAN_AFTER_S = 3600.0
+
+#: 100-nanosecond steps from the start of the Gregorian calendar to 1970.
+_GREGORIAN_TO_UNIX = 0x01B21DD213814000
+
+
+def _written_at(checkpoint_id: object) -> float | None:
+    """When a checkpoint was written, read from its id: LangGraph's are UUIDv6,
+    which carry the time. None for an id of any other kind."""
+    try:
+        uid = uuid.UUID(str(checkpoint_id))
+    except ValueError:
+        return None
+    if uid.version != 6:
+        return None
+    ticks = (uid.time_low << 28) | (uid.time_mid << 12) | (uid.time_hi_version & 0x0FFF)
+    return (ticks - _GREGORIAN_TO_UNIX) / 1e7
+
+
 #: `PRAGMA auto_vacuum`'s value for INCREMENTAL.
 _INCREMENTAL = 2
 #: How large the write-ahead log is left after a checkpoint.
@@ -75,6 +102,7 @@ class Pauses:
         self._records: dict[str, Pause] = {}
         self._conn: Any = None
         self._lock = asyncio.Lock()
+        self._pruned_at = 0.0
 
     @classmethod
     def memory(cls, ttl_s: int = 86_400) -> Pauses:
@@ -130,7 +158,39 @@ class Pauses:
         async with self._lock:
             if self._saver is None:
                 self._saver = await self._open_saver(self)
-            return self._saver
+            saver = self._saver
+        # Every use of the store, a turn that never pauses included, forgets
+        # what is past its time, so a question nobody answered does not wait
+        # for another turn to pause before it goes (WORKFLOW-5).
+        await self._prune_if_due()
+        return saver
+
+    async def forget_where(self, project_id: str, session_id: str | None = None) -> int:
+        """Forget the paused turns of a project, or of one of its sessions,
+        with their saved state; how many."""
+        await self.saver()
+        if self._conn is None:
+            threads = [
+                thread_id
+                for thread_id, pause in self._records.items()
+                if pause.project_id == project_id
+                and session_id in (None, pause.session_id)
+            ]
+        else:
+            query = "SELECT thread_id FROM workflow_pauses WHERE project_id = ?"
+            args: tuple[str, ...] = (project_id,)
+            if session_id is not None:
+                query += " AND session_id = ?"
+                args = (project_id, session_id)
+            async with self._conn.execute(query, args) as cursor:
+                threads = [row[0] for row in await cursor.fetchall()]
+        for thread_id in threads:
+            await self.forget(thread_id)
+        return len(threads)
+
+    async def _prune_if_due(self) -> None:
+        if time.time() - self._pruned_at >= _PRUNE_EVERY_S:
+            await self._prune()
 
     async def record(self, pause: Pause) -> None:
         """Remember a turn that just paused, and forget the ones left too long."""
@@ -231,6 +291,8 @@ class Pauses:
                         await cursor.fetchall()
 
     async def _prune(self) -> None:
+        # Noted first: forgetting uses the store, which would prune again.
+        self._pruned_at = time.time()
         cutoff = time.time() - self._ttl_s
         if self._conn is None:
             stale = [t for t, p in self._records.items() if p.paused_at < cutoff]
@@ -239,5 +301,24 @@ class Pauses:
                 "SELECT thread_id FROM workflow_pauses WHERE paused_at < ?", (cutoff,)
             ) as cursor:
                 stale = [row[0] for row in await cursor.fetchall()]
+            stale += await self._orphans()
         for thread_id in stale:
             await self.forget(thread_id)
+
+    async def _orphans(self) -> list[str]:
+        """Saved state that no paused turn names and no turn has written to
+        for `_ORPHAN_AFTER_S`: a turn the engine was stopped in the middle of,
+        or one whose forget failed on a full disk. Nothing will resume it, and
+        it can hold a visitor's answers (WORKFLOW-5)."""
+        async with self._conn.execute(
+            "SELECT thread_id, MAX(checkpoint_id) FROM checkpoints"
+            " WHERE thread_id NOT IN (SELECT thread_id FROM workflow_pauses)"
+            " GROUP BY thread_id"
+        ) as cursor:
+            rows = await cursor.fetchall()
+        cutoff = time.time() - _ORPHAN_AFTER_S
+        return [
+            thread_id
+            for thread_id, newest in rows
+            if (written := _written_at(newest)) is not None and written < cutoff
+        ]

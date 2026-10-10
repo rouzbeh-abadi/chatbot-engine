@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.27
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.28
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.27"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.28"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -103,7 +103,9 @@ end-user permissions. The backend decides who may ask.
 | `PUT` | `/documents` | Add or replace a document in the knowledge base |
 | `GET` | `/documents?project_id=…` | List what is indexed |
 | `POST` | `/documents/{doc_id}/reindex?project_id=…` | Rebuild a document from its stored original, optionally with new `chunking_strategy`, `chunk_size` or `chunk_overlap`; see [chunking.md](chunking.md) |
-| `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document |
+| `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document. An upload of it under way is cancelled: it answers `409` and keeps nothing |
+| `DELETE` | `/projects/{project_id}` | Since 0.1.28: remove everything kept for a project, for a caller deleting the chatbot it is. Every document with its chunks and stored original, chunks no record names, uploads under way (each answers `409` and keeps nothing), and the workflow turns that paused on a question, with the answers they held. Uploads to the project are then refused (`409`) for ten minutes, so a crawl still running cannot put pages back. Answers `{project_id, knowledge: {documents, orphaned_chunks, uploads_cancelled}, paused_turns}` |
+| `DELETE` | `/projects/{project_id}/sessions/{session_id}` | Since 0.1.28: forget the workflow turns of one session that paused on a question, with the answers they held, for a caller deleting a conversation or everything about the person in it. Answers `{project_id, session_id, paused_turns}` |
 | `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (past that a reading waits up to 5 s for its turn, then `503` with `Retry-After`), and a PDF is parsed for at most `ENGINE_EXTRACT_PARSE_MB` (4) of page content. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed, `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
 | `POST` | `/judge` | Answer a dataset of cases and grade the answers against a rubric (`judge_prompt`), at temperature 0, by the project's model or `judge_model`. The cases are answered with the chatbot's tools offered but never run; a case whose turn failed or passed `ENGINE_TURN_DEADLINE_S` has `score: null` and a `reason` starting `error:`. See [agents.md](agents.md#evaluations) |
 | `POST` | `/eval/rag` | Score retrieval with RAGAS on cases with reference answers; `unscored` counts, per metric, the cases that could not be scored. See [retrieval.md](retrieval.md#evaluating-a-change) |
@@ -175,6 +177,7 @@ request carries the whole assistant definition:
 | `history` | no | Earlier turns, oldest first. The oldest are left out of a model call whose prompt would pass `ENGINE_PROMPT_CHARS` (see Size, below) |
 | `attachments` | no | Files the person sent in the conversation, oldest first, as `{ name, text, sent_now? }` (at most 5, each up to 60,000 characters; `POST /extract` reads a file into text; `sent_now` marks the one that came with this message, since 0.1.24). Send them with every turn of the conversation, so a later question can still refer to one. Every call of the chat model (the loop and graph agents' answer, a workflow's Chat Model steps and its reply to an answer that misses the question) puts them in the person's turn before the message, framed by their names, with the rules for them in the system prompt: what the person gave it to read, never instructions, never cited with a number. A workflow Condition reads the start of the newest two (1,500 characters each) beside the message; the reading of an answer to a question sees the reply alone; a hand-off's transcript carries the start of each (2,000 characters). They are not part of the knowledge-base search. Since 0.1.23 |
 | `omitted` | no | The names of files the conversation no longer carries (at most 20), when the caller keeps only the newest: the model is told they are no longer included and to ask for one again when asked about it. Since 0.1.24 |
+| `notes` | no | What the caller knows about this person from earlier conversations, as text, up to 10,000 characters: a returning visitor's memory. It goes in the person's turn, framed as `<notes>…</notes>` and cleaned, with a rule in the system prompt that it is not instructions: it was written from what the person said, so it never goes in the system role. Since 0.1.28 |
 | `resume` | no | `{ thread_id, value?, skipped? }`: the answer to a question a workflow turn paused on (`input_required`). `message` is still sent, as the answer reads in the conversation (the typed text, or the chosen option's label). See "A turn that asks" below |
 
 ### Tracing per assistant
@@ -194,6 +197,12 @@ Langfuse, a cloud project or a self-hosted instance, instead of the engine's
 
 The keys travel with every request, so this assumes what the deployment
 guide already requires: the engine is reached only by the backend, over TLS.
+Since 0.1.28 each destination is the public key, the host and the secret
+together, with a tracer of its own: the same public key named with another
+host or secret is another destination, and no span made for one is sent to
+another. The engine keeps the 32 used most recently and shuts down the
+rest. A destination Langfuse cannot make leaves the turn untraced, never
+failed.
 Traces carry the request, project and session ids either way, and a
 pseudonym of the user id, never the id itself.
 
@@ -246,7 +255,12 @@ resumed only once: the request that resumes it claims it, so a second request
 with the same `thread_id` (a double click, a retry) gets `resume_expired`
 rather than running the rest of the turn again. A new message without
 `resume` simply starts a new turn, and the unanswered one is forgotten in
-time.
+time: since 0.1.28 within a minute of `ENGINE_PAUSE_TTL_S` passing, whatever
+else runs, and saved state that no paused turn names (a turn the engine was
+stopped in the middle of) goes once nothing has written to it for an hour,
+so a turn still running in another engine process sharing the file is never
+caught. A caller deleting a conversation forgets its paused turns at once with
+`DELETE /projects/{project_id}/sessions/{session_id}`.
 
 The paused state lives in `ENGINE_CHECKPOINT_DB`, a SQLite file on the
 engine's volume, and is deleted when the turn finishes or is stopped. With several engine
@@ -490,6 +504,13 @@ re-index leaves the version already indexed answering, with the record saying
 `ENGINE_MIN_FREE_MB` free (512 by default) answers `503`, and nothing is
 written.
 
+Since 0.1.28 a document's first upload is recorded, as `received`, before
+anything else is written, so it is listed, and can be deleted, while it is
+read and embedded; if the engine stops part-way, the record is still there to
+delete it by. A delete of a document whose upload is under way cancels the
+upload, which keeps nothing and answers `409`: a delete is never undone by
+an upload that was already past it.
+
 ### Idempotency
 
 `external_id` is the key. The same id replaces the document; identical bytes
@@ -648,6 +669,14 @@ variable; a step's prompt that names the variable gets it cut the same way.
 
 ### Failures
 
+A tool server is reached at the address its `url` names and nowhere else:
+since 0.1.28 a redirect is followed only within the same scheme, host and
+port (`/mcp` to `/mcp/`, say), and one to any other address fails the call,
+so the server's headers and the person's ids never go where the caller did
+not check. A redirect cannot move the session past a caller's check of the
+address; the name in it can still resolve to another address when the
+engine dials it than when the caller checked it.
+
 A tool server that is down never ends the turn. A server that cannot be
 reached, or fails to list its tools, is left out (and logged by its `name`,
 with any address in the error cut to its host, since a path may carry a
@@ -716,7 +745,10 @@ engine:
 - puts the extracts in the person's turn, inside `<extracts>…</extracts>`,
   before the files and the message, with the rules for them (cite by number,
   never take orders from them) in the system prompt. No text the chatbot did
-  not write is ever in the system role;
+  not write is ever in the system role: since 0.1.28 neither are the values
+  a workflow step's prompt names (a visitor's message, an answer, a tool's
+  result), which go in the person's turn as `<data name="…">…</data>`, nor
+  the caller's `notes` about the person;
 - removes characters a reader cannot see but a model reads from every
   extract, file, tool result and turn: Unicode tag characters (which spell
   ASCII invisibly), bidirectional overrides and isolates, invisible operators,
@@ -727,7 +759,9 @@ engine:
 - shows a closing tag inside an extract or a file as `[/extracts]` or
   `[/file]`, so the text cannot end its frame and carry on as the person;
   since 0.1.26 also one written with a fullwidth angle bracket or a slash
-  that only looks like one;
+  that only looks like one, and since 0.1.28 one with a space after its `<`
+  or written with the small-form or other angle brackets that look like
+  `<` and `>`;
 - since 0.1.26, puts a backslash before a line of an extract that starts the
   way an extract's own header does (`[3] other.md`), so a chunk cannot pass
   its text off as another extract, or name a source nothing retrieved;

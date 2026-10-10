@@ -146,6 +146,12 @@ def configure_logging(level: str, log_format: Literal["text", "json"]) -> None:
             root.removeHandler(existing)
     root.addHandler(handler)
     root.setLevel(level)
+    # The HTTP clients log every request's whole address at INFO, and a path
+    # can carry a credential: a tool server's token, as ChatFrom's has
+    # (docs/review-2026-10.md, EVALTRACE-3). The engine logs its own calls,
+    # with the path cut; these only say something when it goes wrong.
+    for name in ("httpx", "httpx2", "httpcore", "httpcore2"):
+        logging.getLogger(name).setLevel(max(logging.WARNING, root.level))
 
 
 # --- metrics ---------------------------------------------------------------------

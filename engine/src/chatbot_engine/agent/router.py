@@ -23,7 +23,7 @@ from chatbot_engine.agent.client import (
     unavailable_message,
     usage_event,
 )
-from chatbot_engine.agent.registry import build_agent
+from chatbot_engine.agent.registry import available_agents, build_agent
 from chatbot_engine.models.chat import ChatRequest
 from chatbot_engine.models.events import DoneEvent, Event, TokenEvent, UsageEvent
 from chatbot_engine.ports.agent import Agent, ToolProvider
@@ -65,6 +65,28 @@ class AgentRouter:
         return within_deadline(
             self._built[name].run(request), request, settings.turn_deadline_s
         )
+
+    async def forget(self, project_id: str, session_id: str | None = None) -> int:
+        """Forget what any agent keeps between turns for a project, or for one
+        of its sessions (a workflow's turns paused on a question, with the
+        answers they held); how many turns. Every installed agent is asked,
+        built if no turn has built it yet, since what it kept is on disk."""
+        forgotten = 0
+        for name in available_agents():
+            if name not in self._built:
+                try:
+                    self._built[name] = build_agent(name, self._tools)
+                except Exception as exc:
+                    # An agent that cannot be built ran no turn here, so
+                    # kept nothing to forget.
+                    logger.warning(
+                        "agent %r could not be built to forget: %s", name, exc
+                    )
+                    continue
+            forget = getattr(self._built[name], "forget", None)
+            if forget is not None:
+                forgotten += await forget(project_id, session_id)
+        return forgotten
 
 
 async def within_deadline(

@@ -238,6 +238,11 @@ class ChatRequest(BaseModel):
     omitted: list[Annotated[str, Field(min_length=1, max_length=200)]] = Field(
         default_factory=list, max_length=MAX_OMITTED
     )
+    #: What the caller knows about this person from earlier conversations, as
+    #: text (its memory of a returning visitor). It was written from what the
+    #: person said, so it goes in the person's turn, framed as
+    #: <notes>...</notes>, never in the system role.
+    notes: str = Field(default="", max_length=10_000)
     #: Continue a turn that paused on a question, with the answer. `message`
     #: is still required: it is how the answer reads in the conversation (the
     #: typed text, or the chosen option's label). Agents that never pause

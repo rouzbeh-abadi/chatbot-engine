@@ -89,7 +89,7 @@ from chatbot_engine.models.workflow import (
 from chatbot_engine.ports.agent import ToolProvider
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
-from chatbot_engine.untrusted import visible
+from chatbot_engine.untrusted import framed, visible
 from langgraph_agent.pauses import Pause, Pauses, spec_hash
 from langgraph_agent.runner import run_graph
 
@@ -345,9 +345,12 @@ def parse_verdict(text: str, raw: str) -> Verdict:
     so."""
     data = _verdict_in(text)
     if data is None:
+        # Its length, never its words: a reading restates what the visitor
+        # said, and the log keeps no visitor's words (WORKFLOW-7).
         logger.warning(
-            "a reply's reading was not the JSON asked for, so the reply is kept as the answer: %r",
-            text[:200],
+            "a reply's reading was not the JSON asked for (%d characters), "
+            "so the reply is kept as the answer",
+            len(text),
         )
         return Verdict("answered", raw)
     return Verdict(
@@ -355,6 +358,14 @@ def parse_verdict(text: str, raw: str) -> Verdict:
         str(data.get("value") or "").strip()[:1000],
         str(data.get("reply") or "").strip()[:500],
     )
+
+
+#: A placeholder in a step's text: `{{message}}`, `{{vars.name}}` or a field
+#: of one, `{{vars.name.field}}`.
+_PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}")
+
+#: The placeholders that are not variables.
+_BUILT_IN = frozenset({"message", "user_id", "session_id"})
 
 
 def field_of(value: str, path: str) -> str:
@@ -416,6 +427,11 @@ class WorkflowAgent:
         if self._pauses is None:
             self._pauses = Pauses.from_settings()
         return self._pauses
+
+    async def forget(self, project_id: str, session_id: str | None = None) -> int:
+        """Forget the turns of a project, or of one of its sessions, that
+        paused on a question, with what they held (`chatbot_engine.ports.agent.Forgets`)."""
+        return await self.pauses.forget_where(project_id, session_id)
 
     async def run(self, request: ChatRequest) -> AsyncIterator[Event]:
         spec = request.project.workflow or DEFAULT_WORKFLOW
@@ -546,32 +562,59 @@ class WorkflowAgent:
                 discovered = await discover_tools(self._tools, project)
             return discovered
 
-        def render(template: str, state: _State, *, clip: bool = False) -> str:
-            """The template with its placeholders filled in. With `clip`, for
-            text a model reads, each variable is cut as a tool result is
-            (`ENGINE_TOOL_RESULT_CHARS`): a step's prompt goes in the system
-            message, which the prompt's budget never cuts, and a variable can
-            hold a whole tool result. A Send Message step and a tool's
-            arguments get the variable whole."""
+        def value_of(key: str, state: _State, *, clip: bool = False) -> str:
+            """What one placeholder stands for, with nothing invisible left in
+            it, a field of a variable's JSON included. With `clip`, for text a
+            model reads, a variable is cut as a tool result is
+            (`ENGINE_TOOL_RESULT_CHARS`), since it can hold a whole one."""
+            if key.startswith("vars."):
+                # A variable's name has no dot, so what follows one is a
+                # field of the JSON object it holds: {{vars.slots.note}}.
+                name, _, path = key[5:].partition(".")
+                value = state.get("vars", {}).get(name, "")
+                text = visible(field_of(value, path) if path else value)
+                return clipped_result(text) if clip else text
             values = {
                 "message": state.get("message") or request.message,
                 "user_id": request.user_id or "",
                 "session_id": request.session_id or "",
             }
-            vars_ = state.get("vars", {})
+            return visible(values.get(key, ""))
 
-            def sub(m: re.Match[str]) -> str:
+        def render(template: str, state: _State, *, clip: bool = False) -> str:
+            """The template with its placeholders filled in, for what is not a
+            model's instructions: a message the visitor is sent, a question,
+            a tool's arguments, each value whole. With `clip`, for a question
+            a model reads, each variable is cut as a tool result is."""
+            return _PLACEHOLDER.sub(
+                lambda m: value_of(m.group(1).strip(), state, clip=clip), template
+            )
+
+        def instructed(template: str, state: _State) -> tuple[str, str]:
+            """A step's instructions for a model, and the data they name.
+
+            The instructions are the owner's words alone, each placeholder
+            shown as `[data: name]`, and go in the system message. What the
+            placeholders stand for (the visitor's message, an answer, a tool's
+            result) is text the chatbot did not write, so it goes in the
+            person's turn, each value cleaned and framed as
+            `<data name="…">…</data>`, where it cannot speak with the owner's
+            authority (docs/review-2026-10.md, TURN-1)."""
+            blocks: dict[str, str] = {}
+
+            def refer(m: re.Match[str]) -> str:
                 key = m.group(1).strip()
-                if key.startswith("vars."):
-                    # A variable's name has no dot, so what follows one is a
-                    # field of the JSON object it holds: {{vars.slots.note}}.
-                    name, _, path = key[5:].partition(".")
-                    value = vars_.get(name, "")
-                    text = field_of(value, path) if path else value
-                    return clipped_result(text) if clip else text
-                return values.get(key, "")
+                # A variable by its own name, unless it is one of the built-in
+                # ones: a variable called `message` is not {{message}}.
+                short = key.removeprefix("vars.")
+                name = key if short in _BUILT_IN else short
+                if name not in blocks:
+                    value = framed(value_of(key, state, clip=True), "data")
+                    blocks[name] = f'<data name="{name}">\n{value}\n</data>'
+                return f"[data: {name}]"
 
-            return re.sub(r"\{\{\s*([a-zA-Z_][a-zA-Z0-9_.]*)\s*\}\}", sub, template)
+            instructions = _PLACEHOLDER.sub(refer, template)
+            return instructions, "\n\n".join(blocks.values())
 
         async def call_one(
             tool: str,
@@ -646,12 +689,12 @@ class WorkflowAgent:
                 # Tools this step may use that could not be reached: the model
                 # is told, so it says it cannot help with that now.
                 note = unavailable_note(project, tools) if node.tools else ""
+                instructions, data = instructed(node.prompt, state)
                 messages = prompt_messages(
                     request,
                     state.get("context", ""),
-                    extra_system="\n\n".join(
-                        p for p in (render(node.prompt, state, clip=True), note) if p
-                    ),
+                    extra_system="\n\n".join(p for p in (instructions, note) if p),
+                    data=data,
                     prior=state.get("messages", [])[state.get("since", 0) :],
                 )
                 new: list[BaseMessage] = []
@@ -988,7 +1031,9 @@ class WorkflowAgent:
 
                 if reply.get("empty") or (reply.get("skipped") and node.optional):
                     return answered("")
-                raw = str(reply.get("value") or "").strip()
+                # Nothing invisible is kept: an answer is checked, stored and
+                # read later as what a reader sees (WORKFLOW-2).
+                raw = visible(str(reply.get("value") or "")).strip()
                 value, error = check_answer(node, raw, options)
                 if not raw or not node.understand:
                     # Nothing said, or replies taken as they are: the check decides.
@@ -1119,8 +1164,9 @@ class WorkflowAgent:
                 context = to_context(hits)
                 # `stream_reply` does the retrying, so the client does none.
                 model = build_chat_model(project, max_retries=0)
+                question, data = instructed(node.prompt, state)
                 note = (
-                    f'You just asked the visitor: "{render(node.prompt, state, clip=True)}". '
+                    f'You just asked the visitor: "{question}". '
                     "Their reply does not answer it. Reply to what they said, briefly."
                 )
                 if then_ask:
@@ -1129,6 +1175,7 @@ class WorkflowAgent:
                     request,
                     context,
                     extra_system=note,
+                    data=data,
                     prior=state.get("messages", [])[state.get("since", 0) :],
                 )
                 reply: AIMessageChunk | None = None

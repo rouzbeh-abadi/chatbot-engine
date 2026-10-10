@@ -27,6 +27,11 @@ class DocumentRejectedError(EngineError):
     """
 
 
+class DocumentDeletedError(EngineError):
+    """The document, or the project it was for, was deleted while it was
+    being indexed, or a moment before: nothing of it is kept. Mapped to 409."""
+
+
 class StorageFullError(EngineError):
     """The engine's volume is below its free-space floor, so nothing more is
     written to it. Mapped to 503: the request was fine, and works again once

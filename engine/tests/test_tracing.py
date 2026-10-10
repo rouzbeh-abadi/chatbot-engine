@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 
@@ -80,9 +81,17 @@ def test_missing_ids_are_left_out_rather_than_sent_as_null():
     assert "user_id" not in metadata
 
 
-def test_langsmith_maps_the_settings_onto_langchains_environment(monkeypatch):
+@pytest.fixture
+def langchain_env(monkeypatch):
+    """LangChain's tracing variables, unset, and unset again after the test:
+    left behind, every later test's runs would be sent to LangSmith."""
     for key in ("LANGCHAIN_TRACING_V2", "LANGCHAIN_API_KEY", "LANGCHAIN_PROJECT"):
-        monkeypatch.delenv(key, raising=False)
+        # Set first, so the test's end removes what `configure` writes.
+        monkeypatch.setenv(key, "")
+        monkeypatch.delenv(key)
+
+
+def test_langsmith_maps_the_settings_onto_langchains_environment(langchain_env):
     tracing.configure(
         Settings(
             _env_file=None,
@@ -96,10 +105,10 @@ def test_langsmith_maps_the_settings_onto_langchains_environment(monkeypatch):
     assert os.environ["LANGCHAIN_PROJECT"] == "demo"
 
 
-def test_langsmith_without_a_key_refuses_to_start(monkeypatch):
-    monkeypatch.delenv("LANGCHAIN_API_KEY", raising=False)
+def test_langsmith_without_a_key_refuses_to_start_and_turns_nothing_on(langchain_env):
     with pytest.raises(EngineError, match="LANGSMITH_API_KEY"):
         tracing.configure(Settings(_env_file=None, tracing="langsmith"))
+    assert "LANGCHAIN_TRACING_V2" not in os.environ
 
 
 def test_langfuse_without_keys_refuses_to_start():
@@ -154,6 +163,108 @@ def test_the_handler_for_a_key_is_created_once():
     first = tracing.run_config(_own("pk-once"), name="a")["callbacks"][0]
     second = tracing.run_config(_own("pk-once"), name="b")["callbacks"][0]
     assert first is second
+
+
+def _destination(public_key: str, host: str, secret: str):
+    request = ChatRequest(
+        project=AssistantConfig(
+            project_id="tenant",
+            name="Tenant",
+            system_prompt=".",
+            tracing=TracingConfig(public_key=public_key, secret_key=secret, host=host),
+        ),
+        message="hi",
+    )
+    return tracing.run_config(request, name="answer")["callbacks"][0]
+
+
+def test_one_public_key_named_with_two_hosts_makes_two_destinations_that_never_share_a_span(
+    monkeypatch,
+):
+    """Langfuse routes a span to every exporter of its public key on a shared
+    tracer provider; an assistant's own destination has a provider of its
+    own, so a span made for one host is never sent to another that named the
+    same key (EVALTRACE-1)."""
+    pytest.importorskip("langfuse")
+    from langfuse._client.span_processor import LangfuseSpanProcessor
+
+    ended: list[tuple[int, str]] = []
+    monkeypatch.setattr(
+        LangfuseSpanProcessor,
+        "on_end",
+        lambda self, span: ended.append((id(self), span.name)),
+    )
+    first = _destination("pk-shared", "http://localhost:1", "sk-first")
+    second = _destination("pk-shared", "http://localhost:2", "sk-second")
+    assert first is not second
+    assert first._langfuse_client._resources.base_url == "http://localhost:1"
+    assert second._langfuse_client._resources.base_url == "http://localhost:2"
+
+    owner = {}
+    for name, handler in (("first", first), ("second", second)):
+        provider = handler._langfuse_client._resources.tracer_provider
+        for processor in provider._active_span_processor._span_processors:
+            owner[id(processor)] = name
+    first._langfuse_client._otel_tracer.start_span("made for first").end()
+    second._langfuse_client._otel_tracer.start_span("made for second").end()
+
+    assert [(owner.get(i, "elsewhere"), span) for i, span in ended] == [
+        ("first", "made for first"),
+        ("second", "made for second"),
+    ]
+
+
+def test_a_destination_that_cannot_be_made_leaves_the_turn_untraced_not_failed(
+    monkeypatch,
+):
+    """Whatever Langfuse does with an assistant's keys, the turn still runs:
+    untraced, with nothing of the attempt left in the SDK's registry."""
+    pytest.importorskip("langfuse")
+    import langfuse
+    from langfuse._client.resource_manager import LangfuseResourceManager
+
+    def refuse(**_kwargs):
+        raise ValueError("no")
+
+    monkeypatch.setattr(langfuse, "Langfuse", refuse)
+    request = ChatRequest(
+        project=AssistantConfig(
+            project_id="tenant",
+            name="Tenant",
+            system_prompt=".",
+            tracing=TracingConfig(
+                public_key="pk-refused", secret_key="sk", host="http://localhost:1"
+            ),
+        ),
+        message="hi",
+    )
+    assert "callbacks" not in tracing.run_config(request, name="answer")
+    assert "pk-refused" not in LangfuseResourceManager._instances
+    assert not tracing._per_project
+
+
+def test_a_destination_pushed_out_is_shut_down(monkeypatch):
+    """Each destination holds threads; past the cap, the one used longest ago
+    goes, and its threads with it (EVALTRACE-2)."""
+    pytest.importorskip("langfuse")
+    monkeypatch.setattr(tracing, "_PER_PROJECT_MAX", 2)
+    oldest = _destination("pk-1", "http://localhost:1", "sk")
+    _destination("pk-2", "http://localhost:1", "sk")
+    _destination("pk-1", "http://localhost:1", "sk")  # used again, so kept
+    (dropped,) = [d for k, d in tracing._per_project.items() if k[0] == "pk-2"]
+    _destination("pk-3", "http://localhost:1", "sk")
+
+    kept = {key[0] for key in tracing._per_project}
+    assert kept == {"pk-1", "pk-3"}
+    assert _destination("pk-1", "http://localhost:1", "sk") is oldest
+    # Shut down off the request, a moment later.
+    deadline = time.monotonic() + 5
+    while (
+        not getattr(dropped.resources, "_shutdown", False)
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.01)
+    assert dropped.resources._shutdown
 
 
 def test_the_tracing_block_rejects_unknown_fields_and_empty_keys():

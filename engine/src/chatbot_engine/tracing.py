@@ -17,6 +17,9 @@ import hashlib
 import hmac
 import logging
 import os
+import threading
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from chatbot_engine.errors import EngineError
@@ -32,10 +35,26 @@ logger = logging.getLogger(__name__)
 
 _handler: Any | None = None
 
-#: Handlers for assistants that bring their own Langfuse, keyed by public key.
-#: A Langfuse client is registered once per key and reused across turns.
-_per_project: dict[str, Any] = {}
-_PER_PROJECT_MAX = 256
+
+@dataclass
+class _Destination:
+    """One assistant's own Langfuse: its handler, and what to flush and stop."""
+
+    handler: Any
+    resources: Any
+    provider: Any
+
+
+#: The Langfuse destinations of assistants that bring their own, by public
+#: key, host and a hash of the secret together, the one used longest ago
+#: first. The same public key with another host or secret is another
+#: destination: whoever names a key first does not get the turns of whoever
+#: names it next (docs/review-2026-10.md, EVALTRACE-1). Each one holds a few
+#: threads, so only so many are kept, and one dropped is shut down
+#: (EVALTRACE-2).
+_per_project: OrderedDict[tuple[str, str, str], _Destination] = OrderedDict()
+_per_project_lock = threading.Lock()
+_PER_PROJECT_MAX = 32
 
 
 def configure(settings: Settings) -> None:
@@ -46,20 +65,25 @@ def configure(settings: Settings) -> None:
     """
     global _handler
     _handler = None
-    _per_project.clear()
+    with _per_project_lock:
+        dropped = list(_per_project.values())
+        _per_project.clear()
+    for destination in dropped:
+        _close(destination)
 
     if settings.tracing == "off":
         return
 
     if settings.tracing == "langsmith":
         # LangChain's tracer is configured through the environment; the
-        # engine's settings are a convenience that map onto it.
+        # engine's settings are a convenience that map onto it. Checked
+        # first, so a refusal turns nothing on.
+        if not (settings.langsmith_api_key or os.environ.get("LANGCHAIN_API_KEY")):
+            raise EngineError("ENGINE_TRACING=langsmith needs ENGINE_LANGSMITH_API_KEY")
         os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
         if settings.langsmith_api_key:
             os.environ.setdefault("LANGCHAIN_API_KEY", settings.langsmith_api_key)
         os.environ.setdefault("LANGCHAIN_PROJECT", settings.langsmith_project)
-        if not os.environ.get("LANGCHAIN_API_KEY"):
-            raise EngineError("ENGINE_TRACING=langsmith needs ENGINE_LANGSMITH_API_KEY")
         logger.info("tracing to LangSmith project %s", os.environ["LANGCHAIN_PROJECT"])
         return
 
@@ -89,28 +113,94 @@ def configure(settings: Settings) -> None:
     raise EngineError(f"unknown ENGINE_TRACING value {settings.tracing!r}")
 
 
-def _handler_for(config: TracingConfig) -> Any:
-    """The Langfuse handler for one assistant's own destination, cached by key."""
-    handler = _per_project.get(config.public_key)
-    if handler is not None:
-        return handler
+def _handler_for(config: TracingConfig) -> Any | None:
+    """The Langfuse handler for one assistant's own destination: made once
+    for its public key, host and secret together, and kept while it is used.
+    None when no destination of its own can be made, so the turn goes
+    untraced rather than anywhere else."""
+    secret = hashlib.sha256(config.secret_key.encode()).hexdigest()
+    key = (config.public_key, config.host, secret)
+    with _per_project_lock:
+        found = _per_project.get(key)
+        if found is not None:
+            _per_project.move_to_end(key)
+            return found.handler
+        destination = _open(config)
+        if destination is None:
+            return None
+        _per_project[key] = destination
+        dropped = []
+        while len(_per_project) > _PER_PROJECT_MAX:
+            dropped.append(_per_project.popitem(last=False)[1])
+    for old in dropped:
+        # Off the request: shutting down sends what is still buffered.
+        threading.Thread(target=_close, args=(old,), daemon=True).start()
+    return destination.handler
+
+
+def _open(config: TracingConfig) -> _Destination | None:
+    """A Langfuse client for one assistant's destination, apart from every
+    other: a tracer provider of its own, so its spans reach no other
+    destination's exporter, and kept out of the SDK's registry, which holds
+    one client per public key for the whole process."""
     try:
         from langfuse import Langfuse
+        from langfuse._client.resource_manager import LangfuseResourceManager
         from langfuse.langchain import CallbackHandler
+        from opentelemetry.sdk.trace import TracerProvider
     except ImportError as exc:  # pragma: no cover - depends on the install
         raise EngineError(
             "per-assistant tracing needs the `tracing` extra: "
             "pip install 'chatbot-engine[tracing]'"
         ) from exc
-    if len(_per_project) >= _PER_PROJECT_MAX:
-        _per_project.pop(next(iter(_per_project)))
-    # Registering a client under its public key is how the handler finds it.
-    Langfuse(
-        public_key=config.public_key, secret_key=config.secret_key, host=config.host
-    )
-    handler = CallbackHandler(public_key=config.public_key)
-    _per_project[config.public_key] = handler
-    return handler
+    registry = getattr(LangfuseResourceManager, "_instances", None)
+    lock = getattr(LangfuseResourceManager, "_lock", None)
+    if not isinstance(registry, dict) or lock is None:
+        # A Langfuse whose registry this code does not know: a client made
+        # here could share another destination's, so none is made.
+        logger.warning(
+            "tracing: per-assistant tracing is off for this Langfuse version"
+        )
+        return None
+    provider = TracerProvider()
+    handler = None
+    with lock:
+        # Out of the registry while this client is made, and kept out after,
+        # so the client cannot be another one under the same key, nor be
+        # found by it. The engine's own client, if it has this key, goes back.
+        shared = registry.pop(config.public_key, None)
+        try:
+            Langfuse(
+                public_key=config.public_key,
+                secret_key=config.secret_key,
+                base_url=config.host,
+                tracer_provider=provider,
+            )
+            handler = CallbackHandler(public_key=config.public_key)
+        except Exception as exc:  # a turn is never failed by its tracing
+            logger.warning(
+                "tracing: an assistant's destination could not be made: %s",
+                type(exc).__name__,
+            )
+        finally:
+            resources = registry.pop(config.public_key, None)
+            if shared is not None:
+                registry[config.public_key] = shared
+    destination = _Destination(handler=handler, resources=resources, provider=provider)
+    if handler is None or resources is None:
+        _close(destination)
+        return None
+    return destination
+
+
+def _close(destination: _Destination) -> None:
+    """Send what a destination still holds and stop its threads."""
+    try:
+        if destination.resources is not None:
+            destination.resources.shutdown()
+        destination.provider.shutdown()
+    except Exception as exc:  # pragma: no cover - best effort
+        logger.warning("tracing: closing a destination failed: %s", exc)
 
 
 def traced_user(user_id: str | None) -> str | None:
@@ -171,14 +261,16 @@ def run_config(request: ChatRequest, *, name: str) -> RunnableConfig:
 
 def flush() -> None:
     """Send what is buffered. Called at shutdown so the last traces are not lost."""
-    if _handler is None and not _per_project:
+    with _per_project_lock:
+        destinations = list(_per_project.values())
+    if _handler is None and not destinations:
         return
     try:
-        from langfuse import get_client
-
         if _handler is not None:
+            from langfuse import get_client
+
             get_client().flush()
-        for public_key in list(_per_project):
-            get_client(public_key=public_key).flush()
+        for destination in destinations:
+            destination.resources.flush()
     except Exception as exc:  # pragma: no cover - best effort at shutdown
         logger.warning("tracing: flush failed: %s", exc)

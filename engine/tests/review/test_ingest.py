@@ -234,9 +234,6 @@ async def test_concurrent_puts_keep_blob_and_record_on_one_version(
 # --- INGEST-4: a delete during an update of the document is undone ---------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_delete_during_an_update_is_not_undone_by_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

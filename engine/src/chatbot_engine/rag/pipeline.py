@@ -21,7 +21,10 @@ be read within them is a `failed` record that says why.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import time
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TypedDict
 
@@ -41,7 +44,11 @@ from chatbot_engine.documents.extractor import (
     select_extractor,
 )
 from chatbot_engine.documents.models import ExtractedDocument
-from chatbot_engine.errors import DocumentRejectedError, NotConfiguredError
+from chatbot_engine.errors import (
+    DocumentDeletedError,
+    DocumentRejectedError,
+    NotConfiguredError,
+)
 from chatbot_engine.models.documents import DocumentRecord, IngestStatus
 from chatbot_engine.ports.documents import DocumentRegistry
 from chatbot_engine.rag import sparse
@@ -195,6 +202,62 @@ def _why(failure: ReadFailed) -> str:
 _indexing = KeyedLocks()
 
 
+@dataclass(eq=False)
+class _Upload:
+    """An ingest or re-index under way; a delete of its document cancels it."""
+
+    cancelled: bool = False
+
+
+#: The uploads under way, by project and document. A delete cancels the ones
+#: of its document, and a project purge all of the project's: one already
+#: past the delete would otherwise write its chunks and record back, and a
+#: first upload, which has no record before it ends, would stay for good
+#: (docs/review-2026-10.md, INGEST-4).
+_uploads: dict[tuple[str, str], set[_Upload]] = {}
+
+#: The last step of an upload (its record) and a delete of the same
+#: document, one at a time: a delete cannot fall between an upload's check
+#: that it was not cancelled and the record it then writes.
+_committing = KeyedLocks()
+
+#: Projects purged a moment ago, and when (`time.monotonic()`). An upload to
+#: one is refused: a crawl still running when its chatbot was deleted cannot
+#: put its pages back.
+_purged: dict[str, float] = {}
+PURGED_FOR_S = 600.0
+
+
+def committing(project_id: str, doc_id: str) -> asyncio.Lock:
+    """The lock a delete holds while it removes a document."""
+    return _committing((project_id, doc_id))
+
+
+def cancel_uploads(project_id: str, doc_id: str | None = None) -> int:
+    """Cancel the uploads under way of one document, or of a whole project;
+    how many. Each removes what it wrote when it gets to its end."""
+    cancelled = 0
+    for (project, doc), uploads in _uploads.items():
+        if project == project_id and doc_id in (None, doc):
+            for upload in uploads:
+                upload.cancelled = True
+                cancelled += 1
+    return cancelled
+
+
+def mark_purged(project_id: str) -> None:
+    """Refuse uploads to a project for `PURGED_FOR_S` from now."""
+    now = time.monotonic()
+    for project in [p for p, at in _purged.items() if now - at > PURGED_FOR_S]:
+        del _purged[project]
+    _purged[project_id] = now
+
+
+def _was_purged(project_id: str) -> bool:
+    at = _purged.get(project_id)
+    return at is not None and time.monotonic() - at <= PURGED_FOR_S
+
+
 class DocumentIngestPipeline:
     """Turns uploaded bytes into chunks, and remembers what happened."""
 
@@ -300,6 +363,7 @@ class DocumentIngestPipeline:
             keep_original=True,
             embedding_model=model,
             chunker=chunker,
+            first=current is None,
         )
 
     async def reindex(
@@ -377,6 +441,7 @@ class DocumentIngestPipeline:
         keep_original: bool,
         embedding_model: str,
         chunker: DocumentChunker | None = None,
+        first: bool = False,
     ) -> DocumentRecord:
         """Store, split, embed, record. Shared by `ingest` and `reindex`.
 
@@ -388,15 +453,30 @@ class DocumentIngestPipeline:
         would otherwise leave its stored original from one and its chunks
         and record from the other (docs/review-2026-10.md, INGEST-3).
         """
-        async with _indexing((record.project_id, record.doc_id)):
-            return await self._index_one(
-                record,
-                extractor,
-                data,
-                keep_original=keep_original,
-                embedding_model=embedding_model,
-                chunker=chunker,
-            )
+        key = (record.project_id, record.doc_id)
+        async with _indexing(key):
+            if _was_purged(record.project_id):
+                raise DocumentDeletedError(
+                    f"{record.filename!r} was not indexed: its project was deleted "
+                    "a moment ago"
+                )
+            upload = _Upload()
+            _uploads.setdefault(key, set()).add(upload)
+            try:
+                return await self._index_one(
+                    record,
+                    extractor,
+                    data,
+                    upload=upload,
+                    keep_original=keep_original,
+                    embedding_model=embedding_model,
+                    chunker=chunker,
+                    first=first,
+                )
+            finally:
+                _uploads[key].discard(upload)
+                if not _uploads[key]:
+                    del _uploads[key]
 
     async def _index_one(
         self,
@@ -404,15 +484,25 @@ class DocumentIngestPipeline:
         extractor: DocumentExtractor,
         data: bytes,
         *,
+        upload: _Upload,
         keep_original: bool,
         embedding_model: str,
         chunker: DocumentChunker | None,
+        first: bool,
     ) -> DocumentRecord:
         # Before anything is written, the record included: a full volume can
         # hang embedded Chroma for every tenant (DISK-3), and a version
         # already indexed goes on answering, so its record stays as it is.
         ensure_room()
+        key = (record.project_id, record.doc_id)
         try:
+            if first:
+                # A first upload is recorded before anything else is written,
+                # as `received`: it is listed, and so can be deleted, while it
+                # is read and embedded, and if the engine stops part-way its
+                # stored original is not left where no delete reaches it
+                # (INGEST-16).
+                await self._registry.upsert(record)
             # The original first: if chunking or embedding fails, the bytes are
             # still there to retry from.
             if keep_original and self._blobs is not None:
@@ -438,30 +528,57 @@ class DocumentIngestPipeline:
                 # must not keep searching the version from before this write.
                 sparse.invalidate(record.project_id)
         except Exception as exc:
-            # Keep the failure in GET /documents, not only in a log line.
-            await self._registry.upsert(
-                record.model_copy(
-                    update={"status": IngestStatus.FAILED, "error": str(exc)}
+            async with _committing(key):
+                if upload.cancelled:
+                    await self._discard(record)
+                    raise DocumentDeletedError(
+                        f"{record.filename!r} was deleted while it was being indexed"
+                    ) from exc
+                # Keep the failure in GET /documents, not only in a log line.
+                await self._registry.upsert(
+                    record.model_copy(
+                        update={"status": IngestStatus.FAILED, "error": str(exc)}
+                    )
                 )
-            )
             raise
 
         embedded = self._vectors is not None
-        return await self._registry.upsert(
-            record.model_copy(
-                update={
-                    "chunk_count": len(chunks),
-                    "error": None,
-                    "warnings": warnings,
-                    # `indexed` is earned by the vectors landing, not claimed.
-                    "status": IngestStatus.INDEXED
-                    if embedded
-                    else IngestStatus.RECEIVED,
-                    # What made the vectors, so a change of model is noticed.
-                    "embedding_model": embedding_model if embedded else None,
-                }
+        async with _committing(key):
+            if upload.cancelled:
+                # Deleted while it was being indexed: what it wrote goes too,
+                # and no record says it is there.
+                await self._discard(record)
+                raise DocumentDeletedError(
+                    f"{record.filename!r} was deleted while it was being indexed, "
+                    "so nothing of it is kept"
+                )
+            return await self._registry.upsert(
+                record.model_copy(
+                    update={
+                        "chunk_count": len(chunks),
+                        "error": None,
+                        "warnings": warnings,
+                        # `indexed` is earned by the vectors landing, not claimed.
+                        "status": IngestStatus.INDEXED
+                        if embedded
+                        else IngestStatus.RECEIVED,
+                        # What made the vectors, so a change of model is noticed.
+                        "embedding_model": embedding_model if embedded else None,
+                    }
+                )
             )
-        )
+
+    async def _discard(self, record: DocumentRecord) -> None:
+        """Remove what an upload that was cancelled wrote: its chunks, under
+        any embedding model, its stored original and its record."""
+        if self._vectors is not None:
+            await ChromaChunkStore().delete(
+                doc_id=record.doc_id, project_id=record.project_id
+            )
+            sparse.invalidate(record.project_id)
+        if self._blobs is not None:
+            await self._blobs.delete(doc_id=record.doc_id)
+        await self._registry.delete(project_id=record.project_id, doc_id=record.doc_id)
 
     def _split(
         self,

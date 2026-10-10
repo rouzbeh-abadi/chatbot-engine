@@ -142,9 +142,11 @@ async def test_a_tool_step_reports_timing_and_failure_like_a_model_call():
 
 
 async def test_a_model_steps_prompt_reads_variables_and_their_fields():
-    """A Chat Model step's instructions are templated like any other text, and
+    """A Chat Model step's instructions name what they read, and
     `{{vars.<name>.<field>}}` reads a field of the JSON object a variable
-    holds; a field that is not there reads as nothing, as an unset variable."""
+    holds; a field that is not there reads as nothing, as an unset variable.
+    The instructions stay the owner's words in the system message; what they
+    name travels as data in the person's turn (TURN-1)."""
     spec = {
         "start": "lookup",
         "nodes": [
@@ -169,10 +171,52 @@ async def test_a_model_steps_prompt_reads_variables_and_their_fields():
     events = await _run(spec, model)
 
     system = str(model.seen[0][0].content)
-    assert 'Status: delayed. All: {"status": "delayed"}. Gate: [] []' in system, (
-        "rendered before the model reads it"
-    )
+    turn = next(str(m.content) for m in model.seen[0] if m.type == "human")
+    assert (
+        "Status: [data: booking.status]. All: [data: booking]. "
+        "Gate: [[data: booking.gate]] [[data: nothing.at_all]]"
+    ) in system
+    assert "delayed" not in system, "a tool's result is in the system message"
+    assert '<data name="booking.status">\ndelayed\n</data>' in turn
+    assert '<data name="booking">\n{"status": "delayed"}\n</data>' in turn
+    assert '<data name="booking.gate">\n\n</data>' in turn
+    assert '<data name="nothing.at_all">\n\n</data>' in turn
+    # A message the visitor is sent gets the value itself.
     assert _text(events) == "It is delayed. (delayed)"
+
+
+async def test_a_variable_named_like_a_built_in_is_framed_apart_from_it():
+    """{{message}} is what the visitor wrote; a variable called `message`
+    is not, and each keeps its own data block."""
+    spec = {
+        "start": "lookup",
+        "nodes": [
+            {
+                "id": "lookup",
+                "type": "tool",
+                "tool": "get_booking_status",
+                "var": "message",
+            },
+            {
+                "id": "answer",
+                "type": "model",
+                "tools": False,
+                "prompt": "Found: {{vars.message.status}} {{vars.message}}. Asked: {{message}}.",
+            },
+        ],
+        "edges": [{"from": "lookup", "to": "answer"}],
+    }
+    model = ScriptedModel(rounds=[[AIMessageChunk(content="ok")]], seen=[])
+
+    await _run(spec, model)
+
+    system = str(model.seen[0][0].content)
+    turn = next(str(m.content) for m in model.seen[0] if m.type == "human")
+    assert (
+        "Found: [data: message.status] [data: vars.message]. Asked: [data: message]."
+    ) in system
+    assert '<data name="vars.message">\n{"status": "delayed"}\n</data>' in turn
+    assert '<data name="message">\nis my flight delayed?\n</data>' in turn
 
 
 async def test_a_tool_that_is_not_offered_says_so_instead_of_failing_the_turn():

@@ -25,12 +25,14 @@ from chatbot_engine.api import (
     health,
     judge,
     metrics,
+    projects,
 )
 from chatbot_engine.api.auth import require_api_key
 from chatbot_engine.api.body_limit import BodyLimitMiddleware
 from chatbot_engine.api.rate_limit import limit_chat, limit_eval
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
 from chatbot_engine.errors import (
+    DocumentDeletedError,
     DocumentRejectedError,
     EngineError,
     NotConfiguredError,
@@ -118,6 +120,11 @@ def create_app() -> FastAPI:
         """415: no extractor handles this MIME type."""
         return JSONResponse(status_code=415, content={"detail": str(exc)})
 
+    @app.exception_handler(DocumentDeletedError)
+    async def document_deleted(_: Request, exc: DocumentDeletedError) -> JSONResponse:
+        """409: deleted while it was being indexed; nothing of it is kept."""
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
+
     @app.exception_handler(StorageFullError)
     async def storage_full(_: Request, exc: StorageFullError) -> JSONResponse:
         """503: the volume is below its free-space floor; retry after room is made."""
@@ -172,6 +179,7 @@ def create_app() -> FastAPI:
     protected.include_router(agents.router)
     protected.include_router(chat.router, dependencies=[Depends(limit_chat)])
     protected.include_router(documents.router)
+    protected.include_router(projects.router)
     # Reads a file and keeps nothing. A document calls no provider, so the router
     # is not metered; an image is read by a model and metered in the route.
     protected.include_router(extract.router)

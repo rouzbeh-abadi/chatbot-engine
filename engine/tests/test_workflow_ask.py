@@ -1034,3 +1034,88 @@ async def test_a_finished_turn_gives_its_room_back_to_the_volume(tmp_path):
         (mode,) = await cursor.fetchone()
     await pauses._conn.close()
     assert (mode, free) == (2, 0)
+
+
+async def test_forgetting_a_session_forgets_its_paused_turns_and_no_other(tmp_path):
+    """What the app calls when a conversation, or everything about a person,
+    is deleted: the answers that session's paused turns held go, and nobody
+    else's (WORKFLOW-5)."""
+    import sqlite3
+
+    path = tmp_path / "checkpoints.sqlite3"
+    pauses = Pauses.sqlite(path, ttl_s=3600)
+    tools = Tools()
+    gone = _asked(await _run(_request(PROJECT, session_id="s-gone"), pauses, tools))
+    kept = _asked(await _run(_request(PROJECT, session_id="s-kept"), pauses, tools))
+    other = _asked(
+        await _run(
+            _request(PROJECT, project_id="other", session_id="s-gone"), pauses, tools
+        )
+    )
+
+    assert await pauses.forget_where("support", "s-gone") == 1
+    assert await pauses.find(gone.thread_id) is None
+    assert await pauses.find(kept.thread_id) is not None
+    assert await pauses.find(other.thread_id) is not None
+    db = sqlite3.connect(path)
+    left = {row[0] for row in db.execute("SELECT DISTINCT thread_id FROM checkpoints")}
+    db.close()
+    assert gone.thread_id not in left
+    assert {kept.thread_id, other.thread_id} <= left
+
+    # A purge: every paused turn of the project.
+    assert await pauses.forget_where("support") == 1
+    assert await pauses.find(kept.thread_id) is None
+    await pauses._conn.close()
+
+
+async def test_saved_state_no_paused_turn_names_goes_once_nothing_has_written_to_it_for_an_hour(
+    tmp_path, monkeypatch
+):
+    """A turn the engine was stopped in the middle of leaves saved state that
+    nothing will resume; it can hold a visitor's answers, so it goes. Not
+    while it is fresh: it may be a turn still running in another process that
+    shares the file (the scale overlay's replicas)."""
+    import sqlite3
+
+    import langgraph_agent.pauses as pauses_module
+
+    path = tmp_path / "checkpoints.sqlite3"
+    first = Pauses.sqlite(path, ttl_s=3600)
+    thread = _asked(await _run(_request(PROJECT), first, Tools())).thread_id
+    # As if its record had never been written: the engine stopped in between,
+    # or another process is still running the turn.
+    await first._conn.execute("DELETE FROM workflow_pauses")
+    await first._conn.commit()
+    await first._conn.close()
+
+    def saved() -> int:
+        db = sqlite3.connect(path)
+        try:
+            return db.execute(
+                "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", (thread,)
+            ).fetchone()[0]
+        finally:
+            db.close()
+
+    second = Pauses.sqlite(path, ttl_s=3600)
+    await second.saver()
+    assert saved() > 0
+
+    monkeypatch.setattr(pauses_module, "_ORPHAN_AFTER_S", 0.0)
+    second._pruned_at = 0.0
+    await second.saver()
+    await second._conn.close()
+    assert saved() == 0
+
+
+def test_a_checkpoint_id_tells_when_it_was_written():
+    """The orphan sweep reads a checkpoint's age from LangGraph's id."""
+    from langgraph.checkpoint.base.id import uuid6
+
+    from langgraph_agent.pauses import _written_at
+
+    written = _written_at(str(uuid6(clock_seq=0)))
+    assert written is not None and abs(written - time.time()) < 5
+    assert _written_at("not-an-id") is None
+    assert _written_at("6f1c0000-0000-4000-8000-000000000001") is None

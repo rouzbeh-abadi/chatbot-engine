@@ -10,9 +10,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from chatbot_engine.documents.blobs import DocumentBlobs
-from chatbot_engine.models.documents import ChunkStrategy, DocumentRecord
+from chatbot_engine.models.documents import (
+    ChunkStrategy,
+    DocumentRecord,
+    PurgedDocuments,
+)
 from chatbot_engine.ports.documents import DocumentRegistry, IngestPipeline
 from chatbot_engine.rag import sparse
+from chatbot_engine.rag.pipeline import cancel_uploads, committing, mark_purged
 from chatbot_engine.rag.vector_store import ChromaChunkStore
 
 
@@ -93,14 +98,43 @@ class DocumentService:
 
         The record last: it is the only thing that knows the document existed, so
         losing it first would leave vectors and a file nothing can find.
+
+        An upload of the document under way is cancelled, and removes what it
+        wrote once it gets to its end, instead of writing its record: a
+        delete is never undone by an upload that was already past it
+        (docs/review-2026-10.md, INGEST-4). The delete answers at once.
         """
-        if await self._registry.get(project_id=project_id, doc_id=doc_id) is None:
-            return False
+        async with committing(project_id, doc_id):
+            cancelled = cancel_uploads(project_id, doc_id)
+            if await self._registry.get(project_id=project_id, doc_id=doc_id) is None:
+                return cancelled > 0
 
+            if self._vectors is not None:
+                await self._vectors.delete(doc_id=doc_id, project_id=project_id)
+                sparse.invalidate(project_id)
+            if self._blobs is not None:
+                await self._blobs.delete(doc_id=doc_id)
+
+            return await self._registry.delete(project_id=project_id, doc_id=doc_id)
+
+    async def purge(self, *, project_id: str) -> PurgedDocuments:
+        """Remove everything a project has: every document, with its chunks
+        and stored original, any chunk of it no record names, and the uploads
+        under way, which keep nothing. Uploads to the project are refused for
+        a while after (`PURGED_FOR_S`), so a crawl still running when its
+        chatbot was deleted cannot put pages back (X-9)."""
+        mark_purged(project_id)
+        cancelled = cancel_uploads(project_id)
+        documents = 0
+        for record in await self._registry.list(project_id=project_id):
+            if await self.delete(project_id=project_id, doc_id=record.doc_id):
+                documents += 1
+        chunks = 0
         if self._vectors is not None:
-            await self._vectors.delete(doc_id=doc_id, project_id=project_id)
+            # Chunks no record names: left by a write the volume cut short, or
+            # by an engine older than the record written first.
+            chunks = await self._vectors.delete_project(project_id=project_id)
             sparse.invalidate(project_id)
-        if self._blobs is not None:
-            await self._blobs.delete(doc_id=doc_id)
-
-        return await self._registry.delete(project_id=project_id, doc_id=doc_id)
+        return PurgedDocuments(
+            documents=documents, orphaned_chunks=chunks, uploads_cancelled=cancelled
+        )

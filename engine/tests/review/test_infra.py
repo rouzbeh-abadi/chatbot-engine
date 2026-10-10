@@ -214,9 +214,6 @@ def _with_tracing(project_id: str, public_key: str, secret: str, host: str):
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="EVALTRACE-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_assistant_traces_to_its_own_host_whoever_used_its_public_key_first():
     """DEPLOYMENT.md: `project.tracing` "is how a multi-tenant product lets each
     customer keep their traces on their own Langfuse". The handler is cached

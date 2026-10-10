@@ -124,9 +124,6 @@ def _call(url: str) -> BaseException | str:
 
 
 @pytest.mark.parametrize("status", [303, 307])
-@pytest.mark.xfail(
-    strict=True, reason="MCP-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_redirect_does_not_reach_an_internal_path(status):
     """303 turns the call into a GET of any internal URL; 307 re-POSTs the body."""
     url, hits, servers = _pair(status, b'{"ok": true}')
@@ -153,9 +150,6 @@ def test_a_non_mcp_internal_reply_is_not_read_back():
     assert "hunter2" not in text, f"internal response read back: {text[:400]!r}"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="MCP-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_session_cannot_be_bounced_onto_an_internal_mcp_server():
     """The owner's server 307s every request; the engine then runs a tool on an
     internal MCP server (session id and all) and reads its answer back. The

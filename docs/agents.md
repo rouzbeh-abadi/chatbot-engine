@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.27
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.28
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -334,12 +334,19 @@ Templates in `prompt` (a Chat Model step's and a question's), `text`,
 `{{session_id}}` and `{{vars.<name>}}`, and `{{vars.<name>.<field>}}` reads a
 field of the JSON object a variable holds (a string as it is, anything else
 as JSON, and nothing when it is not there, as an unset variable reads); a
-condition also sets `vars.condition_<id>` to the label it chose. A Chat Model
-step's prompt is rendered into its instructions, so a variable holding a
-visitor's answer or a tool's result is best named there as data. In text a
-model reads (a Chat Model step's prompt, and a question's when its reply is
-read), each variable is cut at `ENGINE_TOOL_RESULT_CHARS`, as a tool result
-is; a Send Message step and a tool's arguments get it whole. A node with
+condition also sets `vars.condition_<id>` to the label it chose. Every value
+filled in has the characters a reader cannot see removed. A Chat Model
+step's prompt, and the question a reply to an answer that missed it repeats,
+are the step's instructions, in the owner's words alone: since 0.1.28 each
+placeholder there reads `[data: name]` (`[data: booking]`,
+`[data: booking.status]`, `[data: message]`; a variable named like one of
+the built-ins, `message`, `user_id` or `session_id`, reads
+`[data: vars.message]`), and what it stands for goes in
+the person's turn, cleaned and framed as `<data name="…">…</data>`, with a
+rule in the system prompt that it is data, not instructions. A visitor's
+message, an answer or a tool's result never speaks in the system role. In
+text a model reads, each variable is cut at `ENGINE_TOOL_RESULT_CHARS`, as a
+tool result is; a Send Message step and a tool's arguments get it whole. A node with
 no outgoing edge ends the turn, after which the agent emits the `usage` and
 `done` events. The schema refuses unknown node ids,
 unreachable nodes, a condition with edges, an `end` with an edge out of it,

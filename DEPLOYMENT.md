@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.27
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.27
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.27
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.27
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.28
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.28
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.28
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.28
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -47,7 +47,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.27 && git push origin v0.1.27
+git tag v0.1.28 && git push origin v0.1.28
 ```
 
 The Release workflow runs the full test suite, publishes the three images, and
@@ -315,6 +315,14 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
 
 ## Operational notes
 
+- **What a delete leaves in Chroma's files for a while.** Embedded Chroma
+  keeps each write in a log inside `chroma.sqlite3` until the collection's
+  index takes it in, about every 1,000 records. A deleted chunk's text and
+  vector can stay in that log until then, so a backup or a copy of the
+  volume taken meanwhile still holds them. On a busy engine that is soon;
+  on a quiet one it can be days. `chroma utils vacuum` on the stopped
+  volume, or a Chroma server (`ENGINE_CHROMA_URL`) whose own settings say
+  when its log is purged, shortens it.
 - **Unprivileged containers.** Both services run as uid 10001 and the overlay
   sets `no-new-privileges`. A named volume created by an older image is owned
   by root, and Docker only assigns ownership when it initialises an empty
@@ -334,7 +342,10 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
 - **Logs** go to stdout at `ENGINE_LOG_LEVEL` (default `INFO`). Anything the
   startup check found but did not block on is logged as a warning at boot. A
   tool server that cannot be reached is logged by its `name`, and an address
-  in the error is cut to its host, since a path may carry a credential.
+  in the error is cut to its host, since a path may carry a credential. For
+  the same reason the HTTP clients' own request lines (`httpx`, `httpx2`,
+  `httpcore`), which carry whole addresses, are logged only at `WARNING` and
+  above, whatever the level.
 - **Streaming.** Chat is server-sent events. A proxy in front must not buffer
   `/api/chat`; the bundled nginx config shows the three settings involved.
 - **Provider retries and timeouts.** A model stream that fails before its

@@ -54,6 +54,18 @@ class Agent(Protocol):
         ...
 
 
+class Forgets(Protocol):
+    """An agent that keeps something between turns, and can forget it.
+
+    Optional: an agent with this method is asked when a project is purged
+    (`DELETE /projects/{project_id}`) or a session forgotten, and answers how
+    many turns it forgot. The workflow agent keeps the turns that paused on a
+    question, with the answers given so far.
+    """
+
+    async def forget(self, project_id: str, session_id: str | None = None) -> int: ...
+
+
 class ToolError(RuntimeError):
     """The tool ran and reported failure: the product answered, with a refusal.
 

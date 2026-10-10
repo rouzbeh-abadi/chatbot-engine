@@ -10,6 +10,7 @@ from langchain_core.embeddings import DeterministicFakeEmbedding
 from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.api.rate_limit import reset_rate_limits
 from chatbot_engine.rag import embeddings as embeddings_module
+from chatbot_engine.rag import pipeline as pipeline_module
 from chatbot_engine.rag import vector_store as vector_store_module
 
 
@@ -41,11 +42,13 @@ def offline_vectors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator
     monkeypatch.setattr(vector_store_module, "get_embeddings", lambda *a, **k: fake)
     reset_dependency_cache()
     reset_rate_limits()
+    pipeline_module._purged.clear()
 
     yield
 
     reset_dependency_cache()
     reset_rate_limits()
+    pipeline_module._purged.clear()
 
 
 @pytest.fixture

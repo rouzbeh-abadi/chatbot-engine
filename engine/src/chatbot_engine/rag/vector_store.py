@@ -337,6 +337,19 @@ class ChromaChunkStore:
         """Remove every chunk of one project's document, and say how many."""
         return await self._remove(doc_id=doc_id, project_id=project_id)
 
+    async def delete_project(self, *, project_id: str) -> int:
+        """Remove every chunk of a project, under every embedding model, and
+        say how many: what a purge leaves no record to name."""
+        removed = 0
+        for store in await asyncio.to_thread(_every_store):
+            found = await asyncio.to_thread(
+                store.get, where={"project_id": project_id}, include=[]
+            )
+            if found["ids"]:
+                await store.adelete(ids=found["ids"])
+                removed += len(found["ids"])
+        return removed
+
     async def _remove(
         self, *, doc_id: str, project_id: str, keeping: Collection[str] = ()
     ) -> int:

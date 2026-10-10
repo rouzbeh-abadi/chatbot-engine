@@ -55,11 +55,26 @@ async def _session(
     it is opened here and closed when the session ends.
     """
     headers = headers_for(target, user_id, session_id) or None
+    origin = _origin(httpx2.URL(target.url))
+
+    async def same_origin(request: httpx2.Request) -> None:
+        # Every request of the session, each hop of a redirect included, goes
+        # to the server's own origin. A redirect elsewhere would take the
+        # call, the server's headers and the visitor's ids to an address the
+        # caller never checked (docs/review-2026-10.md, MCP-2); one within the
+        # server, `/mcp` to `/mcp/` say, is followed.
+        if _origin(request.url) != origin:
+            raise McpRedirectRefusedError(
+                f"the tool server {target.name!r} redirected to another address, "
+                "which is not followed"
+            )
+
     async with (
         httpx2.AsyncClient(
             # What the SDK's own client sets, with a transport that bounds
-            # each answer (MCP-3).
+            # each answer (MCP-3) and redirects kept to the server's origin.
             follow_redirects=True,
+            event_hooks={"request": [same_origin]},
             headers=headers,
             timeout=httpx2.Timeout(target.timeout_s),
             transport=CappedTransport(get_settings().mcp_max_response_bytes),
@@ -72,6 +87,16 @@ async def _session(
     ):
         await session.initialize()
         yield session
+
+
+class McpRedirectRefusedError(httpx2.TransportError):
+    """A tool server sent a request elsewhere than its own origin."""
+
+
+def _origin(url: httpx2.URL) -> tuple[str, str, int | None]:
+    """A URL's scheme, host and port, the port filled in when it is the scheme's own."""
+    default = {"http": 80, "https": 443}.get(url.scheme)
+    return url.scheme, url.host, url.port or default
 
 
 def headers_for(

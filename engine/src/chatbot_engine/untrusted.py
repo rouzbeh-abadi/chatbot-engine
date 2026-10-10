@@ -52,13 +52,15 @@ _HIDING = re.compile(
 #: The tag characters that mirror printable ASCII: U+E0020 to U+E007E.
 _TAG_ASCII = re.compile("[\U000e0020-\U000e007e]+")
 
-#: What a tag can open with besides `<`: the fullwidth less-than sign.
-_OPENERS = "<\uff1c"
+#: What a tag can open with besides `<`: the fullwidth and small-form
+#: less-than signs, and the angle brackets that look like one (single
+#: guillemet, CJK, mathematical and the older left-pointing angle bracket).
+_OPENERS = "<\uff1c\ufe64\u2039\u3008\u27e8\u2329"
 #: What a closing tag's slash can be besides `/`: the fullwidth solidus, the
 #: fraction slash, the division slash and the big solidus.
 _SLASHES = "/\uff0f\u2044\u2215\u29f8"
-#: What a tag can end with besides `>`: the fullwidth greater-than sign.
-_CLOSERS = ">\uff1e"
+#: What a tag can end with besides `>`: the twins of the openers above.
+_CLOSERS = ">\uff1e\ufe65\u203a\u3009\u27e9\u232a"
 
 #: A line that starts the way a numbered extract does: `[3]`.
 _NUMBERED_LINE = re.compile(r"^([ \t]*)\[(\d+)\]", re.MULTILINE)
@@ -90,7 +92,7 @@ def closing_tag(tag: str) -> re.Pattern[str]:
     scan of the rest, so a file of them held the event loop for seconds on
     every turn (docs/review-2026-10.md, TURN-2)."""
     return re.compile(
-        rf"[{_OPENERS}][{_SLASHES}]\s*{re.escape(tag)}"
+        rf"[{_OPENERS}]\s*[{_SLASHES}]\s*{re.escape(tag)}"
         rf"(?=[\s{_SLASHES}{_CLOSERS}]|$)(?:[^{_CLOSERS}]{{0,{_CLOSER_TAIL}}}[{_CLOSERS}])?",
         re.IGNORECASE,
     )

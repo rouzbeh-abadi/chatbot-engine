@@ -261,9 +261,6 @@ async def test_mcp1_the_second_chatbot_on_a_shared_server_can_still_call_its_too
 METADATA = "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="MCP-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_mcp2_a_redirect_to_an_inward_address_is_not_followed(net) -> None:
     """The app checks that an owner's MCP address is public before each turn;
     the server at that address answers with a redirect, and the engine's
@@ -292,9 +289,6 @@ async def test_mcp2_a_redirect_to_an_inward_address_is_not_followed(net) -> None
     assert inward == [], f"the engine dialled {inward}"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="MCP-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_mcp2_a_servers_own_headers_never_follow_a_redirect_to_another_origin(
     net,
 ) -> None:

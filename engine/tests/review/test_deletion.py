@@ -110,9 +110,6 @@ def _what_the_engine_still_holds() -> dict[str, object]:
 # --- INGEST-4: a first upload in flight is invisible, so it survives ------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_document_being_indexed_for_the_first_time_is_listed(
     engine: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -137,9 +134,6 @@ async def test_a_document_being_indexed_for_the_first_time_is_listed(
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_deleting_a_chatbot_during_its_first_upload_leaves_nothing_of_it(
     engine: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -156,10 +150,15 @@ async def test_deleting_a_chatbot_during_its_first_upload_leaves_nothing_of_it(
     deleted = await _app_deletes_the_chatbot(engine)  # the app now says deleted: true
 
     released.set()
-    assert (await upload).status_code == 201
+    # Since 0.1.28 a first upload is recorded before it is embedded, so the
+    # app's listing names it and its delete cancels the upload, which keeps
+    # nothing and answers 409. Before, the listing saw nothing (deleted == [])
+    # and the upload answered 201; either way, what the engine holds after
+    # is the finding.
+    answered = (await upload).status_code
+    assert (len(deleted), answered) in ((0, 201), (1, 409)), (deleted, answered)
 
     held = _what_the_engine_still_holds()
-    assert deleted == [], "precondition: the app's listing saw nothing to delete"
     assert held == {
         "registry rows": [],
         "chunks": 0,
