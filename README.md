@@ -15,6 +15,10 @@ hybrid RAG, actions through your own backend over MCP, multi-step workflows
 with LangGraph, and any model through OpenRouter. One stateless HTTP service,
 in Docker, under Apache 2.0.
 
+[ChatFrom](https://chatfrom.io) is built on top of chatbot-engine: every
+chatbot on chatfrom.io, in its website widget, its share pages and its chat
+apps, is answered by this engine.
+
 chatbot-engine is an HTTP service for building chatbots that answer from your
 own documents and call your own tools. It implements the AI part of a chatbot,
 which is retrieval-augmented generation (RAG) over a knowledge base, prompting
