@@ -155,9 +155,6 @@ async def test_deleting_a_tenants_documents_gives_its_space_back(
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_forgotten_paused_turn_gives_its_space_back(tmp_path: Path) -> None:
     """WORKFLOW-4's turn: a tool on the owner's own server answers with 1 MB,
     six reply steps, then an ask step that pauses. The pause is then
@@ -243,9 +240,6 @@ async def test_a_forgotten_paused_turn_gives_its_space_back(tmp_path: Path) -> N
 # ------- DISK-3: writing vectors holds the GIL, so every tenant waits
 
 
-@pytest.mark.xfail(
-    strict=True, reason="DISK-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_an_upload_does_not_stop_the_engine_answering_while_its_vectors_are_written(
     engine: httpx.AsyncClient,
 ) -> None:
@@ -377,6 +371,9 @@ class _Engine:
             ENGINE_REGISTRY_DB=str(volume / "documents.sqlite3"),
             ENGINE_BLOB_DIR=str(volume / "blobs"),
             ENGINE_CHECKPOINT_DB=str(volume / "checkpoints.sqlite3"),
+            # A floor to the scale of the test's small volume; the default
+            # (512 MB) would refuse every upload on it from the start.
+            ENGINE_MIN_FREE_MB="8",
         )
         self.log = tmp_path / "engine.log"
         self._log = self.log.open("wb")

@@ -19,7 +19,7 @@ import multiprocessing
 from dataclasses import dataclass
 from multiprocessing.connection import Connection
 
-from chatbot_engine.documents.extractor import select_extractor
+from chatbot_engine.documents.extractor import PdfDocumentExtractor, select_extractor
 from chatbot_engine.documents.models import ExtractedDocument
 from chatbot_engine.errors import DocumentRejectedError
 
@@ -72,7 +72,12 @@ def _bound_self(timeout_s: float) -> None:
 
 
 def _worker(
-    conn: Connection, data: bytes, mimetype: str, max_chars: int, timeout_s: float
+    conn: Connection,
+    data: bytes,
+    mimetype: str,
+    max_chars: int,
+    timeout_s: float,
+    max_content_bytes: int | None,
 ) -> None:
     """Read `data` and send the result, or the failure, back; never raises."""
     try:
@@ -87,7 +92,10 @@ def _worker(
             "RUN_LENGTH_MAX_OUTPUT_LENGTH",
         ):
             setattr(pypdf.filters, cap, INFLATE_MAX_BYTES)
-        document = select_extractor(mimetype).extract_text(
+        extractor = select_extractor(mimetype)
+        if isinstance(extractor, PdfDocumentExtractor):
+            extractor.max_content_bytes = max_content_bytes
+        document = extractor.extract_text(
             data=data, mimetype=mimetype, max_chars=max_chars
         )
         conn.send(
@@ -107,9 +115,15 @@ def _worker(
 
 
 def read_bounded(
-    data: bytes, mimetype: str, *, max_chars: int, timeout_s: float
+    data: bytes,
+    mimetype: str,
+    *,
+    max_chars: int,
+    timeout_s: float,
+    max_content_bytes: int | None = None,
 ) -> ExtractedDocument:
-    """The document's text, read in a process that is killed at `timeout_s`.
+    """The document's text, read in a process that is killed at `timeout_s`,
+    and for a PDF no further than `max_content_bytes` of page content.
 
     Raises `ReadTimeoutError` when the deadline passes, `ReadFailed` with the
     exception the reader raised (a damaged PDF, text that is not UTF-8), and
@@ -119,7 +133,9 @@ def read_bounded(
     context = multiprocessing.get_context("spawn")
     parent, child = context.Pipe(duplex=False)
     process = context.Process(
-        target=_worker, args=(child, data, mimetype, max_chars, timeout_s), daemon=True
+        target=_worker,
+        args=(child, data, mimetype, max_chars, timeout_s, max_content_bytes),
+        daemon=True,
     )
     process.start()
     child.close()

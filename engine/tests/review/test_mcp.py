@@ -371,9 +371,6 @@ class _Endless(httpx2.AsyncByteStream):
         yield b'"}]}}'
 
 
-@pytest.mark.xfail(
-    strict=True, reason="MCP-3 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_mcp3_a_tool_result_is_not_read_without_a_bound(net) -> None:
     """There is no cap between the socket and the model: the MCP client
     `aread()`s the whole body, `_text_of` joins it, `visible()` copies it and
@@ -735,9 +732,6 @@ def test_mcp7_a_refused_server_header_is_not_echoed_in_the_response(
     assert "sk-live-SECRET" not in response.text, response.text
 
 
-@pytest.mark.xfail(
-    strict=True, reason="MCP-3 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_mcp3_a_small_compressed_answer_does_not_become_a_huge_result(
     net,
 ) -> None:

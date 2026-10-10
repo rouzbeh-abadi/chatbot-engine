@@ -433,8 +433,9 @@ def test_a_pdf_made_to_inflate_is_refused_at_once(client: TestClient) -> None:
 def test_only_so_many_documents_are_read_at_once(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A reading past the engine's places is refused on the spot, with a time
-    to come back, rather than queued behind the others."""
+    """A reading past the engine's places waits a moment for one, and is
+    refused after that, with a time to come back."""
+    monkeypatch.setattr(extract_module, "SLOT_WAIT_S", 0.2)
     monkeypatch.setenv("ENGINE_EXTRACT_CONCURRENCY", "1")
     reset_dependency_cache()
     slot = extract_module._reading_slot(1)
@@ -448,6 +449,63 @@ def test_only_so_many_documents_are_read_at_once(
     assert refused.headers["Retry-After"] == "2"
     assert "at once" in refused.json()["detail"]
     assert _extract(client, b"hello", "a.txt", "text/plain").status_code == 200
+
+
+async def test_a_reading_waits_its_turn_and_a_full_line_is_refused_at_once() -> None:
+    """A few files sent together are read in turn; past the room in line, a
+    file is refused without waiting, so a flood holds no uploads in memory."""
+    from fastapi import HTTPException
+
+    slot = asyncio.Semaphore(1)
+    await slot.acquire()
+    waiting = asyncio.create_task(extract_module._take(slot, 1))
+    await asyncio.sleep(0)
+
+    with pytest.raises(HTTPException) as full:
+        await extract_module._take(slot, 1)
+    slot.release()
+    await waiting
+
+    assert full.value.status_code == 503
+    assert slot.locked(), "the one in line got the slot"
+
+
+def test_a_pdf_page_that_shows_no_text_is_not_parsed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Parsing costs by content, not by text: a page of drawing alone took a
+    reading slot for its whole deadline and gave nothing (INGEST-12)."""
+    from pypdf import PageObject
+
+    from chatbot_engine.documents.extractor import PdfDocumentExtractor
+
+    parsed: list[int] = []
+    extract = PageObject.extract_text
+
+    def counting(self, *args, **kwargs):
+        parsed.append(1)
+        return extract(self, *args, **kwargs)
+
+    monkeypatch.setattr(PageObject, "extract_text", counting)
+    document = PdfDocumentExtractor().extract_text(
+        data=_pdf_pages([None, "Refunds within 30 days", None]),
+        mimetype="application/pdf",
+    )
+
+    assert document.text == "Refunds within 30 days"
+    assert len(parsed) == 1
+
+
+def test_a_pdf_is_parsed_no_further_than_its_content_budget() -> None:
+    from chatbot_engine.documents.extractor import PdfDocumentExtractor
+
+    pages = ["a" * 10, "b" * 10, "c" * 10]  # about 40 bytes of content each
+    document = PdfDocumentExtractor(max_content_bytes=60).extract_text(
+        data=_pdf_pages(pages), mimetype="application/pdf"
+    )
+
+    assert document.text == "a" * 10
+    assert document.truncated
 
 
 def test_the_error_names_no_file_name(client: TestClient) -> None:

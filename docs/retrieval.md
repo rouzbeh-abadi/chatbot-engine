@@ -62,9 +62,13 @@ others within a minute.
 
 Building the index reads every chunk the project has, and a search scores
 every one of them, so both run in a worker thread rather than on the event
-loop, where they would hold up every other request. An engine keeps the
-indexes of the 32 projects searched most recently; one that comes back after
-that is read again, once.
+loop, where they would hold up every other request. Searches that find a
+project's index cold while it is being built wait for that build instead of
+starting their own. An engine keeps the indexes of the 32 projects searched
+most recently, and no more than `ENGINE_KEYWORD_INDEX_MB` (512) of them; one
+that comes back after that is read again, once. An index takes a little over
+twice its project's text in memory. A project of more than 100,000 chunks gets
+no keyword index and is searched by vector alone.
 
 Tokenisation is word characters on lowercased text. That serves languages
 that separate words with spaces. For languages that do not, the keyword half

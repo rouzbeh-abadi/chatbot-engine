@@ -14,17 +14,22 @@ meet vectors produced the same way it was.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import re
 import threading
+import uuid
 from collections.abc import Collection
 from typing import Any
 from urllib.parse import urlparse
 
 import chromadb
+import numpy as np
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
+from chatbot_engine.disk import ensure_room
 from chatbot_engine.rag.embeddings import get_embeddings, resolve_embedding_model
+from chatbot_engine.rag.workers import KeyedLocks, run_indexing
 from chatbot_engine.settings import get_settings
 
 
@@ -242,6 +247,30 @@ def _owned_by(doc_id: str, project_id: str) -> dict[str, Any]:
     return {"$and": [{"doc_id": doc_id}, {"project_id": project_id}]}
 
 
+#: One write of a document at a time in this process.
+_writing = KeyedLocks()
+
+
+def _embed_and_write(store: Chroma, chunks: list[Document], ids: list[str]) -> None:
+    """Embed `chunks` and upsert them under `ids`. Blocks; run off the loop.
+
+    The room is checked first, every slice: a full volume can hang embedded
+    Chroma for every tenant and leave its index unreadable (DISK-3, DISK-4).
+    """
+    ensure_room()
+    embedder = store.embeddings
+    if embedder is None:  # every store here is opened with one
+        raise RuntimeError(f"the collection {store._collection.name!r} has no embedder")
+    texts = [chunk.page_content for chunk in chunks]
+    vectors = np.asarray(embedder.embed_documents(texts), dtype=np.float32)
+    store._collection.upsert(
+        ids=ids,
+        embeddings=vectors,
+        documents=texts,
+        metadatas=[chunk.metadata for chunk in chunks],
+    )
+
+
 class ChromaChunkStore:
     """The write side: one document's chunks, replaced as a unit."""
 
@@ -264,24 +293,45 @@ class ChromaChunkStore:
     ) -> None:
         """Replace everything stored for one document with `chunks`.
 
-        The new version is embedded before anything of the old one is
-        touched. Embedding is the step that fails (a rate limit, a provider
-        outage, a bad key), and a failure there must leave the version
-        already indexed answering, not a document with no chunks at all.
-        `aadd_documents` embeds every chunk before it writes any, so a failed
-        embedding writes nothing.
+        The new version goes in under ids of its own, `ENGINE_INDEX_BATCH_SIZE`
+        chunks at a time: each slice is embedded and written before the next
+        is embedded. So a document's vectors are never all in memory at once,
+        however many chunks it makes (INGEST-1), they reach Chroma as float32
+        arrays, which it reads without holding the interpreter the way it
+        holds it for lists (DISK-2), and no write is larger than Chroma takes
+        in one (INGEST-13).
 
-        The new chunks are written over the old ones' ids (deterministic, so
-        this is a replace in place), and only then is what is left of the old
-        version removed: the tail of a longer one, which would otherwise go on
-        answering queries, and its chunks under another embedding model.
+        Only once every slice has landed is the old version removed: all of
+        it, and its chunks under another embedding model. Embedding is the
+        step that fails (a rate limit, a provider outage, a bad key); a
+        failure part-way removes what of the new version landed, so the
+        version already indexed goes on answering, whole.
         """
-        ids = [f"{doc_id}:{index}" for index in range(len(chunks))]
+        store = self._store
+        version = uuid.uuid4().hex[:12]
+        ids = [f"{doc_id}:{version}:{index}" for index in range(len(chunks))]
+        size = get_settings().index_batch_size
+        tried = 0
 
-        if chunks:
-            await self._store.aadd_documents(documents=chunks, ids=ids)
+        # One write of a document at a time in this process: two at once
+        # would each remove the other's version as the old one, and leave
+        # the document with part of one or none.
+        async with _writing((project_id, doc_id)):
+            try:
+                for start in range(0, len(chunks), size):
+                    tried = start + size
+                    await self._add(store, chunks[start:tried], ids[start:tried])
+            except BaseException:
+                if tried:
+                    with contextlib.suppress(Exception):
+                        await run_indexing(store._collection.delete, ids[:tried])
+                raise
 
-        await self._remove(doc_id=doc_id, project_id=project_id, keeping=ids)
+            await self._remove(doc_id=doc_id, project_id=project_id, keeping=ids)
+
+    async def _add(self, store: Chroma, chunks: list[Document], ids: list[str]) -> None:
+        """Embed one slice of chunks and write it, on indexing's own threads."""
+        await run_indexing(_embed_and_write, store, chunks, ids)
 
     async def delete(self, *, doc_id: str, project_id: str) -> int:
         """Remove every chunk of one project's document, and say how many."""
@@ -302,7 +352,9 @@ class ChromaChunkStore:
         kept = set(keeping)
         removed = 0
 
-        for store in _every_store():
+        # In a thread: listing the collections is a call into Chroma, and on a
+        # full disk one can hang holding its lock (DISK-3).
+        for store in await asyncio.to_thread(_every_store):
             found = await asyncio.to_thread(
                 store.get, where=_owned_by(doc_id, project_id), include=[]
             )

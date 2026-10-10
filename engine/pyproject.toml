@@ -16,11 +16,13 @@ dependencies = [
     "langchain-openai",
     "langchain-text-splitters",
     "mcp>=2.0",
+    # Imported directly since the keyword index and the vector writes keep
+    # their numbers in arrays; langchain-chroma brought it in already.
+    "numpy>=2",
     "prometheus-client>=0.20",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.7",
     "pypdf>=6.16.1",
-    "rank-bm25>=0.2",
 ]
 
 [build-system]

@@ -33,6 +33,15 @@ router = APIRouter(tags=["documents"])
 #: when the setting changes, as the rate limiters are.
 _slots: dict[int, asyncio.Semaphore] = {}
 
+#: How long a reading waits for a slot before it is refused. Most readings
+#: take well under a second, so a burst is served in turn rather than turned
+#: away, and a few files sent together cannot keep out everyone else's.
+SLOT_WAIT_S = 5.0
+#: How many readings may wait at once, per slot; past it a file is refused at
+#: once, so a flood holds no more uploads in memory than this.
+WAITING_PER_SLOT = 2
+_waiting = 0
+
 
 def _reading_slot(capacity: int) -> asyncio.Semaphore:
     slot = _slots.get(capacity)
@@ -40,6 +49,32 @@ def _reading_slot(capacity: int) -> asyncio.Semaphore:
         _slots.clear()
         slot = _slots[capacity] = asyncio.Semaphore(capacity)
     return slot
+
+
+def _busy() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="as many files are being read as the engine allows at once",
+        headers={"Retry-After": "2"},
+    )
+
+
+async def _take(slot: asyncio.Semaphore, room: int) -> None:
+    """A reading slot, within `SLOT_WAIT_S`, or a 503."""
+    global _waiting
+
+    if not slot.locked():
+        await slot.acquire()
+        return
+    if _waiting >= room:  # filled while the allowance was checked
+        raise _busy()
+    _waiting += 1
+    try:
+        await asyncio.wait_for(slot.acquire(), SLOT_WAIT_S)
+    except TimeoutError:
+        raise _busy() from None
+    finally:
+        _waiting -= 1
 
 
 @router.post(
@@ -109,24 +144,16 @@ async def extract(
 
     # Before any reading, so an unknown type is a 415 (app.py), not a 422.
     select_extractor(mimetype)
-    # A place to read in, or none: refused at once, before the allowance is
-    # charged, so a flood of files cannot stack up readers behind each other.
+    # A place to read in, or a short wait for one. With the line full, the
+    # file is refused at once, before the allowance is charged.
     slot = _reading_slot(settings.extract_concurrency)
-    if slot.locked():
-        raise HTTPException(
-            status_code=503,
-            detail="as many files are being read as the engine allows at once",
-            headers={"Retry-After": "2"},
-        )
+    room = settings.extract_concurrency * WAITING_PER_SLOT
+    if slot.locked() and _waiting >= room:
+        raise _busy()
     await limit_extract(caller, settings)
-    if slot.locked():  # taken while the allowance was checked
-        raise HTTPException(
-            status_code=503,
-            detail="as many files are being read as the engine allows at once",
-            headers={"Retry-After": "2"},
-        )
+    await _take(slot, room)
 
-    async with slot:
+    try:
         try:
             # In a process of its own, off the event loop and killed at the
             # deadline: a PDF made to take minutes would otherwise hold a
@@ -138,12 +165,15 @@ async def extract(
                 mimetype,
                 max_chars=MAX_ATTACHMENT_CHARS,
                 timeout_s=settings.extract_timeout_s,
+                max_content_bytes=settings.extract_parse_mb * 1024 * 1024,
             )
         except ReadFailed as exc:
             if exc.kind == "UnicodeDecodeError":
                 raise DocumentRejectedError("the file is not UTF-8 text") from exc
             # pypdf raises its own errors for a damaged or encrypted PDF.
             raise DocumentRejectedError("the file could not be read") from exc
+    finally:
+        slot.release()
 
     if not extracted.text.strip():
         raise DocumentRejectedError(

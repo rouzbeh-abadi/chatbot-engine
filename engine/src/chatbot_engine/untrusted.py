@@ -69,14 +69,29 @@ def visible(text: str) -> str:
     return _INVISIBLE.sub("", text)
 
 
+#: How far past a closer's name its `>` is looked for. A closer whose `>` is
+#: further away, or missing, still loses its opener, which is what ends a
+#: frame; only what follows it stays as text.
+_CLOSER_TAIL = 64
+
+#: How much past a cut a text is framed, so a closer that crosses the cut is
+#: still seen whole.
+CLOSER_ROOM = _CLOSER_TAIL + 32
+
+
 def closing_tag(tag: str) -> re.Pattern[str]:
     """A closing tag for `tag`, however it is spelt or spaced, or written with
     a fullwidth angle bracket or a slash that only looks like one; not the
     closer of another element whose name only starts with `tag`
-    (`</file-list>`)."""
+    (`</file-list>`).
+
+    The `>` is looked for at most `_CLOSER_TAIL` characters on. Read to the
+    end of the text, as it was, every `</file ` without a `>` after it cost a
+    scan of the rest, so a file of them held the event loop for seconds on
+    every turn (docs/review-2026-10.md, TURN-2)."""
     return re.compile(
         rf"[{_OPENERS}][{_SLASHES}]\s*{re.escape(tag)}"
-        rf"(?=[\s{_SLASHES}{_CLOSERS}])[^{_CLOSERS}]*[{_CLOSERS}]",
+        rf"(?=[\s{_SLASHES}{_CLOSERS}]|$)(?:[^{_CLOSERS}]{{0,{_CLOSER_TAIL}}}[{_CLOSERS}])?",
         re.IGNORECASE,
     )
 

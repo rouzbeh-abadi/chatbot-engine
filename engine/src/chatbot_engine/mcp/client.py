@@ -19,18 +19,17 @@ from typing import Any
 
 import httpx2
 from mcp import ClientSession
-from mcp.client.streamable_http import (
-    create_mcp_http_client,
-    streamable_http_client,
-)
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import TextContent
 
 from chatbot_engine.agent.client import without_paths
 from chatbot_engine.api.streaming import describe
+from chatbot_engine.mcp.capped import CappedTransport
 from chatbot_engine.mcp.config import McpTarget, resolve_targets
 from chatbot_engine.models.chat import AssistantConfig
 from chatbot_engine.observability import REQUEST_ID_HEADER, request_id
 from chatbot_engine.ports.agent import ToolError
+from chatbot_engine.settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -57,8 +56,13 @@ async def _session(
     """
     headers = headers_for(target, user_id, session_id) or None
     async with (
-        create_mcp_http_client(
-            headers=headers, timeout=httpx2.Timeout(target.timeout_s)
+        httpx2.AsyncClient(
+            # What the SDK's own client sets, with a transport that bounds
+            # each answer (MCP-3).
+            follow_redirects=True,
+            headers=headers,
+            timeout=httpx2.Timeout(target.timeout_s),
+            transport=CappedTransport(get_settings().mcp_max_response_bytes),
         ) as http_client,
         streamable_http_client(target.url, http_client=http_client) as (
             read_stream,

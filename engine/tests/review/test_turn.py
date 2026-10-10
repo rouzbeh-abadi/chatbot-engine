@@ -468,9 +468,6 @@ def test_prompt_messages_is_the_budget_the_loop_should_use(monkeypatch):
 # --- claim 8 / threat (d): one stranger's file must not stall the engine ------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_framing_a_file_of_unclosed_closers_takes_linear_time() -> None:
     """`closing_tag` ends in `[^>]*[>]` (with their fullwidth twins): for each `</file` with no `>`
     after it, the regex scans to the end of the text and backtracks, so a

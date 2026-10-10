@@ -46,6 +46,9 @@ dev = [
     "ruff>=0.14",
     "ty>=0.0.1a0",
     "moto[s3]>=5",
+    # Only for the test that holds the keyword index to the scores BM25Okapi
+    # gives; the engine scores them itself (rag/sparse.py).
+    "rank-bm25>=0.2",
 ]
 
 [tool.pytest.ini_options]

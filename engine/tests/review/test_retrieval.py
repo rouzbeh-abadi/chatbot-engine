@@ -272,9 +272,6 @@ async def test_after_the_sweep_a_project_on_another_model_can_still_upload(
 # --- the keyword index -------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_concurrent_searches_on_a_cold_index_build_it_once(client: TestClient) -> None:
     """Every turn of a project whose index is older than 60 s (or pushed out
     by 32 others) rebuilds it, reading and tokenising every chunk. Turns that
@@ -301,9 +298,6 @@ def test_concurrent_searches_on_a_cold_index_build_it_once(client: TestClient) -
     assert builds == 1, f"{builds} concurrent builds of one project's index"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_projects_keyword_index_holds_no_more_than_a_few_times_its_text(
     client: TestClient,
 ) -> None:

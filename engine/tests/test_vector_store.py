@@ -151,8 +151,8 @@ async def test_a_failed_embedding_leaves_the_version_already_indexed(
 async def test_a_new_version_replaces_the_old_one_in_place(
     client: TestClient,
 ) -> None:
-    """Embedded first, then written over the old ids, then the old tail
-    removed: what is left is exactly the new version."""
+    """Written under ids of its own, then the old version removed: what is
+    left is exactly the new version."""
     from langchain_core.documents import Document
 
     doc_id = _upload(client, LONG).json()["doc_id"]
@@ -167,8 +167,126 @@ async def test_a_new_version_replaces_the_old_one_in_place(
     await ChromaChunkStore().write(doc_id=doc_id, project_id="support", chunks=chunks)
 
     stored = open_vector_store().get(include=["documents"])
-    assert sorted(stored["ids"]) == [f"{doc_id}:0", f"{doc_id}:1"]
+    assert len(stored["ids"]) == 2
+    assert all(chunk_id.startswith(f"{doc_id}:") for chunk_id in stored["ids"])
     assert sorted(stored["documents"]) == ["part 0", "part 1"]
+
+
+def _set(monkeypatch: pytest.MonkeyPatch, **env: str) -> None:
+    from chatbot_engine.settings import get_settings
+
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    get_settings.cache_clear()
+
+
+async def test_a_failure_part_way_leaves_the_old_version_whole(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Written a slice at a time, a new version can fail after some of it
+    landed. What landed goes again, and the old version answers as before."""
+    from langchain_core.documents import Document
+    from langchain_core.embeddings import DeterministicFakeEmbedding
+
+    first = _upload(client, LONG).json()
+    before = open_vector_store().get(include=["documents"])
+    _set(monkeypatch, ENGINE_INDEX_BATCH_SIZE="1")
+    calls = []
+    original = DeterministicFakeEmbedding.embed_documents
+
+    def second_call_fails(self, texts):
+        calls.append(len(texts))
+        if len(calls) == 2:
+            raise RuntimeError("provider down")
+        return original(self, texts)
+
+    monkeypatch.setattr(
+        DeterministicFakeEmbedding, "embed_documents", second_call_fails
+    )
+    with pytest.raises(RuntimeError, match="provider down"):
+        await ChromaChunkStore().write(
+            doc_id=first["doc_id"],
+            project_id="support",
+            chunks=[
+                Document(page_content=f"new {n}", metadata={"project_id": "support"})
+                for n in range(3)
+            ],
+        )
+
+    after = open_vector_store().get(include=["documents"])
+    assert calls == [1, 1], "one slice landed before the failure"
+    assert sorted(after["ids"]) == sorted(before["ids"])
+    assert sorted(after["documents"]) == sorted(before["documents"])
+
+
+async def test_two_writes_of_one_document_at_once_leave_one_version_whole(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Each version goes in under ids of its own and removes the rest, so two
+    at once must not each remove the other's."""
+    import asyncio
+
+    from langchain_core.documents import Document
+
+    doc_id = _upload(client, LONG).json()["doc_id"]
+    _set(monkeypatch, ENGINE_INDEX_BATCH_SIZE="1")
+
+    def version(name: str, count: int) -> list[Document]:
+        return [
+            Document(
+                page_content=f"{name} {n}",
+                metadata={"doc_id": doc_id, "project_id": "support"},
+            )
+            for n in range(count)
+        ]
+
+    store = ChromaChunkStore()
+    await asyncio.gather(
+        store.write(doc_id=doc_id, project_id="support", chunks=version("a", 3)),
+        store.write(doc_id=doc_id, project_id="support", chunks=version("b", 2)),
+    )
+
+    left = sorted(open_vector_store().get(include=["documents"])["documents"])
+    assert left in (["a 0", "a 1", "a 2"], ["b 0", "b 1"])
+
+
+def test_a_document_of_too_many_chunks_is_refused_before_it_is_embedded(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from langchain_core.embeddings import DeterministicFakeEmbedding
+
+    _set(monkeypatch, ENGINE_INDEX_MAX_CHUNKS="2")
+    embedded = []
+    original = DeterministicFakeEmbedding.embed_documents
+
+    def counting(self, texts):
+        embedded.extend(texts)
+        return original(self, texts)
+
+    monkeypatch.setattr(DeterministicFakeEmbedding, "embed_documents", counting)
+    response = _upload(client, LONG)
+
+    assert response.status_code == 422
+    assert (
+        "more than the 2 one document may give the index" in response.json()["detail"]
+    )
+    assert embedded == []
+    assert count_chunks() == 0
+
+
+def test_an_upload_below_the_free_space_floor_is_refused_and_writes_nothing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """A full volume can hang embedded Chroma for every tenant, so indexing
+    stops well before it: a 503, and nothing written, the original included."""
+    _set(monkeypatch, ENGINE_MIN_FREE_MB=str(10**12))
+    response = _upload(client, LONG)
+
+    assert response.status_code == 503
+    assert "ENGINE_MIN_FREE_MB" in response.json()["detail"]
+    assert count_chunks() == 0
+    assert not any((tmp_path / "blobs").rglob("*.*"))
+    assert client.get("/documents", params={"project_id": "support"}).json() == []
 
 
 # --- one collection per embedding model ---------------------------------------

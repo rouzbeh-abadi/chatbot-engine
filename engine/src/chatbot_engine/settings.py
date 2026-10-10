@@ -83,9 +83,17 @@ class Settings(BaseSettings):
 
     #: How many documents may be read for chats at once. Each read is a
     #: process of its own that may take its whole deadline and a good deal of
-    #: memory on a file made to; past this, a reading is refused at once
-    #: (503) rather than queued, so files cannot fill the box.
+    #: memory on a file made to. Past this, a reading waits a few seconds for
+    #: its turn, a few in line at most, and is refused (503) after that, so
+    #: files cannot fill the box.
     extract_concurrency: int = Field(default=2, ge=1)
+
+    #: How much page content, in megabytes after inflating, a chat file's PDF
+    #: is parsed for. Parsing costs by content, not by text: a small file of
+    #: drawing operators took a slot for its whole deadline and gave no text.
+    #: Past this the rest is not read, as past a chat file's text, and a page
+    #: that can show no text is never parsed at all.
+    extract_parse_mb: int = Field(default=4, ge=1)
 
     # --- reading documents for the index ------------------------------------
     #: Bounds on reading an uploaded document into the knowledge base, apart
@@ -104,6 +112,24 @@ class Settings(BaseSettings):
     #: answer nothing; reading stops here, so a file made to inflate costs no
     #: more than this.
     index_max_chars: int = Field(default=2_000_000, gt=0)
+
+    #: The most chunks one document may give the index. Counted after it is
+    #: split and before anything is embedded, so a document cut into more
+    #: pieces than this is refused (422) without a cent spent on it. At the
+    #: default chunk size, the longest document `index_max_chars` allows makes
+    #: about 2,000.
+    index_max_chunks: int = Field(default=20_000, gt=0)
+
+    #: Chunks embedded and written to the vector store at a time. Each slice
+    #: is written before the next is embedded, so a document's vectors never
+    #: sit in memory all at once, and Chroma never holds the interpreter for
+    #: long on one write.
+    index_batch_size: int = Field(default=128, ge=1, le=5000)
+
+    #: How many threads read, embed and write documents for the index, apart
+    #: from the pool every chat's retrieval runs on. More uploads than this
+    #: at once wait their turn; chats never wait for them.
+    index_concurrency: int = Field(default=2, ge=1)
 
     # --- the model provider -------------------------------------------------
 
@@ -221,6 +247,12 @@ class Settings(BaseSettings):
     #: `top_k` are kept. Off by default: it is one more model call per turn.
     rerank: bool = False
 
+    #: The memory, in megabytes, the keyword indexes of hybrid retrieval may
+    #: hold together. Past it the one searched longest ago is dropped, and an
+    #: index larger than all of it is built for the searches that need it and
+    #: not kept.
+    keyword_index_mb: int = Field(default=512, ge=16)
+
     #: Candidates per search before fusion and reranking.
     retrieval_candidates: int = 20
 
@@ -248,6 +280,13 @@ class Settings(BaseSettings):
     #: routed to the engine that asked.
     checkpoint_db: Path = Path("var/checkpoints.sqlite3")
 
+    #: The free space, in megabytes, that indexing leaves on the volumes the
+    #: engine writes to. Below it, an upload is refused (503) before anything
+    #: is written: a full volume can freeze embedded Chroma for every tenant
+    #: and leave its index unreadable after a restart. Zero turns the check
+    #: off.
+    min_free_mb: int = Field(default=512, ge=0)
+
     #: How long a paused turn waits for its answer before it is forgotten.
     pause_ttl_s: int = 86_400
 
@@ -255,6 +294,13 @@ class Settings(BaseSettings):
 
     #: Seconds to wait on an MCP server before giving up.
     mcp_timeout_s: float = 30.0
+
+    #: The most bytes one answer from an MCP server may be, after it is
+    #: inflated. Past it the answer is not read further and the call fails,
+    #: so a tool server cannot fill the engine's memory, with a large answer
+    #: or a small compressed one. Far above what the model reads of a result
+    #: (`tool_result_chars`); the room is for a tool list's schemas.
+    mcp_max_response_bytes: int = Field(default=4 * 1024 * 1024, ge=64 * 1024)
 
     #: The most characters of one tool result the model reads. A result is
     #: sent back with every later model call of the turn, so a tool that

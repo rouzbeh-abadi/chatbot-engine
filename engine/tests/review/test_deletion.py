@@ -20,11 +20,10 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
-from langchain_chroma import Chroma
 
 from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.rag.pipeline import doc_id_for
-from chatbot_engine.rag.vector_store import open_vector_store
+from chatbot_engine.rag.vector_store import ChromaChunkStore, open_vector_store
 from chatbot_engine.settings import get_settings
 
 PROJECT = "6f1c0a52-0000-4000-8000-00000000000x"  # a chatbot's uuid in ChatFrom
@@ -53,15 +52,15 @@ def _slow_embedding(
     """Hold the embedding of the page carrying SECRET until released: what a
     large PDF or a slow provider does for seconds to a minute."""
     at_gate, released = asyncio.Event(), asyncio.Event()
-    original = Chroma.aadd_documents
+    original = ChromaChunkStore._add
 
-    async def gated(self, documents, **kw):
+    async def gated(self, store, documents, ids):
         if any(SECRET in d.page_content for d in documents):
             at_gate.set()
             await released.wait()
-        return await original(self, documents, **kw)
+        return await original(self, store, documents, ids)
 
-    monkeypatch.setattr(Chroma, "aadd_documents", gated)
+    monkeypatch.setattr(ChromaChunkStore, "_add", gated)
     return at_gate, released
 
 

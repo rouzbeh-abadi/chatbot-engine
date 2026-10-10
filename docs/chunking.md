@@ -151,8 +151,9 @@ defaults, after a change to `ENGINE_CHUNK_SIZE` for example, and a field left
 out takes the engine's default. The response is the rebuilt record. `404`
 means the project has no such document, `501` means the engine keeps no
 originals, and `422` means settings that cannot work together: `chunk_size`
-runs from 100 to 8000 characters, `chunk_overlap` from 0 to 2000 and must be
-smaller than the size.
+runs from 100 to 8000 characters, `chunk_overlap` from 0 to 2000 and can be
+at most half the size. A larger overlap would have each piece start only a
+few characters after the last, and embed a document many times over.
 Both routes answer `422` for those, and nothing is stored.
 
 To rebuild the example knowledge base from source instead, `make seed`

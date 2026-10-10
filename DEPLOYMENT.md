@@ -365,6 +365,10 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   `ENGINE_TOOL_RESULT_CHARS` (default 20,000) is the most of one tool result
   the model reads, since a result is sent again with every later model call
   of the turn; the rest is cut, with a line saying how much was left out.
+  `ENGINE_MCP_MAX_RESPONSE_BYTES` (default 4 MiB) is the most one answer from
+  a tool server may be once inflated. Past it the answer is not read further
+  and the call fails, so neither a large answer nor a small compressed one can
+  fill the engine's memory.
 - **Request size.** `ENGINE_MAX_BODY_BYTES` (default 8 MiB) is the largest
   JSON body the engine reads. A larger one is refused with 413 before it is
   read, at once when its `Content-Length` says so and otherwise as soon as it
@@ -375,12 +379,31 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   process of its own, bounded in CPU time and memory where the system allows,
   and is killed at the deadline, the file refused with 422.
   `ENGINE_EXTRACT_CONCURRENCY` (default 2) is how many such readings may run
-  at once; past it a reading is refused with 503 and `Retry-After` rather
-  than queued, so files cannot fill the box.
+  at once. Past it a reading waits up to 5 seconds for its turn, with at most
+  two in line for each place, and is refused with 503 and `Retry-After` after
+  that, so files cannot fill the box. `ENGINE_EXTRACT_PARSE_MB` (default 4) is
+  how much page content a PDF is parsed for. Past it the rest is not read, and
+  a page that can show no text is not parsed at all, so a small file of
+  drawing cannot hold a place for its whole deadline.
 - **Reading knowledge documents.** A PDF uploaded to the knowledge base is
   read the same way, in a process of its own, with bounds sized for indexing:
   `ENGINE_INDEX_READ_TIMEOUT_S` (default 60) for the reading, and
   `ENGINE_INDEX_MAX_CHARS` (default 2,000,000) for the text one document may
   give. A document past either is a `failed` record that says why, and the
   upload answers 422. Plain text and Markdown are decoded in place, within the
-  same character bound.
+  same character bound. `ENGINE_INDEX_MAX_CHUNKS` (default 20,000) is the most
+  chunks one document may make; one over it is refused with 422 before
+  anything is embedded. Chunks are embedded and written
+  `ENGINE_INDEX_BATCH_SIZE` (default 128) at a time, so a document's vectors
+  are never all in memory at once, and indexing runs on
+  `ENGINE_INDEX_CONCURRENCY` (default 2) threads of its own, so uploads never
+  hold up a chat's retrieval.
+- **Free space.** `ENGINE_MIN_FREE_MB` (default 512) is the room an upload
+  leaves on the volumes the engine writes to. Below it the upload is refused
+  with 503 before anything is written: a full volume can freeze embedded
+  Chroma for every tenant and leave its index unreadable after a restart.
+  Zero turns the check off. Watch the volume all the same; the floor only
+  keeps indexing from filling it.
+- **Keyword indexes.** `ENGINE_KEYWORD_INDEX_MB` (default 512) is the memory
+  the keyword indexes of hybrid retrieval may hold together. Past it the one
+  searched longest ago is dropped and built again when it is next needed.

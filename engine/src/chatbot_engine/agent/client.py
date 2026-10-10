@@ -48,7 +48,7 @@ from chatbot_engine.models.events import (
 from chatbot_engine.ports.agent import ToolError, ToolProvider
 from chatbot_engine.settings import Settings, get_settings
 from chatbot_engine.tracing import run_config
-from chatbot_engine.untrusted import framed, label, visible
+from chatbot_engine.untrusted import CLOSER_ROOM, framed, label, visible
 
 logger = logging.getLogger(__name__)
 
@@ -335,9 +335,13 @@ def file_frames(attachments: Sequence[Attachment], *, limit: int | None = None) 
     """
     frames = []
     for a in attachments:
-        text = framed(a.text, "file")
+        text = visible(a.text)
         if limit is not None and len(text) > limit:
-            text = f"{text[:limit]} …"
+            # Cut before framing, so no pattern reads past what is kept; the
+            # extra room keeps a closer that crosses the limit whole.
+            text = f"{framed(text[: limit + CLOSER_ROOM], 'file')[:limit]} …"
+        else:
+            text = framed(text, "file")
         mark = ' sent="with this message"' if a.sent_now else ""
         frames.append(f'<file name="{file_name(a.name)}"{mark}>\n{text}\n</file>')
     return "\n\n".join(frames)

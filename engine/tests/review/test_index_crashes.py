@@ -434,9 +434,6 @@ def test_a_first_upload_killed_mid_index_leaves_no_file_nothing_can_delete(
 # ---------------------- INGEST-13: more chunks than one Chroma upsert
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-13 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_document_of_more_than_5461_chunks_is_indexed_or_refused_before_embedding(
     monkeypatch: pytest.MonkeyPatch, local_client
 ) -> None:

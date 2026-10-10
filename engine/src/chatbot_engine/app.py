@@ -34,6 +34,7 @@ from chatbot_engine.errors import (
     DocumentRejectedError,
     EngineError,
     NotConfiguredError,
+    StorageFullError,
     provider_reason,
 )
 from chatbot_engine.observability import RequestIdMiddleware, configure_logging
@@ -116,6 +117,11 @@ def create_app() -> FastAPI:
     ) -> JSONResponse:
         """415: no extractor handles this MIME type."""
         return JSONResponse(status_code=415, content={"detail": str(exc)})
+
+    @app.exception_handler(StorageFullError)
+    async def storage_full(_: Request, exc: StorageFullError) -> JSONResponse:
+        """503: the volume is below its free-space floor; retry after room is made."""
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
 
     @app.exception_handler(EngineError)
     async def engine_error(_: Request, exc: EngineError) -> JSONResponse:

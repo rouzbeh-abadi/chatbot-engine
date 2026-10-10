@@ -1013,3 +1013,24 @@ async def test_a_question_asked_twice_in_one_turn_starts_its_count_afresh():
     assert any(isinstance(e, InputRequiredEvent) for e in events), (
         "asked again, not left"
     )
+
+
+async def test_a_finished_turn_gives_its_room_back_to_the_volume(tmp_path):
+    """The room a paused turn took is freed when it ends, not kept as free
+    pages inside the file for ever (WORKFLOW-4)."""
+    path = tmp_path / "checkpoints.sqlite3"
+    pauses = Pauses.sqlite(path, ttl_s=3600)
+    tools = Tools()
+    thread = _asked(await _run(_request(PROJECT), pauses, tools)).thread_id
+    await _run(
+        _request(PROJECT, "x.com", {"thread_id": thread, "value": "x.com"}),
+        pauses,
+        tools,
+    )
+
+    async with pauses._conn.execute("PRAGMA freelist_count") as cursor:
+        (free,) = await cursor.fetchone()
+    async with pauses._conn.execute("PRAGMA auto_vacuum") as cursor:
+        (mode,) = await cursor.fetchone()
+    await pauses._conn.close()
+    assert (mode, free) == (2, 0)

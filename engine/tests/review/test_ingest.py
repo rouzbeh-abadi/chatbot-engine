@@ -15,7 +15,6 @@ from io import BytesIO
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_chroma import Chroma
 from langchain_core.embeddings import DeterministicFakeEmbedding
 
 from chatbot_engine.api import dependencies
@@ -75,9 +74,6 @@ async def _put(pipeline: DocumentIngestPipeline, data: bytes, **kw):
 # --- INGEST-1: the chunk count of one document has no bound ---------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_overlap_cannot_multiply_a_documents_chunks_without_bound(
     client: TestClient,
 ) -> None:
@@ -193,9 +189,6 @@ async def test_an_upload_past_the_limit_is_refused_before_it_is_read(
 # --- INGEST-3: two puts of one document leave blob and record disagreeing --------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-3 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_concurrent_puts_keep_blob_and_record_on_one_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -210,21 +203,24 @@ async def test_concurrent_puts_keep_blob_and_record_on_one_version(
     first = b"# Returns\n\n" + b"Thirty days, receipt required. " * 30
     second = b"# Returns\n\nFourteen days, no receipt needed.\n"
     at_gate, released = asyncio.Event(), asyncio.Event()
-    original = Chroma.aadd_documents
+    original = ChromaChunkStore._add
 
-    async def gated(self, documents, **kw):
+    async def gated(self, store, documents, ids):
         if any("Thirty" in d.page_content for d in documents):
             at_gate.set()
             await released.wait()
-        return await original(self, documents, **kw)
+        return await original(self, store, documents, ids)
 
-    monkeypatch.setattr(Chroma, "aadd_documents", gated)
+    monkeypatch.setattr(ChromaChunkStore, "_add", gated)
 
-    slow = asyncio.create_task(_put(pipeline, first))  # starts first, ends last
+    slow = asyncio.create_task(_put(pipeline, first))  # starts first
     await at_gate.wait()
-    await _put(pipeline, second)
+    # Since 0.1.27 one write of a document waits for the other, so B cannot
+    # finish while A is held: A is let go once B is under way.
+    later = asyncio.create_task(_put(pipeline, second))
+    await asyncio.sleep(0.2)
     released.set()
-    await slow
+    await asyncio.gather(slow, later)
 
     doc_id = doc_id_for("acme", "returns.md")
     record = await registry.get(project_id="acme", doc_id=doc_id)
@@ -255,15 +251,15 @@ async def test_a_delete_during_an_update_is_not_undone_by_it(
     await _put(pipeline, first)
     doc_id = doc_id_for("acme", "returns.md")
     at_gate, released = asyncio.Event(), asyncio.Event()
-    original = Chroma.aadd_documents
+    original = ChromaChunkStore._add
 
-    async def gated(self, documents, **kw):
+    async def gated(self, store, documents, ids):
         if any("Fourteen" in d.page_content for d in documents):
             at_gate.set()
             await released.wait()
-        return await original(self, documents, **kw)
+        return await original(self, store, documents, ids)
 
-    monkeypatch.setattr(Chroma, "aadd_documents", gated)
+    monkeypatch.setattr(ChromaChunkStore, "_add", gated)
 
     update = asyncio.create_task(_put(pipeline, second))
     await at_gate.wait()
@@ -282,9 +278,6 @@ async def test_a_delete_during_an_update_is_not_undone_by_it(
 # --- INGEST-5: indexing shares, unbounded, the thread pool retrieval runs on ------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-5 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_documents_being_indexed_do_not_hold_up_every_chats_retrieval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

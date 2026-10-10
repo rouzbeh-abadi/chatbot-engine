@@ -302,9 +302,6 @@ class BigResult(Tools):
         return "x" * 1_000_000
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_paused_turn_keeps_its_state_once_not_once_per_step(tmp_path):
     """A workflow with an ask step is compiled with the checkpointer, and
     LangGraph's default durability writes a whole checkpoint (every channel:

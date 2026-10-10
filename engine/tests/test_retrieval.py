@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -284,6 +285,93 @@ def test_only_so_many_indexes_are_kept_the_least_recently_searched_dropped(
         sparse.sparse_index(store, project)
 
     assert [project for _, project in sparse._indexes] == ["a", "c"]
+
+
+def test_the_keyword_index_scores_as_bm25okapi_does() -> None:
+    """Kept as arrays instead of a dict of counts per chunk, the index must
+    still rank and score as `rank_bm25.BM25Okapi` did."""
+    import random
+    from array import array
+    from collections import Counter
+
+    from rank_bm25 import BM25Okapi
+
+    rng = random.Random(7)
+    for _ in range(100):
+        vocab = [f"w{i}" for i in range(rng.randint(3, 60))]
+        texts = [
+            " ".join(rng.choices(vocab, k=rng.randint(1, 30)))
+            for _ in range(rng.randint(1, 40))
+        ]
+        hashes, chunks, counts, lengths = array("q"), array("i"), array("f"), []
+        for number, text in enumerate(texts):
+            terms = Counter(sparse.tokenize(text))
+            lengths.append(sum(terms.values()))
+            for term, times in terms.items():
+                hashes.append(hash(term))
+                chunks.append(number)
+                counts.append(times)
+        index = sparse._index(
+            texts, [{}] * len(texts), hashes, chunks, counts, lengths, 0.0, True
+        )
+        reference = BM25Okapi([sparse.tokenize(text) for text in texts])
+
+        for _ in range(5):
+            query = " ".join(rng.choices([*vocab, "absent"], k=rng.randint(1, 4)))
+            scores = reference.get_scores(sparse.tokenize(query))
+            expected = [
+                (texts[i], score)
+                for i, score in sorted(
+                    enumerate(scores.tolist()), key=lambda hit: hit[1], reverse=True
+                )
+                if score > 0
+            ]
+            got = [(d.page_content, s) for d, s in index.search(query, len(texts))]
+            assert [text for text, _ in got] == [text for text, _ in expected]
+            assert [s for _, s in got] == pytest.approx([s for _, s in expected])
+
+
+def test_the_indexes_kept_stay_within_their_bytes(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counted by bytes as well as by number: past the budget, the one
+    searched longest ago goes, and one larger than all of it is not kept."""
+    _seed(client)
+    sparse.invalidate()
+    store = open_vector_store()
+    index = sparse.sparse_index(store, "support")
+    assert index is not None
+    monkeypatch.setattr(
+        sparse, "get_settings", lambda: SimpleNamespace(keyword_index_mb=1)
+    )
+    sparse.invalidate()
+
+    with patch.object(sparse.SparseIndex, "__post_init__", _sized(600_000)):
+        for project in ("support", "other", "third"):
+            sparse.sparse_index(store, project)
+        assert [project for _, project in sparse._indexes] == ["third"]
+
+    with patch.object(sparse.SparseIndex, "__post_init__", _sized(2_000_000)):
+        sparse.invalidate()
+        assert sparse.sparse_index(store, "support") is not None
+        assert not sparse._indexes
+
+
+def _sized(nbytes: int):
+    def post_init(self) -> None:
+        self.nbytes = nbytes
+
+    return post_init
+
+
+def test_a_project_of_too_many_chunks_is_searched_by_vector_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(client)
+    sparse.invalidate()
+    monkeypatch.setattr(sparse, "MAX_INDEX_CHUNKS", 1)
+
+    assert sparse.sparse_index(open_vector_store(), "support") is None
 
 
 def test_an_index_built_across_an_invalidation_is_not_kept(

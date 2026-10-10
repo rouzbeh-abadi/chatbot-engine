@@ -516,11 +516,11 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
     { name = "mcp" },
+    { name = "numpy" },
     { name = "prometheus-client" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pypdf" },
-    { name = "rank-bm25" },
 ]
 
 [package.optional-dependencies]
@@ -562,13 +562,13 @@ requires-dist = [
     { name = "langchain-text-splitters" },
     { name = "langfuse", marker = "extra == 'tracing'", specifier = ">=3" },
     { name = "mcp", specifier = ">=2.0" },
+    { name = "numpy", specifier = ">=2" },
     { name = "prometheus-client", specifier = ">=0.20" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2.13.4" },
     { name = "pydantic-settings", specifier = ">=2.7" },
     { name = "pypdf", specifier = ">=6.16.1" },
     { name = "ragas", marker = "extra == 'eval'", specifier = ">=0.4,<0.5" },
-    { name = "rank-bm25", specifier = ">=0.2" },
     { name = "redis", marker = "extra == 'redis'", specifier = ">=5" },
 ]
 provides-extras = ["chroma", "eval", "redis", "tracing", "postgres", "s3"]
@@ -596,6 +596,7 @@ dev = [
     { name = "moto", extra = ["s3"] },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "rank-bm25" },
     { name = "ruff" },
     { name = "ty" },
 ]
@@ -614,6 +615,7 @@ dev = [
     { name = "moto", extras = ["s3"], specifier = ">=5" },
     { name = "pytest", specifier = ">=8.0" },
     { name = "pytest-asyncio", specifier = ">=0.24" },
+    { name = "rank-bm25", specifier = ">=0.2" },
     { name = "ruff", specifier = ">=0.14" },
     { name = "ty", specifier = ">=0.0.1a0" },
 ]

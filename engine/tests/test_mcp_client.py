@@ -8,10 +8,12 @@ caller's identifiers reach the server as headers, never as tool arguments.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx2
 import pytest
 from mcp.types import CallToolResult, TextContent
 
@@ -413,3 +415,72 @@ def test_an_address_in_a_log_line_keeps_its_host_only() -> None:
     assert without_paths("http://user:pw@host:8200/mcp?key=1") == "http://host:8200/…"
     assert without_paths("http://down") == "http://down"
     assert without_paths("no address here") == "no address here"
+
+
+# --- MCP-3: an answer is bounded in bytes, gzip included ------------------------
+
+
+def _capped(response: Callable[[httpx2.Request], httpx2.Response], limit: int):
+    from chatbot_engine.mcp.capped import CappedTransport
+
+    return httpx2.AsyncClient(
+        transport=CappedTransport(limit, inner=httpx2.MockTransport(response))
+    )
+
+
+async def test_a_compressed_answer_inside_the_limit_reads_as_usual() -> None:
+    import gzip
+
+    asked: list[str] = []
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        asked.append(request.headers["accept-encoding"])
+        return httpx2.Response(
+            200,
+            headers={"content-encoding": "gzip"},
+            content=gzip.compress(b'{"ok": true}'),
+        )
+
+    async with _capped(answer, 1024) as client:
+        response = await client.get("https://mcp.example/mcp")
+
+    assert response.json() == {"ok": True}
+    assert asked == ["gzip, deflate"]
+
+
+async def test_a_small_body_that_inflates_past_the_limit_is_not_read_further() -> None:
+    import gzip
+
+    from chatbot_engine.mcp.capped import McpResponseRefusedError
+
+    bomb = gzip.compress(b"a" * (8 * 1024 * 1024))
+    assert len(bomb) < 64 * 1024
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers={"content-encoding": "gzip"}, content=bomb)
+
+    async with _capped(answer, 64 * 1024) as client:
+        with pytest.raises(McpResponseRefusedError, match="more than 65,536 bytes"):
+            await client.get("https://mcp.example/mcp")
+
+
+async def test_a_plain_answer_past_the_limit_is_refused() -> None:
+    from chatbot_engine.mcp.capped import McpResponseRefusedError
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, content=b"a" * 100_000)
+
+    async with _capped(answer, 64 * 1024) as client:
+        with pytest.raises(McpResponseRefusedError):
+            await client.get("https://mcp.example/mcp")
+
+
+async def test_an_encoding_that_was_not_asked_for_is_refused() -> None:
+    from chatbot_engine.mcp.capped import McpResponseRefusedError
+
+    def answer(request: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(200, headers={"content-encoding": "br"}, content=b"x")
+
+    async with _capped(answer, 1024) as client:
+        with pytest.raises(McpResponseRefusedError, match="'br'"):
+            await client.get("https://mcp.example/mcp")

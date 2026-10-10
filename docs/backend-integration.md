@@ -104,7 +104,7 @@ end-user permissions. The backend decides who may ask.
 | `GET` | `/documents?project_id=…` | List what is indexed |
 | `POST` | `/documents/{doc_id}/reindex?project_id=…` | Rebuild a document from its stored original, optionally with new `chunking_strategy`, `chunk_size` or `chunk_overlap`; see [chunking.md](chunking.md) |
 | `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document |
-| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (`503` with `Retry-After` past that). A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed, `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
+| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (past that a reading waits up to 5 s for its turn, then `503` with `Retry-After`), and a PDF is parsed for at most `ENGINE_EXTRACT_PARSE_MB` (4) of page content. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed, `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
 | `POST` | `/judge` | Answer a dataset of cases and grade the answers against a rubric (`judge_prompt`), at temperature 0, by the project's model or `judge_model`. The cases are answered with the chatbot's tools offered but never run; a case whose turn failed or passed `ENGINE_TURN_DEADLINE_S` has `score: null` and a `reason` starting `error:`. See [agents.md](agents.md#evaluations) |
 | `POST` | `/eval/rag` | Score retrieval with RAGAS on cases with reference answers; `unscored` counts, per metric, the cases that could not be scored. See [retrieval.md](retrieval.md#evaluating-a-change) |
 
@@ -285,7 +285,8 @@ killed at `ENGINE_EXTRACT_TIMEOUT_S`, reading only as far as an attachment
 goes, with pypdf's inflation cap lowered, and its own rate
 (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`); a document flood cannot throttle
 answers, nor the other way round, and `ENGINE_EXTRACT_CONCURRENCY` readings
-at once, past which a reading is refused with 503. The vision call that reads
+at once, past which a reading waits up to 5 seconds and is then refused with
+503. The vision call that reads
 an image is not traced, whichever `ENGINE_TRACING` names: the picture would
 go to the tracer with the call, and a person's photo is not for a third party
 to keep; what the call cost is in the answer's `usage`. It is never retried
@@ -480,10 +481,14 @@ bounds. A PDF is read in a process of its own, as a file sent in a chat is,
 killed after `ENGINE_INDEX_READ_TIMEOUT_S` (60 seconds by default) and with
 its compressed parts capped at 8 MB each, and no document may give the index
 more than `ENGINE_INDEX_MAX_CHARS` (2,000,000 characters by default, about six
-hundred pages): a longer one is refused rather than indexed in part. A new
-version is embedded before the old one is removed, so a provider failure
-during an upload or a re-index leaves the version already indexed answering,
-with the record saying `failed` and why.
+hundred pages): a longer one is refused rather than indexed in part. Nor may
+it make more than `ENGINE_INDEX_MAX_CHUNKS` chunks (20,000 by default), which
+is checked before anything is embedded. A new version is written in full
+before the old one is removed, so a provider failure during an upload or a
+re-index leaves the version already indexed answering, with the record saying
+`failed` and why. An upload while the engine's volume has less than
+`ENGINE_MIN_FREE_MB` free (512 by default) answers `503`, and nothing is
+written.
 
 ### Idempotency
 

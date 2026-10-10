@@ -21,13 +21,13 @@ be read within them is a `failed` record that says why.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 from datetime import UTC, datetime
 from typing import TypedDict
 
 from langchain_core.documents import Document
 
+from chatbot_engine.disk import ensure_room
 from chatbot_engine.documents.blobs import DocumentBlobs
 from chatbot_engine.documents.bounded import (
     INFLATE_MAX_BYTES,
@@ -48,6 +48,7 @@ from chatbot_engine.rag import sparse
 from chatbot_engine.rag.embeddings import resolve_embedding_model
 from chatbot_engine.rag.splitter import ChunkStrategy, DocumentChunker
 from chatbot_engine.rag.vector_store import ChromaChunkStore
+from chatbot_engine.rag.workers import KeyedLocks, run_indexing
 from chatbot_engine.settings import get_settings
 from chatbot_engine.untrusted import instruction_warnings
 
@@ -188,6 +189,10 @@ def _why(failure: ReadFailed) -> str:
         return "reading it takes more memory than the engine allows"
     said = " ".join(failure.message.split()) or failure.kind
     return said[:_REASON_CHARS]
+
+
+#: One ingest or re-index of a document at a time in this process.
+_indexing = KeyedLocks()
 
 
 class DocumentIngestPipeline:
@@ -378,7 +383,35 @@ class DocumentIngestPipeline:
         A failure anywhere leaves a `failed` record that says why, and the
         version indexed before it, if any, still answering: the store embeds a
         new version before it removes the old one.
+
+        One document at a time in this process: two uploads of it at once
+        would otherwise leave its stored original from one and its chunks
+        and record from the other (docs/review-2026-10.md, INGEST-3).
         """
+        async with _indexing((record.project_id, record.doc_id)):
+            return await self._index_one(
+                record,
+                extractor,
+                data,
+                keep_original=keep_original,
+                embedding_model=embedding_model,
+                chunker=chunker,
+            )
+
+    async def _index_one(
+        self,
+        record: DocumentRecord,
+        extractor: DocumentExtractor,
+        data: bytes,
+        *,
+        keep_original: bool,
+        embedding_model: str,
+        chunker: DocumentChunker | None,
+    ) -> DocumentRecord:
+        # Before anything is written, the record included: a full volume can
+        # hang embedded Chroma for every tenant (DISK-3), and a version
+        # already indexed goes on answering, so its record stays as it is.
+        ensure_room()
         try:
             # The original first: if chunking or embedding fails, the bytes are
             # still there to retry from.
@@ -387,7 +420,7 @@ class DocumentIngestPipeline:
                     doc_id=record.doc_id, data=data, mimetype=record.mimetype
                 )
 
-            chunks, warnings = await asyncio.to_thread(
+            chunks, warnings = await run_indexing(
                 self._split, extractor, data, record, chunker or self._chunker
             )
 
@@ -466,4 +499,12 @@ class DocumentIngestPipeline:
                 "filename": record.filename,
             },
         )
+        # Before anything is embedded, so a refused document costs nothing.
+        max_chunks = get_settings().index_max_chunks
+        if len(chunks) > max_chunks:
+            raise DocumentRejectedError(
+                f"{record.filename!r} makes {len(chunks):,} chunks, more than "
+                f"the {max_chunks:,} one document may give the index -- split "
+                "it into smaller files, or use larger chunks"
+            )
         return chunks, instruction_warnings(extracted.text)

@@ -21,7 +21,10 @@ is deleted as soon as it ends.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import logging
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -32,6 +35,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from chatbot_engine.models.workflow import WorkflowSpec
 from chatbot_engine.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -48,6 +53,12 @@ class Pause:
 def spec_hash(spec: WorkflowSpec) -> str:
     """A fingerprint of the workflow, so a resume can tell it was edited."""
     return hashlib.sha256(spec.model_dump_json(by_alias=True).encode()).hexdigest()
+
+
+#: `PRAGMA auto_vacuum`'s value for INCREMENTAL.
+_INCREMENTAL = 2
+#: How large the write-ahead log is left after a checkpoint.
+_WAL_BYTES = 4 * 1024 * 1024
 
 
 class Pauses:
@@ -80,6 +91,23 @@ class Pauses:
 
             path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = await aiosqlite.connect(str(path))
+            # So the room a forgotten turn took goes back to the volume, which
+            # every tenant's index shares: pages freed as they are deleted
+            # (`incremental_vacuum` in `forget`), and a write-ahead log cut
+            # back after it is checkpointed (docs/review-2026-10.md,
+            # WORKFLOW-4). A file made before this is rebuilt once to it.
+            async with self._conn.execute("PRAGMA auto_vacuum") as cursor:
+                row = await cursor.fetchone()
+            if row is None or row[0] != _INCREMENTAL:
+                await self._conn.execute("PRAGMA auto_vacuum = INCREMENTAL")
+                try:
+                    # Rewrites the file, so it needs as much room again; with
+                    # too little, turns still pause, only the room is not
+                    # given back yet.
+                    await self._conn.execute("VACUUM")
+                except sqlite3.OperationalError as exc:
+                    logger.warning("checkpoint file not rebuilt: %s", exc)
+            await self._conn.execute(f"PRAGMA journal_size_limit = {_WAL_BYTES}")
             await self._conn.execute(
                 "CREATE TABLE IF NOT EXISTS workflow_pauses ("
                 " thread_id TEXT PRIMARY KEY, project_id TEXT NOT NULL,"
@@ -193,6 +221,14 @@ class Pauses:
                 "DELETE FROM workflow_pauses WHERE thread_id = ?", (thread_id,)
             )
             await self._conn.commit()
+            # Give the freed pages back to the volume, and cut the log back.
+            # Each read to its end: a pragma left part-read holds the
+            # connection, and one step of this one frees one page. Skipped
+            # while another writer holds the file; the next forget does it.
+            with contextlib.suppress(sqlite3.OperationalError):
+                for pragma in ("incremental_vacuum", "wal_checkpoint(TRUNCATE)"):
+                    async with self._conn.execute(f"PRAGMA {pragma}") as cursor:
+                        await cursor.fetchall()
 
     async def _prune(self) -> None:
         cutoff = time.time() - self._ttl_s

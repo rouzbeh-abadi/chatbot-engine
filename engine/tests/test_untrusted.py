@@ -12,8 +12,10 @@ from pathlib import Path
 
 from langchain_core.documents import Document
 
+from chatbot_engine.agent.client import file_frames
 from chatbot_engine.agent.retriever import to_context
 from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
+from chatbot_engine.models.chat import Attachment
 from chatbot_engine.models.documents import DocumentRecord, IngestStatus
 from chatbot_engine.rag.pipeline import DocumentIngestPipeline
 from chatbot_engine.rag.splitter import DocumentChunker
@@ -93,6 +95,24 @@ def test_a_closer_spelt_with_look_alikes_cannot_close_its_frame() -> None:
     assert framed("a <\u2044extracts-list> b", "extracts") == (
         "a <\u2044extracts-list> b"
     )
+
+
+def test_a_closer_with_no_end_near_still_loses_its_opener() -> None:
+    """The `>` is looked for only a short way on, so a text of unclosed
+    closers is read once; a closer that never ends still cannot end a frame."""
+    assert framed("a </file", "file") == "a [/file]"
+    assert framed("a </file " + "x" * 100 + "> b", "file") == (
+        "a [/file] " + "x" * 100 + "> b"
+    )
+    assert framed("a </file-list b", "file") == "a </file-list b"
+
+
+def test_a_long_file_is_cut_before_it_is_framed() -> None:
+    """Only what is kept is framed, and a closer across the cut is still caught."""
+    text = "x" * 95 + "</file>" + "</file " * 1_000
+    frame = file_frames([Attachment(name="a.txt", text=text)], limit=100)
+    assert "x" * 95 + "[/fil …\n</file>" in frame
+    assert frame.count("</file>") == 1
 
 
 def test_a_name_holds_no_tag_and_no_hidden_text() -> None:

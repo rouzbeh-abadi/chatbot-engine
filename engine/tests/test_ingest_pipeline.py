@@ -192,6 +192,17 @@ async def test_a_record_from_before_chunking_was_recorded_stays_current() -> Non
     assert chunker.produced == []
 
 
+def test_an_overlap_over_half_the_chunk_is_refused() -> None:
+    """Each piece then starts at least half a piece on, so a document is
+    embedded at most about twice; just under the size, text with no spaces
+    was embedded a hundred times over."""
+    from chatbot_engine.rag.splitter import ChunkingError, DocumentChunker
+
+    DocumentChunker(chunk_size=100, chunk_overlap=50)
+    with pytest.raises(ChunkingError, match="at most half"):
+        DocumentChunker(chunk_size=100, chunk_overlap=51)
+
+
 async def test_an_overlap_as_long_as_the_chunk_is_refused() -> None:
     from chatbot_engine.rag.splitter import ChunkingError
 

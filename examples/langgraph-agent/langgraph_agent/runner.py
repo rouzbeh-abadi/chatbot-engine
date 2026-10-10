@@ -37,7 +37,10 @@ async def run_graph(
 
     async def drive() -> None:
         try:
-            result = await graph.ainvoke(state, config)
+            # Saved once, when the graph pauses or ends, not after every step:
+            # each save is every channel whole, tool results included
+            # (docs/review-2026-10.md, WORKFLOW-4).
+            result = await graph.ainvoke(state, config, durability="exit")
             if outcome is not None:
                 outcome["values"] = result
         finally:

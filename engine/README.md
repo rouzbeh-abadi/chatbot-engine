@@ -80,13 +80,17 @@ Two bounds on reading documents for `POST /extract` are not rate limits, and
 zero is not "off" for them (the engine refuses to start): `ENGINE_EXTRACT_TIMEOUT_S`
 (20) is how long one reading may take before it is refused, and
 `ENGINE_EXTRACT_CONCURRENCY` (2) how many may run at once, past which a reading
-is refused with `503` and `Retry-After`.
+waits up to 5 seconds and is then refused with `503` and `Retry-After`.
+`ENGINE_EXTRACT_PARSE_MB` (4) is how much page content a PDF is parsed for.
 
 Knowledge documents have the same kind of bounds when they are indexed:
-`ENGINE_INDEX_READ_TIMEOUT_S` (60) and `ENGINE_INDEX_MAX_CHARS` (2,000,000). A
+`ENGINE_INDEX_READ_TIMEOUT_S` (60), `ENGINE_INDEX_MAX_CHARS` (2,000,000) and
+`ENGINE_INDEX_MAX_CHUNKS` (20,000), and an upload is refused with `503` while
+the volume has less than `ENGINE_MIN_FREE_MB` (512) free. A
 turn ends at `ENGINE_TURN_DEADLINE_S` (120) with the assistant's
 `unavailable_message`; a request body over `ENGINE_MAX_BODY_BYTES` is a `413`;
-a model reads at most `ENGINE_TOOL_RESULT_CHARS` of one tool result, and a
+a tool server's answer may be at most `ENGINE_MCP_MAX_RESPONSE_BYTES`, a
+model reads at most `ENGINE_TOOL_RESULT_CHARS` of one tool result, and a
 prompt holds at most `ENGINE_PROMPT_CHARS`, the oldest history going first.
 
 Set `ENGINE_ENV=production` and the engine refuses to start without a key at

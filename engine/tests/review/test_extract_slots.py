@@ -97,9 +97,6 @@ def _fresh_slots() -> None:
 # --- added in verification ---------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-12 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_one_callers_crafted_files_do_not_lock_out_another_caller(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -138,9 +135,6 @@ def test_one_callers_crafted_files_do_not_lock_out_another_caller(
     assert other.status_code == 200, (other.status_code, other.text)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-12 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_small_pdf_with_no_text_does_not_hold_a_slot_for_the_whole_deadline() -> None:
     deadline = 4.0
     started = time.perf_counter()

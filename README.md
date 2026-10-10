@@ -459,8 +459,11 @@ column and what a run costs.
 - **Formats.** The knowledge base takes PDF, plain text and Markdown. A
   scanned PDF has no text until it has been through OCR, which the engine
   does not do. By default one document gives the index at most 2,000,000
-  characters (`ENGINE_INDEX_MAX_CHARS`), and a PDF must be read within 60
-  seconds (`ENGINE_INDEX_READ_TIMEOUT_S`).
+  characters (`ENGINE_INDEX_MAX_CHARS`) in at most 20,000 chunks
+  (`ENGINE_INDEX_MAX_CHUNKS`), and a PDF must be read within 60 seconds
+  (`ENGINE_INDEX_READ_TIMEOUT_S`).
+- **Keyword search on very large projects.** A project of more than 100,000
+  chunks is searched by vector alone.
 - **Languages in keyword search.** The BM25 half of hybrid retrieval splits
   words at spaces, so for Chinese, Japanese or Thai the vector half carries
   the question alone.

@@ -139,9 +139,14 @@ class DocumentChunker:
         self._overlap = (
             chunk_overlap if chunk_overlap is not None else settings.chunk_overlap
         )
-        if self._overlap >= self._size:
+        # At most half: each piece then starts at least half a piece after
+        # the one before, so a document is embedded at most about twice.
+        # Just under the size, text with no spaces moved one character per
+        # piece, a hundred times the document (docs/review-2026-10.md,
+        # INGEST-1).
+        if self._overlap * 2 > self._size:
             raise ChunkingError(
-                f"chunk_overlap ({self._overlap}) must be smaller than "
+                f"chunk_overlap ({self._overlap}) can be at most half of "
                 f"chunk_size ({self._size})"
             )
         self._splitter = RecursiveCharacterTextSplitter(

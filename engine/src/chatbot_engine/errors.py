@@ -27,6 +27,12 @@ class DocumentRejectedError(EngineError):
     """
 
 
+class StorageFullError(EngineError):
+    """The engine's volume is below its free-space floor, so nothing more is
+    written to it. Mapped to 503: the request was fine, and works again once
+    room is made."""
+
+
 #: The most of a provider's reason passed on; its body can be long.
 PROVIDER_REASON_CHARS = 500
 
