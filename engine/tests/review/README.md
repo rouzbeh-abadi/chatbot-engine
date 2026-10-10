@@ -22,6 +22,7 @@ in-process transports.
 | `test_extract_slots.py` | INGEST-12 |
 | `test_index_crashes.py` | INGEST-13 to -16; WORKFLOW-8 |
 | `test_deletion.py` | INGEST-4, INGEST-17 |
+| `test_disk.py` | DISK-1 to DISK-4; WORKFLOW-4, WORKFLOW-5, INGEST-4 |
 | `test_usage.py` | TURN-8, INGEST-18, INGEST-19 |
 | `test_retrieval.py` | RETRIEVAL-1 to -6 |
 | `test_turn.py` | TURN-1, -2, -4, -5, -6, -8; API-4, API-5, MCP-6 |
@@ -36,5 +37,6 @@ in-process transports.
 
 Some tests start a real `uvicorn` process and stop it with SIGTERM and
 SIGKILL, so the folder takes a few minutes. The test that runs the engine as
-PID 1 (`test_index_crashes.py`) needs root and `unshare`, and is skipped
-without them, as on GitHub's runners.
+PID 1 (`test_index_crashes.py`) needs root and `unshare`, and the full-volume
+tests in `test_disk.py` need root to mount a small tmpfs; they skip without
+it, as on GitHub's runners.
