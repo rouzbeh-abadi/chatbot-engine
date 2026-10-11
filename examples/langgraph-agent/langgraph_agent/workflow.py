@@ -47,6 +47,7 @@ from chatbot_engine.agent.client import (
     finish_reason_of,
     price_usage,
     prompt_messages,
+    prompt_size,
     run_tool_calls,
     stream_reply,
     transcript,
@@ -707,7 +708,8 @@ class WorkflowAgent:
                     spoken unless the step keeps the reply in a variable."""
                     reply: AIMessageChunk | None = None
                     async for item in stream_reply(
-                        lambda: runnable.astream(messages + new)
+                        lambda: runnable.astream(messages + new),
+                        prompt_chars=prompt_size(messages + new),
                     ):
                         if isinstance(item, str):
                             if node.var is None:
@@ -757,6 +759,8 @@ class WorkflowAgent:
                         self._tools,
                         server_for,
                         invalid=reply.invalid_tool_calls,
+                        # What the step's prompt has left (MCP-6).
+                        room=get_settings().prompt_chars - prompt_size(messages + new),
                     ):
                         if isinstance(item, ToolMessage):
                             new.append(item)
@@ -799,7 +803,8 @@ class WorkflowAgent:
                 async for item in stream_reply(
                     lambda: model.astream(
                         prompt, config=run_config(request, name=f"condition:{node.id}")
-                    )
+                    ),
+                    prompt_chars=prompt_size(prompt),
                 ):
                     if not isinstance(item, str):
                         reply = item
@@ -998,7 +1003,8 @@ class WorkflowAgent:
             async for item in stream_reply(
                 lambda: model.astream(
                     prompt, config=run_config(request, name=f"ask:{node.id}")
-                )
+                ),
+                prompt_chars=prompt_size(prompt),
             ):
                 if not isinstance(item, str):
                     reply = item
@@ -1179,7 +1185,9 @@ class WorkflowAgent:
                     prior=state.get("messages", [])[state.get("since", 0) :],
                 )
                 reply: AIMessageChunk | None = None
-                async for item in stream_reply(lambda: model.astream(messages)):
+                async for item in stream_reply(
+                    lambda: model.astream(messages), prompt_chars=prompt_size(messages)
+                ):
                     if isinstance(item, str):
                         await events.put(TokenEvent(text=item))
                     else:

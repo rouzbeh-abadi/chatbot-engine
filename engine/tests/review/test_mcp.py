@@ -501,9 +501,6 @@ async def test_mcp5_a_tool_description_loses_its_invisible_characters(net) -> No
 # --- MCP-6: a turn's tool results are outside every prompt budget -----------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="MCP-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_mcp6_tool_results_are_kept_within_the_prompt_budget(
     net, monkeypatch: pytest.MonkeyPatch
 ) -> None:

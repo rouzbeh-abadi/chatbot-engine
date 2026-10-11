@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.28
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.29
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.28"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.29"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -338,7 +338,10 @@ A JSON body over `ENGINE_MAX_BODY_BYTES` (8 MiB by default) is refused with
 `ENGINE_PROMPT_CHARS` (400,000 characters by default): the oldest turns of
 `history` are left out first, and when even no history is too much, the last
 extracts go, then each attachment is cut to an even share. The system prompt
-and the message are never cut.
+and the message are never cut. Since 0.1.29 the turn's own tool results fit
+within it too: each is cut to the room the prompt has left, a call there is
+no room for is not run, and one model reply runs at most
+`ENGINE_MAX_TOOL_CALLS_PER_REPLY` calls (10).
 
 ---
 
@@ -368,7 +371,7 @@ Read it line by line and switch on `type`.
 | `token` | `text` | Append to the answer |
 | `tool_call_started` | `call_id`, `tool`, `server`, `arguments` | Show progress |
 | `tool_call_finished` | `call_id`, `tool`, `ok`, `duration_ms`, `error` | Pair with `started` by `call_id` |
-| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model`, `utility_input_tokens`, `utility_output_tokens`, `utility_model` | Display or bill cost. Tokens cover every model call in the turn; the `utility_` counts are the part spent on `ENGINE_UTILITY_MODEL` (the query rewrite, the rerank, a workflow's condition step), so that part can be priced at its own rate, and `utility_model` is null when those calls ran on the answer model. `cost_usd` is what the provider billed when every model call in the turn reported it, as OpenRouter does, whichever of its providers served each call; otherwise priced from `ENGINE_PRICING`, and null when that does not list the model |
+| `usage` | `input_tokens`, `output_tokens`, `total_tokens`, `cost_usd`, `model`, `utility_input_tokens`, `utility_output_tokens`, `utility_model` | Display or bill cost. Tokens cover every model call in the turn; the `utility_` counts are the part spent on `ENGINE_UTILITY_MODEL` (the query rewrite, the rerank, a workflow's condition step), so that part can be priced at its own rate, and `utility_model` is null when those calls ran on the answer model. `cost_usd` is what the provider billed when every model call in the turn reported it, as OpenRouter does, whichever of its providers served each call; otherwise priced from `ENGINE_PRICING`, and null when that does not list the model. Since 0.1.29 every call counts: one whose provider reported no usage has its tokens estimated from what it read and wrote, and so has an attempt that broke after the provider had begun, retried or not, and a call the turn's deadline or an error cut short; `cost_usd` is then null, never a partial bill, so price the turn from its tokens |
 | `input_required` | `thread_id`, `node`, `prompt`, `input`, `options[]`, `optional`, `skip_label`, `placeholder`, `error` | A workflow turn paused on a question. Show the control for `input` (`text`, `phone`, `email`, `url`, or `choice` with `options[]` of `{value, label}`); answer with `resume` |
 | `error` | `code`, `message` | The turn failed after the response started |
 | `done` | `finish_reason` | Always last. `stop`, also when the turn ended with the assistant's `unavailable_message` (a failed tool step or hand-off, or the turn's deadline); `length` when `max_output_tokens` cut the answer (show the visitor it was shortened); `tool_limit` when the model was still asking for tools after `max_tool_iterations` rounds (it then answered once more with its tools off); `input_required` after an `input_required` event; `error` after an `error` event |

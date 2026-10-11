@@ -551,6 +551,8 @@ async def test_the_rewrite_and_rerank_are_counted_in_the_turns_usage(
         "calls": 2,
         "billed_calls": 0,
         "billed_nano_usd": 0,
+        # Both reported their tokens.
+        "estimated_calls": 0,
     }
 
 

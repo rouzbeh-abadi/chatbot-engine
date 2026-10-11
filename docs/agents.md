@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.28
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.29
 COPY my-agent /opt/my-agent
 RUN pip install /opt/my-agent
 ```
@@ -125,7 +125,9 @@ also keeps it under `ENGINE_PROMPT_CHARS` (400,000 characters by default): the
 history takes the room the rest leaves, its oldest turns left out first; when
 no history at all is still too much, the last extracts go, then each file is
 cut to an even share. The system prompt, the message, and the replies and
-tool results the turn has already produced are not cut to fit.
+tool results the turn has already produced are not cut to fit; pass
+`run_tool_calls` the room they leave (`room`), as the engine's agents do
+since 0.1.29, and each result is cut to fit it.
 
 **Model calls.** Stream through `chatbot_engine.agent.client.stream_reply`.
 It yields the reply's text as plain strings as it arrives, then the whole
@@ -146,7 +148,10 @@ forwards the caller's `user_id` and `session_id` to the tool server, reports a
 failed tool as `ok=false` rather than ending the turn, and feeds the result back
 as a `ToolMessage`, cut to `ENGINE_TOOL_RESULT_CHARS` (20,000 characters) with
 a line saying how much was left out, and whole in its `artifact`, which no
-model reads. A call whose arguments were not a JSON object is not made: it is
+model reads. Given `room`, the characters the results may take in the next
+prompt, it cuts each result to what is left and answers a call there is no
+room for as not run; one reply runs at most `ENGINE_MAX_TOOL_CALLS_PER_REPLY`
+calls (10), the rest answered as not run. A call whose arguments were not a JSON object is not made: it is
 reported as failed (`error`: `not called: the arguments were not a JSON
 object`), and the model reads what was wrong in its result and may call again
 in its next round. Two agents that ran tools differently would report them

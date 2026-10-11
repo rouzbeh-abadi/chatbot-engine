@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.28
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.28
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.28
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.28
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.29
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.29
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.29
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.29
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -47,7 +47,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.28 && git push origin v0.1.28
+git tag v0.1.29 && git push origin v0.1.29
 ```
 
 The Release workflow runs the full test suite, publishes the three images, and
@@ -376,6 +376,12 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   `ENGINE_TOOL_RESULT_CHARS` (default 20,000) is the most of one tool result
   the model reads, since a result is sent again with every later model call
   of the turn; the rest is cut, with a line saying how much was left out.
+  Since 0.1.29 the turn's tool results count against `ENGINE_PROMPT_CHARS`
+  too: a result is cut to the room the prompt has left, and a call there is
+  no room for is answered as not run without running.
+  `ENGINE_MAX_TOOL_CALLS_PER_REPLY` (default 10) is the most calls one model
+  reply has run; the rest are answered as not run, and the model may ask
+  again in its next round.
   `ENGINE_MCP_MAX_RESPONSE_BYTES` (default 4 MiB) is the most one answer from
   a tool server may be once inflated. Past it the answer is not read further
   and the call fails, so neither a large answer nor a small compressed one can

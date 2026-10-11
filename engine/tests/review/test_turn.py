@@ -387,9 +387,6 @@ class _BigResultTools(FakeTools):
         return "r" * 5_000
 
 
-@pytest.mark.xfail(
-    strict=True, reason="MCP-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_the_loop_agents_tool_results_count_against_the_prompt_budget(
     monkeypatch,
 ):
@@ -599,9 +596,6 @@ class _SlowAnswer(ScriptedModel):
         yield ChatGenerationChunk(message=_usage_chunk(4_000, 900))
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_turn_stopped_mid_answer_does_not_report_the_rewrite_as_its_whole_spend(
     monkeypatch,
 ):

@@ -18,8 +18,10 @@ from test_agent_parity import FakeTools, ScriptedModel, _no_retrieval
 
 from chatbot_engine.agent.client import (
     EXTRACTS_CUT,
+    NO_ROOM_RESULT,
     REWRITE_TURN_CHARS,
     REWRITE_TURNS,
+    TOO_MANY_CALLS_RESULT,
     clipped_result,
     extracts_within,
     prompt_messages,
@@ -27,7 +29,7 @@ from chatbot_engine.agent.client import (
     transcript,
 )
 from chatbot_engine.models.chat import AssistantConfig, Attachment, ChatRequest, Message
-from chatbot_engine.models.events import TokenEvent
+from chatbot_engine.models.events import TokenEvent, ToolCallFinishedEvent
 from chatbot_engine.settings import get_settings
 
 PROJECT = AssistantConfig(project_id="p", name="n", system_prompt="You help.")
@@ -83,6 +85,64 @@ async def test_the_model_reads_the_cut_result_and_the_message_keeps_the_whole(
     assert len(str(message.content)) < 1_200
     assert "29,000 more characters were left out" in str(message.content)
     assert message.artifact == "r" * 30_000
+
+
+async def test_one_reply_runs_at_most_the_calls_a_reply_may_make(monkeypatch):
+    """A reply asking for more calls than `ENGINE_MAX_TOOL_CALLS_PER_REPLY`
+    has the rest answered as not run, each with a result, as providers
+    require (MCP-6)."""
+    _setting(monkeypatch, "ENGINE_MAX_TOOL_CALLS_PER_REPLY", "3")
+    tools = FakeTools()
+    calls = [
+        {"name": "get_booking_status", "args": {}, "id": f"c{i}"} for i in range(5)
+    ]
+    items = [
+        item
+        async for item in run_tool_calls(
+            calls,
+            ChatRequest(project=PROJECT, message="hi"),
+            tools,
+            {"get_booking_status": "s"},
+        )
+    ]
+
+    assert len(tools.calls) == 3
+    results = [i for i in items if isinstance(i, ToolMessage)]
+    assert [r.tool_call_id for r in results] == [f"c{i}" for i in range(5)]
+    assert [str(r.content) for r in results[3:]] == [TOO_MANY_CALLS_RESULT] * 2
+    finished = [i for i in items if isinstance(i, ToolCallFinishedEvent)]
+    assert [f.ok for f in finished] == [True, True, True, False, False]
+
+
+async def test_results_take_only_the_room_the_prompt_has_left(monkeypatch):
+    """Each result is cut to what is left, and a call there is no room for
+    is not run at all (MCP-6)."""
+    _setting(monkeypatch, "ENGINE_TOOL_RESULT_CHARS", "5000")
+
+    class Verbose(FakeTools):
+        async def call_tool(self, *, name, **kwargs):
+            self.calls.append(name)
+            return "r" * 5_000
+
+    tools = Verbose()
+    calls = [
+        {"name": "get_booking_status", "args": {}, "id": f"c{i}"} for i in range(4)
+    ]
+    items = [
+        item
+        async for item in run_tool_calls(
+            calls,
+            ChatRequest(project=PROJECT, message="hi"),
+            tools,
+            {"get_booking_status": "s"},
+            room=8_000,
+        )
+    ]
+
+    results = [str(i.content) for i in items if isinstance(i, ToolMessage)]
+    assert sum(len(r) for r in results) <= 8_000
+    assert results[-1] == NO_ROOM_RESULT
+    assert len(tools.calls) == len(results) - results.count(NO_ROOM_RESULT)
 
 
 async def test_a_workflow_variable_keeps_the_whole_result(monkeypatch):

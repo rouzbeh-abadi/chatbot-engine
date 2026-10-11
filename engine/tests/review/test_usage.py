@@ -260,9 +260,6 @@ HISTORY = [
 # --- (a) a call that reported no usage makes the others' bill "exact" ----------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_reply_without_its_usage_chunk_does_not_leave_a_partial_bill_presented_as_exact(
     api: TestClient, provider: _Provider
 ) -> None:
@@ -305,9 +302,6 @@ def test_a_reply_without_its_usage_chunk_does_not_leave_a_partial_bill_presented
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_one_call_turn_without_its_usage_chunk_is_not_reported_as_zero_tokens(
     api: TestClient, provider: _Provider
 ) -> None:
@@ -342,9 +336,6 @@ def test_a_one_call_turn_without_its_usage_chunk_is_not_reported_as_zero_tokens(
 # --- (b) a retried attempt's spend is dropped ----------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_retried_attempt_that_had_sent_its_bill_is_counted(
     api: TestClient, provider: _Provider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -392,9 +383,6 @@ def test_a_retried_attempt_that_had_sent_its_bill_is_counted(
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_retried_attempt_that_broke_while_reasoning_is_not_hidden_behind_an_exact_bill(
     api: TestClient, provider: _Provider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -487,9 +475,6 @@ def test_an_image_read_that_timed_out_after_the_provider_started_says_what_it_sp
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_image_read_whose_reply_carried_no_usage_is_not_reported_as_free(
     api: TestClient, provider: _Provider
 ) -> None:
@@ -635,9 +620,6 @@ def test_an_index_that_fails_after_an_embedded_batch_says_what_was_embedded(
 # --- added in verification ---------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_answer_stream_broken_after_its_first_text_does_not_report_the_rewrite_as_exact(
     api: TestClient, provider: _Provider
 ) -> None:

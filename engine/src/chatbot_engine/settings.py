@@ -310,6 +310,13 @@ class Settings(BaseSettings):
     #: variable, and the variable is cut the same way in a step's prompt.
     tool_result_chars: int = Field(default=20_000, ge=1_000)
 
+    #: The most tool calls one model reply may have run. A reply asking for
+    #: more has the rest answered as not run, so the model asks again in its
+    #: next round if it still needs them: a visitor who asks for every order
+    #: from 1 to 200 does not get 200 calls, and 200 results paid for in
+    #: every later round.
+    max_tool_calls_per_reply: int = Field(default=10, ge=1, le=100)
+
     #: The most characters one model call's prompt may hold: the system
     #: prompt, the history, the extracts, the files, the message and the
     #: turn's own tool results. Over it, the oldest turns of the history are

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
 import logging
 import re
 import time
@@ -74,11 +75,26 @@ def empty_totals() -> Totals:
         "billed_nano_usd": 0,
         "billed_calls": 0,
         "calls": 0,
+        # Calls the provider said nothing about, their tokens estimated: the
+        # turn then has no cost of its own (`price_usage`).
+        "estimated_calls": 0,
     }
 
 
 #: Where a reply keeps what the provider billed for it (`BilledChatOpenAI`).
 BILLED_USD = "billed_usd"
+
+#: Where `stream_reply` notes, on the reply it hands back, how long the
+#: prompt was, for a call whose tokens the provider never reported.
+PROMPT_CHARS = "prompt_chars"
+
+#: Where `stream_reply` notes the attempts before this reply that broke
+#: after the provider had begun: each generated, and most likely billed.
+FAILED_ATTEMPTS = "failed_attempts"
+
+#: Characters per token, for a call the provider said nothing about: rough,
+#: but such a call is never reported as having cost nothing.
+CHARS_PER_TOKEN = 4
 
 
 def _billed(usage: object) -> float | None:
@@ -150,18 +166,62 @@ def turn_meter() -> Totals | None:
     return _METER.get()
 
 
+def _output_chars(message: BaseMessage) -> int:
+    """What a reply wrote: its text and the arguments of the calls it made."""
+    calls = getattr(message, "tool_calls", None) or []
+    return len(message.text) + sum(
+        len(json.dumps(call.get("args") or {})) for call in calls
+    )
+
+
+def _spent(message: BaseMessage) -> dict[str, Any]:
+    """What one call spent, as `add_usage` reads it: the provider's counts and
+    bill when it gave them, and what the reply wrote, to estimate from."""
+    return {
+        "usage": dict(getattr(message, "usage_metadata", None) or {}) or None,
+        "billed": (getattr(message, "response_metadata", None) or {}).get(BILLED_USD),
+        "chars": _output_chars(message),
+    }
+
+
 def add_usage(totals: Totals, message: BaseMessage, *, utility: bool = False) -> None:
     """Add one model reply's token counts to `totals`, and to the turn's meter.
 
     `usage_metadata` is present on a reply from a model built with
-    `stream_usage=True`, and absent from one a provider did not report on, so
-    a missing count is treated as zero rather than an error. `utility` marks
-    a reply from the utility model, whose counts are also kept apart.
+    `stream_usage=True`. A reply without it (a provider that left its usage
+    out) was still a call, and most likely billed: it is counted, with its
+    tokens estimated from what it read and wrote, and no bill, so the turn's
+    cost is never the provider's exact bill with a call missing from it
+    (TURN-8). So are the attempts before it that broke after the provider
+    had begun (`FAILED_ATTEMPTS`). `utility` marks a reply from the utility
+    model, whose counts are also kept apart.
     """
-    metadata = getattr(message, "usage_metadata", None)
+    response = getattr(message, "response_metadata", None) or {}
+    prompt_chars = response.get(PROMPT_CHARS)
+    for spent in [*(response.get(FAILED_ATTEMPTS) or []), _spent(message)]:
+        _add_call(totals, spent, prompt_chars, utility=utility)
+
+
+def _add_call(
+    totals: Totals,
+    spent: Mapping[str, Any],
+    prompt_chars: int | None,
+    *,
+    utility: bool = False,
+) -> None:
+    """Add one call's spend (`_spent`) to `totals`, and to the turn's meter."""
+    metadata = spent.get("usage")
+    billed = spent.get("billed")
     if not metadata:
-        return
-    billed = (getattr(message, "response_metadata", None) or {}).get(BILLED_USD)
+        inputs = (prompt_chars or 0) // CHARS_PER_TOKEN
+        outputs = -(-int(spent.get("chars") or 0) // CHARS_PER_TOKEN)
+        metadata = {
+            "input_tokens": inputs,
+            "output_tokens": outputs,
+            "total_tokens": inputs + outputs,
+        }
+        billed = None
+    estimated = not spent.get("usage")
     meter = _METER.get()
     for target in (
         (totals, meter) if meter is not None and meter is not totals else (totals,)
@@ -170,6 +230,8 @@ def add_usage(totals: Totals, message: BaseMessage, *, utility: bool = False) ->
             target[key] = target.get(key, 0) + metadata.get(key, 0)
         # Every call is counted, and the ones that said what they were billed.
         target["calls"] = target.get("calls", 0) + 1
+        if estimated:
+            target["estimated_calls"] = target.get("estimated_calls", 0) + 1
         if isinstance(billed, int | float):
             target["billed_calls"] = target.get("billed_calls", 0) + 1
             target["billed_nano_usd"] = target.get("billed_nano_usd", 0) + round(
@@ -185,7 +247,8 @@ def add_usage(totals: Totals, message: BaseMessage, *, utility: bool = False) ->
 
 
 def usage_of(message: BaseMessage, *, utility: bool = False) -> Totals:
-    """One model reply's token counts as fresh totals; zeros when it reported none."""
+    """One model reply's token counts as fresh totals; estimated when it
+    reported none (`add_usage`)."""
     totals = empty_totals()
     add_usage(totals, message, utility=utility)
     return totals
@@ -719,6 +782,32 @@ def clipped_result(text: str, limit: int | None = None) -> str:
     )
 
 
+def prompt_size(messages: Sequence[BaseMessage]) -> int:
+    """How many characters a list of messages sends: each one's text, and the
+    arguments of the tool calls a reply makes."""
+    size = 0
+    for message in messages:
+        size += len(message.text)
+        for call in getattr(message, "tool_calls", None) or []:
+            size += len(json.dumps(call.get("args") or {}))
+    return size
+
+
+#: What the model reads for a call past `ENGINE_MAX_TOOL_CALLS_PER_REPLY` in
+#: one reply. Short: a reply can ask for many.
+TOO_MANY_CALLS_RESULT = (
+    "Not run: too many calls in one reply. Ask again for what you still need."
+)
+
+#: What the model reads for a call whose result would not fit in the prompt.
+NO_ROOM_RESULT = "Not run: the turn's results have filled the room the prompt has."
+
+#: The least room a call is run for: below it, its result could not be read.
+MIN_RESULT_ROOM = 500
+
+#: Room kept for the line a cut result ends with.
+_CUT_NOTE_ROOM = 100
+
 #: What the model reads for a call whose arguments were not a JSON object.
 #: The streamed reply's parser cannot read them, so the call is not made;
 #: the model is told, and may call the tool again in its next round.
@@ -738,6 +827,7 @@ async def run_tool_calls(
     server_for: Mapping[str, str],
     *,
     invalid: Sequence[InvalidToolCall] = (),
+    room: int | None = None,
 ) -> AsyncIterator[ToolCallStartedEvent | ToolCallFinishedEvent | ToolMessage]:
     """Run the tools the model asked for, narrating each as it goes.
 
@@ -763,13 +853,40 @@ async def run_tool_calls(
             reported as failed and answered with what was wrong, so the
             model can call the tool again, and the reply's every call has a
             result, as providers require.
+        room: The characters every result of these calls may take together
+            in the next model call's prompt (`ENGINE_PROMPT_CHARS` less what
+            the prompt holds already); None for no bound. Each result is cut
+            to fit what is left, and a call there is no room for is answered
+            as not run (`NO_ROOM_RESULT`) without running.
+
+    Only the first `ENGINE_MAX_TOOL_CALLS_PER_REPLY` calls run; the rest are
+    answered as not run (`TOO_MANY_CALLS_RESULT`).
 
     Yields:
         A started event, a finished event, and a `ToolMessage` per call, in order.
     """
+    settings = get_settings()
+    over = list(calls[settings.max_tool_calls_per_reply :])
+    calls = calls[: settings.max_tool_calls_per_reply]
+    # What the results may still take, with room set aside first for the
+    # lines that answer the calls that will not run.
+    left = float("inf") if room is None else float(room)
+    left -= len(TOO_MANY_CALLS_RESULT) * len(over)
+    left -= sum(
+        len(INVALID_ARGUMENTS_TEXT.format(name=call.get("name") or ""))
+        for call in invalid
+    )
     for index, call in enumerate(calls):
         name = call["name"]
         call_id = call["id"] or f"call-{index}"
+        # This call's share: what is left once each call after it has room
+        # for its line should it not run.
+        share = left - (len(calls) - index - 1) * len(NO_ROOM_RESULT)
+        if share < MIN_RESULT_ROOM:
+            left -= len(NO_ROOM_RESULT)
+            for item in _not_run(call, call_id, server_for, NO_ROOM_RESULT, "prompt"):
+                yield item
+            continue
 
         yield ToolCallStartedEvent(
             call_id=call_id,
@@ -806,9 +923,16 @@ async def run_tool_calls(
         # tool_call_id pairs this result with the specific call it answers;
         # a result is a stranger's text too, and loses what a reader cannot see.
         text = visible(result)
-        yield ToolMessage(
-            content=clipped_result(text), artifact=text, tool_call_id=call["id"] or ""
+        content = clipped_result(
+            text, int(min(settings.tool_result_chars, share - _CUT_NOTE_ROOM))
         )
+        left -= len(content)
+        yield ToolMessage(content=content, artifact=text, tool_call_id=call["id"] or "")
+
+    for index, call in enumerate(over, start=len(calls)):
+        call_id = call["id"] or f"call-{index}"
+        for item in _not_run(call, call_id, server_for, TOO_MANY_CALLS_RESULT, "reply"):
+            yield item
 
     for index, call in enumerate(invalid, start=len(calls)):
         name = call.get("name") or ""
@@ -827,6 +951,34 @@ async def run_tool_calls(
             content=INVALID_ARGUMENTS_TEXT.format(name=name),
             tool_call_id=call.get("id") or "",
         )
+
+
+def _not_run(
+    call: ToolCall,
+    call_id: str,
+    server_for: Mapping[str, str],
+    text: str,
+    why: Literal["prompt", "reply"],
+) -> list[ToolCallStartedEvent | ToolCallFinishedEvent | ToolMessage]:
+    """The events and the result of a call that is answered without running."""
+    name = call["name"]
+    error = (
+        "not run: no room left in the prompt"
+        if why == "prompt"
+        else "not run: too many calls in one reply"
+    )
+    return [
+        ToolCallStartedEvent(
+            call_id=call_id,
+            tool=name,
+            server=server_for.get(name),
+            arguments=dict(call["args"]),
+        ),
+        ToolCallFinishedEvent(
+            call_id=call_id, tool=name, ok=False, duration_ms=0, error=error
+        ),
+        ToolMessage(content=text, tool_call_id=call["id"] or ""),
+    ]
 
 
 #: What the model reads for each call it asked for once the turn's tool
@@ -925,9 +1077,23 @@ async def stream_completion(
     # reached. `stream_reply` does the retrying, so the client does none.
     model = build_chat_model(request.project, max_retries=0)
     bound = model.bind_tools(tools) if tools else model
-    messages = prompt_messages(
-        request, context, extra_system=unavailable_note(request.project, tools)
-    )
+    note = unavailable_note(request.project, tools)
+    # This turn's replies and tool results. The prompt is made afresh for
+    # every call with them as `prior`, so the oldest history gives way to
+    # them and the whole stays within `ENGINE_PROMPT_CHARS` (MCP-6).
+    turn: list[BaseMessage] = []
+    messages = prompt_messages(request, context, extra_system=note)
+
+    def results_room() -> int:
+        """What this turn's next results may take: the budget less the prompt
+        without its history, which gives way to them."""
+        bare = prompt_messages(
+            request.model_copy(update={"history": []}),
+            context,
+            extra_system=note,
+            prior=turn,
+        )
+        return get_settings().prompt_chars - prompt_size(bare)
 
     # Tokens accumulate across rounds: a turn with tool calls is several model
     # calls, and reporting only the last one would understate the total.
@@ -941,7 +1107,10 @@ async def stream_completion(
     limit = request.project.max_tool_iterations
     for rounds_done in range(limit + 1):
         reply: AIMessageChunk | None = None
-        async for item in stream_reply(lambda: bound.astream(messages, config=config)):
+        async for item in stream_reply(
+            lambda sent=messages: bound.astream(sent, config=config),
+            prompt_chars=prompt_size(messages),
+        ):
             if isinstance(item, str):
                 yield item
             else:
@@ -954,7 +1123,7 @@ async def stream_completion(
             return
 
         add_usage(totals, reply)
-        messages.append(reply)
+        turn.append(reply)
 
         finish = finish_reason_of(reply)
         if finish == "length" or not asks_for_tools(reply):
@@ -972,20 +1141,26 @@ async def stream_completion(
             tools_provider,
             server_for,
             invalid=reply.invalid_tool_calls,
+            room=results_room(),
         ):
             if isinstance(event, ToolMessage):
-                messages.append(event)
+                turn.append(event)
             else:
                 # A tool started/finished event, on its way to the UI.
                 yield event
+        messages = prompt_messages(request, context, extra_system=note, prior=turn)
 
     # The model was still asking for tools when the rounds ran out. Its calls
     # are answered as not run, and it is called once more with its tools off,
     # so the turn ends with an answer rather than in silence; the `done`
     # event still says why.
-    messages.extend(unanswered(messages[-1], TOOL_LIMIT_RESULT))
+    turn.extend(unanswered(turn[-1], TOOL_LIMIT_RESULT))
+    messages = prompt_messages(request, context, extra_system=note, prior=turn)
     final = without_tools(model, tools)
-    async for item in stream_reply(lambda: final.astream(messages, config=config)):
+    async for item in stream_reply(
+        lambda: final.astream(messages, config=config),
+        prompt_chars=prompt_size(messages),
+    ):
         if isinstance(item, str):
             yield item
         else:
@@ -1022,6 +1197,7 @@ async def stream_reply(
     *,
     retries: int | None = None,
     backoff_s: float = RETRY_BACKOFF_S,
+    prompt_chars: int | None = None,
 ) -> AsyncIterator[str | AIMessageChunk]:
     """One model call, streamed: its text as it arrives, then the whole reply.
 
@@ -1043,11 +1219,23 @@ async def stream_reply(
     This is the one layer that retries a streamed call; the model is built
     with `max_retries=0`, or the client's retries would multiply these.
     Every agent streams through here, so they all get the same retry.
+
+    What each call spent is never lost (TURN-8). An attempt that broke after
+    the provider had begun was generated, and most likely billed: the reply
+    handed back carries it (`FAILED_ATTEMPTS`) for `add_usage`, with the
+    prompt's length (`prompt_chars`, `PROMPT_CHARS`) to estimate a call the
+    provider said nothing about. A call cut short for good (an error, the
+    turn's deadline, a reader gone) goes on the turn's meter, with the
+    attempts before it, since the turn then reports the meter. An attempt
+    refused before anything came back cost nothing, and is not counted.
     """
     attempts = get_settings().provider_max_retries if retries is None else retries
+    failed: list[dict[str, Any]] = []
+    failure = ""
     for attempt in range(attempts + 1):
         reply: AIMessageChunk | None = None
         emitted = False
+        outcome: Literal["cut", "retry", "done"] = "cut"
         try:
             async for chunk in open_stream():
                 # A chat model streams AIMessageChunks; the client library's
@@ -1057,22 +1245,54 @@ async def stream_reply(
                 if piece.text:
                     emitted = True
                     yield piece.text
+            outcome = "done"
         except Exception as exc:
             if emitted or attempt >= attempts or not is_transient(exc):
                 raise
+            outcome = "retry"
+            failure = type(exc).__name__
+        finally:
+            if outcome == "cut":
+                _meter_spent(
+                    [*failed, *([_spent(reply)] if reply is not None else [])],
+                    prompt_chars,
+                )
+        if outcome == "retry":
+            if reply is not None:
+                failed.append(_spent(reply))
             delay = backoff_s * 2**attempt
             logger.warning(
                 "model call failed before its first token (%s); retry %d/%d in %.1fs",
-                type(exc).__name__,
+                failure,
                 attempt + 1,
                 attempts,
                 delay,
             )
-            await asyncio.sleep(delay)
+            try:
+                await asyncio.sleep(delay)
+            except BaseException:
+                _meter_spent(failed, prompt_chars)
+                raise
             continue
         if reply is not None:
+            reply.response_metadata = {
+                **(reply.response_metadata or {}),
+                **({PROMPT_CHARS: prompt_chars} if prompt_chars is not None else {}),
+                **({FAILED_ATTEMPTS: failed} if failed else {}),
+            }
             yield reply
+        elif failed:
+            _meter_spent(failed, prompt_chars)
         return
+
+
+def _meter_spent(spent: Sequence[Mapping[str, Any]], prompt_chars: int | None) -> None:
+    """Put calls that will never be handed back on the turn's meter."""
+    meter = _METER.get()
+    if meter is None:
+        return
+    for call in spent:
+        _add_call(meter, call, prompt_chars)
 
 
 #: The reasons a reply can end that `price_usage` passes on to the `done` event.
@@ -1107,7 +1327,8 @@ def price_usage(
     provider served each call. Otherwise it is priced from the table,
     `ENGINE_PRICING` unless one is passed, at one rate for the whole turn,
     the rewrite's and the rerank's tokens included; null when the table does
-    not list the model. Public because an agent plugin reports cost too, and
+    not list the model, and null when a call's tokens had to be estimated
+    (`add_usage`): a price on a guess would read as a bill. Public because an agent plugin reports cost too, and
     two agents that priced a turn differently would be a bug: this is the one
     place a cost is computed.
     """
@@ -1116,7 +1337,9 @@ def price_usage(
     # A graph agent's usage channel starts empty; a missing count is zero.
     totals = {**empty_totals(), **totals}
     cost: float | None
-    if totals["calls"] > 0 and totals["billed_calls"] == totals["calls"]:
+    if totals["estimated_calls"] > 0:
+        cost = None
+    elif totals["calls"] > 0 and totals["billed_calls"] == totals["calls"]:
         cost = totals["billed_nano_usd"] / 1e9
     elif prices is not None:
         cost = (

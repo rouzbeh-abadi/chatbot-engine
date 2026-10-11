@@ -49,6 +49,7 @@ from chatbot_engine.agent.client import (
     finish_reason_of,
     price_usage,
     prompt_messages,
+    prompt_size,
     run_tool_calls,
     stream_reply,
     unanswered,
@@ -70,6 +71,7 @@ from chatbot_engine.models.events import (
     TokenEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
+from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
 from langgraph_agent.runner import run_graph
 
@@ -164,7 +166,9 @@ class LangGraphAgent:
             """One streamed call, its text pushed as tokens; the whole reply,
             or None when the model produced nothing at all."""
             reply: AIMessageChunk | None = None
-            async for item in stream_reply(lambda: runnable.astream(messages)):
+            async for item in stream_reply(
+                lambda: runnable.astream(messages), prompt_chars=prompt_size(messages)
+            ):
                 if isinstance(item, str):
                     await events.put(TokenEvent(text=item))
                 else:
@@ -206,8 +210,11 @@ class LangGraphAgent:
             invalid = getattr(last, "invalid_tool_calls", []) or []
 
             results: list[BaseMessage] = []
+            # The results take what the prompt has left, so the next model
+            # call stays within `ENGINE_PROMPT_CHARS` (MCP-6).
+            room = get_settings().prompt_chars - prompt_size(state["messages"])
             async for item in run_tool_calls(
-                calls, request, self._tools, server_for, invalid=invalid
+                calls, request, self._tools, server_for, invalid=invalid, room=room
             ):
                 if isinstance(item, ToolMessage):
                     results.append(item)
