@@ -33,7 +33,7 @@ from chatbot_engine.documents.storage import LocalBlobStore
 from chatbot_engine.rag import embeddings as embeddings_module
 from chatbot_engine.rag import vector_store as vector_store_module
 from chatbot_engine.rag.pipeline import doc_id_for
-from chatbot_engine.rag.vector_store import open_vector_store
+from chatbot_engine.rag.vector_store import stored_chunks
 from chatbot_engine.settings import get_settings
 
 PROJECT = "support"
@@ -86,10 +86,7 @@ def _put(
 
 
 def _chunk_texts(doc_id: str) -> list[str]:
-    found = open_vector_store().get(
-        where={"$and": [{"doc_id": doc_id}, {"project_id": PROJECT}]},
-        include=["documents"],
-    )
+    found = stored_chunks(where={"$and": [{"doc_id": doc_id}, {"project_id": PROJECT}]})
     return list(found["documents"] or [])
 
 

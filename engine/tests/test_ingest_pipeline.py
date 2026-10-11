@@ -22,7 +22,7 @@ from chatbot_engine.rag.splitter import DocumentChunker
 from chatbot_engine.rag.vector_store import (
     ChromaChunkStore,
     count_chunks,
-    open_vector_store,
+    stored_chunks,
 )
 from chatbot_engine.settings import get_settings
 
@@ -310,7 +310,7 @@ async def test_a_failed_re_embedding_keeps_the_version_already_indexed(
     the version indexed before still answers."""
     pipeline, registry = _embedding_pipeline()
     first = await _ingest_with(pipeline)
-    before = sorted(open_vector_store().get(include=["documents"])["documents"])
+    before = sorted(stored_chunks()["documents"])
 
     monkeypatch.setattr(DeterministicFakeEmbedding, "embed_documents", _outage)
     with pytest.raises(RuntimeError, match="provider down"):
@@ -320,7 +320,7 @@ async def test_a_failed_re_embedding_keeps_the_version_already_indexed(
     assert stored is not None and stored.status == "failed"
     assert stored.error == "provider down"
     assert count_chunks() == first.chunk_count
-    assert sorted(open_vector_store().get(include=["documents"])["documents"]) == before
+    assert sorted(stored_chunks()["documents"]) == before
 
 
 # --- a document is read within bounds -------------------------------------------

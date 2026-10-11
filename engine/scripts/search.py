@@ -41,7 +41,7 @@ def main() -> int:
         return 1
 
     try:
-        store = load_vector_store()
+        store = load_vector_store(project_id=PROJECT_ID)
     except EmptyVectorStoreError as exc:
         print(exc, file=sys.stderr)
         return 1

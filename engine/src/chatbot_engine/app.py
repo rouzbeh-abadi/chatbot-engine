@@ -6,6 +6,8 @@ being served over HTTP.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -40,6 +42,7 @@ from chatbot_engine.errors import (
     provider_reason,
 )
 from chatbot_engine.observability import RequestIdMiddleware, configure_logging
+from chatbot_engine.rag.vector_store import move_everything
 from chatbot_engine.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -70,7 +73,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.warning("insecure for deployment: %s", problem)
 
     tracing.configure(settings)
+    # Every project's chunks into a collection of its own (0.1.30), in the
+    # background: a project used before its turn is moved then.
+    mover = asyncio.create_task(move_everything())
     yield
+    mover.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await mover
     tracing.flush()
 
 

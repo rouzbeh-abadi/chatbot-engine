@@ -50,7 +50,7 @@ docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.29
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.30
 ```
 
 ```bash
@@ -58,7 +58,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.29"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.30"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -103,8 +103,8 @@ end-user permissions. The backend decides who may ask.
 | `PUT` | `/documents` | Add or replace a document in the knowledge base |
 | `GET` | `/documents?project_id=…` | List what is indexed |
 | `POST` | `/documents/{doc_id}/reindex?project_id=…` | Rebuild a document from its stored original, optionally with new `chunking_strategy`, `chunk_size` or `chunk_overlap`; see [chunking.md](chunking.md) |
-| `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document. An upload of it under way is cancelled: it answers `409` and keeps nothing |
-| `DELETE` | `/projects/{project_id}` | Since 0.1.28: remove everything kept for a project, for a caller deleting the chatbot it is. Every document with its chunks and stored original, chunks no record names, uploads under way (each answers `409` and keeps nothing), and the workflow turns that paused on a question, with the answers they held. Uploads to the project are then refused (`409`) for ten minutes, so a crawl still running cannot put pages back. Answers `{project_id, knowledge: {documents, orphaned_chunks, uploads_cancelled}, paused_turns}` |
+| `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document. An upload of it under way is cancelled: it answers `409` and keeps nothing. Since 0.1.30 the room its chunks took goes back to the volume (see DEPLOYMENT.md, one collection per project) |
+| `DELETE` | `/projects/{project_id}` | Since 0.1.28: remove everything kept for a project, for a caller deleting the chatbot it is. Every document with its chunks and stored original, chunks no record names, uploads under way (each answers `409` and keeps nothing), and the workflow turns that paused on a question, with the answers they held. Uploads to the project are then refused (`409`) for ten minutes, so a crawl still running cannot put pages back. Since 0.1.30 the project's collections are dropped, with their files. Answers `{project_id, knowledge: {documents, orphaned_chunks, uploads_cancelled}, paused_turns}` |
 | `DELETE` | `/projects/{project_id}/sessions/{session_id}` | Since 0.1.28: forget the workflow turns of one session that paused on a question, with the answers they held, for a caller deleting a conversation or everything about the person in it. Answers `{project_id, session_id, paused_turns}` |
 | `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (past that a reading waits up to 5 s for its turn, then `503` with `Retry-After`), and a PDF is parsed for at most `ENGINE_EXTRACT_PARSE_MB` (4) of page content. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed, `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
 | `POST` | `/judge` | Answer a dataset of cases and grade the answers against a rubric (`judge_prompt`), at temperature 0, by the project's model or `judge_model`. The cases are answered with the chatbot's tools offered but never run; a case whose turn failed or passed `ENGINE_TURN_DEADLINE_S` has `score: null` and a `reason` starting `error:`. See [agents.md](agents.md#evaluations) |
@@ -449,7 +449,7 @@ curl -X PUT localhost:8100/documents \
 | `project_id` | The knowledge base this belongs to |
 | `external_id` | The backend's own identifier for the document: a path, a row id, anything stable |
 | `file` | The file |
-| `embedding_model` | Optional. Must match what queries use; the engine keeps one collection per model |
+| `embedding_model` | Optional. Must match what queries use; the engine keeps one collection per model and project |
 | `chunking_strategy` | Optional. `size`, `headings`, or `page`. See [chunking.md](chunking.md) |
 | `chunk_size`, `chunk_overlap` | Optional. The size cap every strategy applies |
 

@@ -338,7 +338,7 @@ def test_the_indexes_kept_stay_within_their_bytes(
     searched longest ago goes, and one larger than all of it is not kept."""
     _seed(client)
     sparse.invalidate()
-    store = open_vector_store()
+    store = open_vector_store(None, "support")
     index = sparse.sparse_index(store, "support")
     assert index is not None
     monkeypatch.setattr(
@@ -371,7 +371,7 @@ def test_a_project_of_too_many_chunks_is_searched_by_vector_alone(
     sparse.invalidate()
     monkeypatch.setattr(sparse, "MAX_INDEX_CHUNKS", 1)
 
-    assert sparse.sparse_index(open_vector_store(), "support") is None
+    assert sparse.sparse_index(open_vector_store(None, "support"), "support") is None
 
 
 def test_an_index_built_across_an_invalidation_is_not_kept(
@@ -388,7 +388,7 @@ def test_an_index_built_across_an_invalidation_is_not_kept(
         return index
 
     monkeypatch.setattr(sparse, "_build", racing)
-    sparse.sparse_index(open_vector_store(), "support")
+    sparse.sparse_index(open_vector_store(None, "support"), "support")
 
     assert not sparse._indexes
 

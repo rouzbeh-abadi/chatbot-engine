@@ -323,7 +323,7 @@ def test_reindexing_an_unknown_document_is_404(client: TestClient) -> None:
 def test_a_purge_removes_every_document_of_the_project_and_refuses_new_ones(
     client: TestClient,
 ) -> None:
-    from chatbot_engine.rag.vector_store import open_vector_store
+    from chatbot_engine.rag.vector_store import stored_chunks
 
     _upload(client, project_id="gone", external_id="a.md")
     _upload(client, project_id="gone", external_id="b.md")
@@ -336,7 +336,7 @@ def test_a_purge_removes_every_document_of_the_project_and_refuses_new_ones(
     assert body["project_id"] == "gone"
     assert body["knowledge"]["documents"] == 2
     assert client.get("/documents", params={"project_id": "gone"}).json() == []
-    chunks = open_vector_store().get(where={"project_id": "gone"}, include=[])
+    chunks = stored_chunks(where={"project_id": "gone"})
     assert chunks["ids"] == []
     # Another project is untouched.
     assert [
@@ -354,9 +354,9 @@ def test_a_purge_removes_chunks_no_record_names(client: TestClient) -> None:
     record was written first."""
     from langchain_core.documents import Document
 
-    from chatbot_engine.rag.vector_store import open_vector_store
+    from chatbot_engine.rag.vector_store import open_vector_store, stored_chunks
 
-    open_vector_store().add_documents(
+    open_vector_store(None, "gone").add_documents(
         [
             Document(
                 page_content="orphan", metadata={"project_id": "gone", "doc_id": "x"}
@@ -368,9 +368,7 @@ def test_a_purge_removes_chunks_no_record_names(client: TestClient) -> None:
     body = client.delete("/projects/gone").json()
 
     assert body["knowledge"]["orphaned_chunks"] == 1
-    assert (
-        open_vector_store().get(where={"project_id": "gone"}, include=[])["ids"] == []
-    )
+    assert stored_chunks(where={"project_id": "gone"})["ids"] == []
 
 
 def test_forgetting_a_session_answers_how_many_paused_turns_went(

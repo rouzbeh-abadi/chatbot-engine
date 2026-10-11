@@ -108,15 +108,12 @@ async def engine(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[httpx.AsyncCl
 # ------------------- DISK-1: a delete gives nothing back to the volume
 
 
-@pytest.mark.xfail(
-    strict=True, reason="DISK-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_deleting_a_tenants_documents_gives_its_space_back(
     engine: httpx.AsyncClient,
 ) -> None:
     """An owner adds a 9 KB source with the chunking ChatFrom lets them pick
-    (Length, piece size 100, overlap 99: the app's bounds are 100-8000 and
-    0-2000, overlap below size), then removes it, four times over. The
+    (Length, piece size 100, overlap 50: since INGEST-1 an overlap may be at
+    most half the size), then removes it, four times over. The
     knowledge base is empty after every round, so the app's own quota (the
     `size_bytes` of the sources listed) never sees anything. The engine's
     volume should be back where it was after the first round."""
@@ -132,7 +129,7 @@ async def test_deleting_a_tenants_documents_gives_its_space_back(
                 "external_id": f"notes-{round_}.txt",
                 "chunking_strategy": "size",
                 "chunk_size": "100",
-                "chunk_overlap": "99",
+                "chunk_overlap": "50",
             },
             files={"file": (f"notes-{round_}.txt", data, "text/plain")},
         )
@@ -572,7 +569,9 @@ async def _search(monkeypatch: pytest.MonkeyPatch, volume: Path, project: str):
     monkeypatch.setenv("ENGINE_CHROMA_DIR", str(volume / "chroma"))
     _fake_vectors(monkeypatch)
     try:
-        hits = await _dense(open_vector_store(), project, "opening hours", 5)
+        hits = await _dense(
+            open_vector_store(None, project), project, "opening hours", 5
+        )
         return f"{len(hits)} hits"
     except Exception as exc:
         return f"{type(exc).__name__}: {str(exc)[:200]}"

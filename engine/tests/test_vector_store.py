@@ -15,12 +15,20 @@ from chatbot_engine.rag.vector_store import (
     EmptyVectorStoreError,
     collection_name,
     count_chunks,
+    find_vector_store,
     load_vector_store,
     open_vector_store,
+    stored_chunks,
 )
 
 LONG = ("Cabin baggage is one bag up to eight kilograms. " * 40).encode()
 SHORT = b"# Baggage\n\nOne bag.\n"
+
+
+def _held(model: str, project_id: str = "support") -> int:
+    """How many chunks a project holds under one embedding model."""
+    store = find_vector_store(model, project_id)
+    return count_chunks(store) if store is not None else 0
 
 
 def _upload(client: TestClient, content: bytes, external_id: str = "baggage.md"):
@@ -79,7 +87,7 @@ def test_chunks_carry_the_project_so_a_query_can_be_scoped(
     """A missing filter would let one project answer another's questions."""
     _upload(client, LONG)
 
-    stored = open_vector_store().get(include=["metadatas"])
+    stored = stored_chunks()
 
     assert {meta["project_id"] for meta in stored["metadatas"]} == {"support"}
     assert all("source" in meta for meta in stored["metadatas"])
@@ -130,7 +138,7 @@ async def test_a_failed_embedding_leaves_the_version_already_indexed(
     from langchain_core.embeddings import DeterministicFakeEmbedding
 
     first = _upload(client, LONG).json()
-    before = open_vector_store().get(include=["documents"])
+    before = stored_chunks()
 
     def outage(self, texts):
         raise RuntimeError("provider down")
@@ -143,7 +151,7 @@ async def test_a_failed_embedding_leaves_the_version_already_indexed(
             chunks=[Document(page_content="new", metadata={"project_id": "support"})],
         )
 
-    after = open_vector_store().get(include=["documents"])
+    after = stored_chunks()
     assert sorted(after["ids"]) == sorted(before["ids"])
     assert sorted(after["documents"]) == sorted(before["documents"])
 
@@ -166,7 +174,7 @@ async def test_a_new_version_replaces_the_old_one_in_place(
 
     await ChromaChunkStore().write(doc_id=doc_id, project_id="support", chunks=chunks)
 
-    stored = open_vector_store().get(include=["documents"])
+    stored = stored_chunks()
     assert len(stored["ids"]) == 2
     assert all(chunk_id.startswith(f"{doc_id}:") for chunk_id in stored["ids"])
     assert sorted(stored["documents"]) == ["part 0", "part 1"]
@@ -189,7 +197,7 @@ async def test_a_failure_part_way_leaves_the_old_version_whole(
     from langchain_core.embeddings import DeterministicFakeEmbedding
 
     first = _upload(client, LONG).json()
-    before = open_vector_store().get(include=["documents"])
+    before = stored_chunks()
     _set(monkeypatch, ENGINE_INDEX_BATCH_SIZE="1")
     calls = []
     original = DeterministicFakeEmbedding.embed_documents
@@ -213,7 +221,7 @@ async def test_a_failure_part_way_leaves_the_old_version_whole(
             ],
         )
 
-    after = open_vector_store().get(include=["documents"])
+    after = stored_chunks()
     assert calls == [1, 1], "one slice landed before the failure"
     assert sorted(after["ids"]) == sorted(before["ids"])
     assert sorted(after["documents"]) == sorted(before["documents"])
@@ -246,7 +254,7 @@ async def test_two_writes_of_one_document_at_once_leave_one_version_whole(
         store.write(doc_id=doc_id, project_id="support", chunks=version("b", 2)),
     )
 
-    left = sorted(open_vector_store().get(include=["documents"])["documents"])
+    left = sorted(stored_chunks()["documents"])
     assert left in (["a 0", "a 1", "a 2"], ["b 0", "b 1"])
 
 
@@ -306,8 +314,8 @@ async def test_a_query_only_meets_vectors_from_its_own_model(
         files={"file": ("baggage.md", LONG, "text/markdown")},
     )
 
-    assert count_chunks(open_vector_store("openai/text-embedding-3-small")) > 0
-    assert count_chunks(open_vector_store("openai/text-embedding-3-large")) == 0
+    assert _held("openai/text-embedding-3-small") > 0
+    assert _held("openai/text-embedding-3-large") == 0
 
 
 async def test_deleting_reaches_a_document_indexed_under_another_model(
@@ -327,7 +335,7 @@ async def test_deleting_reaches_a_document_indexed_under_another_model(
     removed = await ChromaChunkStore().delete(doc_id=doc_id, project_id="support")
 
     assert removed > 0
-    assert count_chunks(open_vector_store("openai/text-embedding-3-large")) == 0
+    assert _held("openai/text-embedding-3-large") == 0
 
 
 async def test_identical_bytes_under_another_model_move_to_its_collection(
@@ -355,11 +363,8 @@ async def test_identical_bytes_under_another_model_move_to_its_collection(
         "openai/text-embedding-3-small",
         "openai/text-embedding-3-large",
     )
-    assert count_chunks(open_vector_store("openai/text-embedding-3-small")) == 0
-    assert (
-        count_chunks(open_vector_store("openai/text-embedding-3-large"))
-        == (large["chunk_count"])
-    )
+    assert _held("openai/text-embedding-3-small") == 0
+    assert _held("openai/text-embedding-3-large") == (large["chunk_count"])
     assert upload("openai/text-embedding-3-large")["status"] == "unchanged"
 
 
@@ -400,7 +405,7 @@ def test_a_legacy_collection_is_not_adopted_by_another_model() -> None:
     )
     reset_vector_store()
 
-    assert count_chunks(open_vector_store("openai/text-embedding-3-large")) == 0
+    assert _held("openai/text-embedding-3-large") == 0
 
 
 def test_an_empty_new_collection_does_not_block_adoption() -> None:
@@ -486,3 +491,275 @@ def test_a_chroma_token_is_sent_in_the_configured_header(
     _chroma_client()
     assert seen["headers"] == {"X-Chroma-Token": "s3cret"}
     reset_vector_store()
+
+
+# --- one collection per project (0.1.30, DISK-1) ---------------------------------
+
+
+def _segments_on_disk() -> set[str]:
+    """The segment folders under the Chroma directory."""
+    from chatbot_engine.rag.vector_store import _SEGMENT
+    from chatbot_engine.settings import get_settings
+
+    root = get_settings().chroma_dir
+    return {p.name for p in root.iterdir() if p.is_dir() and _SEGMENT.match(p.name)}
+
+
+def _segments_named() -> set[str]:
+    """The segments Chroma's own catalogue names."""
+    import sqlite3
+
+    from chatbot_engine.settings import get_settings
+
+    with sqlite3.connect(get_settings().chroma_dir / "chroma.sqlite3") as db:
+        return {row[0] for row in db.execute("SELECT id FROM segments")}
+
+
+def _docs(project_id: str, doc_id: str, n: int) -> list:
+    from langchain_core.documents import Document
+
+    return [
+        Document(
+            page_content=f"{doc_id} part {i}",
+            metadata={"doc_id": doc_id, "project_id": project_id, "source": doc_id},
+        )
+        for i in range(n)
+    ]
+
+
+async def test_each_project_has_a_collection_of_its_own(client: TestClient) -> None:
+    """A search reads only its project's vectors, and a project's knowledge
+    can be dropped whole."""
+    await ChromaChunkStore().write(
+        doc_id="a", project_id="alpha", chunks=_docs("alpha", "a", 3)
+    )
+    await ChromaChunkStore().write(
+        doc_id="b", project_id="beta", chunks=_docs("beta", "b", 2)
+    )
+
+    alpha, beta = find_vector_store(None, "alpha"), find_vector_store(None, "beta")
+    assert alpha is not None and beta is not None
+    assert alpha._collection.name != beta._collection.name
+    assert (count_chunks(alpha), count_chunks(beta)) == (3, 2)
+    assert find_vector_store(None, "gamma") is None, "a search makes no collection"
+
+
+async def test_a_project_whose_last_document_goes_gives_its_files_back(
+    client: TestClient,
+) -> None:
+    """Chroma keeps a deleted vector's room in its collection, and a dropped
+    collection's files: the collection is dropped, and its files removed."""
+    await ChromaChunkStore().write(
+        doc_id="k", project_id="keep", chunks=_docs("keep", "k", 1200)
+    )
+    await ChromaChunkStore().write(
+        doc_id="g", project_id="gone", chunks=_docs("gone", "g", 1200)
+    )
+    assert len(_segments_on_disk()) >= 2, "precondition: both indexes on disk"
+
+    await ChromaChunkStore().delete(doc_id="g", project_id="gone")
+
+    assert find_vector_store(None, "gone") is None
+    assert _segments_on_disk() <= _segments_named(), "a dropped collection left files"
+    assert count_chunks(find_vector_store(None, "keep")) == 1200
+
+
+async def test_a_collection_is_rebuilt_once_its_deleted_chunks_outnumber_its_live_ones(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from chatbot_engine.rag import vector_store as vector_store_module
+
+    monkeypatch.setattr(vector_store_module, "REBUILD_AFTER", 5)
+    store = ChromaChunkStore()
+    await store.write(doc_id="kept", project_id="p", chunks=_docs("p", "kept", 4))
+    await store.write(doc_id="churn", project_id="p", chunks=_docs("p", "churn", 3))
+    before = find_vector_store(None, "p")
+    assert before is not None
+    old_id = before._collection.id
+
+    # Replaced twice: six chunks deleted, four live; then the churned one goes.
+    await store.write(doc_id="churn", project_id="p", chunks=_docs("p", "churn", 3))
+    await store.write(doc_id="churn", project_id="p", chunks=_docs("p", "churn", 3))
+    await store.delete(doc_id="churn", project_id="p")
+
+    after = find_vector_store(None, "p")
+    assert after is not None
+    assert after._collection.id != old_id, "rebuilt into a new collection"
+    assert after._collection.name == before._collection.name
+    assert sorted(stored_chunks(where={"project_id": "p"})["documents"]) == [
+        f"kept part {i}" for i in range(4)
+    ]
+    assert not (after._collection.metadata or {}).get("deleted_chunks")
+    assert _segments_on_disk() <= _segments_named()
+
+
+async def test_a_rebuild_cut_short_is_finished_when_the_collection_is_next_used(
+    client: TestClient,
+) -> None:
+    """The engine stopped after the old collection was dropped and before the
+    new one took its name: it takes it the next time the project is used."""
+    from chatbot_engine.rag.vector_store import _chroma_client, reset_vector_store
+
+    await ChromaChunkStore().write(
+        doc_id="d", project_id="p", chunks=_docs("p", "d", 2)
+    )
+    name = collection_name(None, "p")
+    _chroma_client().get_collection(name).modify(name=f"{name}--new")
+    reset_vector_store()
+
+    store = find_vector_store(None, "p")
+    assert store is not None and store._collection.name == name
+    assert count_chunks(store) == 2
+
+
+async def test_a_purge_drops_every_collection_of_the_project(
+    client: TestClient,
+) -> None:
+    await ChromaChunkStore().write(
+        doc_id="d", project_id="p", chunks=_docs("p", "d", 2)
+    )
+    await ChromaChunkStore("openai/text-embedding-3-large").write(
+        doc_id="e", project_id="p", chunks=_docs("p", "e", 2)
+    )
+
+    assert await ChromaChunkStore().delete_project(project_id="p") == 4
+    assert find_vector_store(None, "p") is None
+    assert find_vector_store("openai/text-embedding-3-large", "p") is None
+    assert _segments_on_disk() <= _segments_named()
+
+
+def _shared_with(chunks: dict[str, int]) -> None:
+    """Chunks in the collection every project shared until 0.1.30."""
+    from chatbot_engine.rag.vector_store import reset_vector_store
+
+    shared = open_vector_store()
+    for project_id, n in chunks.items():
+        shared._collection.add(
+            ids=[f"{project_id}:{i}" for i in range(n)],
+            embeddings=[[0.1] * 64] * n,
+            documents=[f"{project_id} {i}" for i in range(n)],
+            metadatas=[{"project_id": project_id, "doc_id": "d"}] * n,
+        )
+    reset_vector_store()  # the engine restarts on 0.1.30
+
+
+async def test_a_projects_chunks_move_into_its_own_collection_before_it_is_used() -> (
+    None
+):
+    from chatbot_engine.rag.vector_store import ensure_moved
+
+    _shared_with({"alpha": 3, "beta": 2})
+
+    await ensure_moved("alpha")
+
+    alpha = find_vector_store(None, "alpha")
+    assert alpha is not None and count_chunks(alpha) == 3
+    assert count_chunks(open_vector_store()) == 2, "the other project waits its turn"
+
+
+async def test_every_project_is_moved_in_the_background_and_the_shared_collection_dropped() -> (
+    None
+):
+    from chatbot_engine.rag.vector_store import _chroma_client, move_everything
+
+    _shared_with({"alpha": 3, "beta": 2})
+    shared = open_vector_store()
+    # A chunk with no project, which no search could ever have reached.
+    shared._collection.add(ids=["stray"], embeddings=[[0.1] * 64], documents=["stray"])
+
+    await move_everything()
+
+    assert count_chunks(find_vector_store(None, "alpha")) == 3
+    assert count_chunks(find_vector_store(None, "beta")) == 2
+    names = {c.name for c in _chroma_client().list_collections()}
+    assert collection_name() not in names, "the emptied shared collection is dropped"
+    assert _segments_on_disk() <= _segments_named()
+
+
+async def test_a_move_the_volume_has_no_room_for_leaves_the_project_searchable_where_it_was(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from chatbot_engine.errors import StorageFullError
+    from chatbot_engine.rag import vector_store as vector_store_module
+    from chatbot_engine.rag.vector_store import store_to_search, try_to_move
+
+    _shared_with({"alpha": 3})
+
+    def full() -> None:
+        raise StorageFullError("below the free-space floor")
+
+    monkeypatch.setattr(vector_store_module, "ensure_room", full)
+
+    assert await try_to_move("alpha") is False
+    store = store_to_search(None, "alpha", moved=False)
+    assert store is not None
+    found = store.similarity_search("alpha", k=5, filter={"project_id": "alpha"})
+    assert len(found) == 3, "every chunk still where the search reads"
+    assert count_chunks(open_vector_store()) == 3, "nothing deleted from the shared one"
+
+
+async def test_a_rebuild_that_cannot_finish_leaves_the_collection_and_no_part_copy(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from chatbot_engine.errors import StorageFullError
+    from chatbot_engine.rag import vector_store as vector_store_module
+    from chatbot_engine.rag.vector_store import _chroma_client
+
+    monkeypatch.setattr(vector_store_module, "REBUILD_AFTER", 1)
+    store = ChromaChunkStore()
+    await store.write(doc_id="kept", project_id="p", chunks=_docs("p", "kept", 2))
+    await store.write(doc_id="churn", project_id="p", chunks=_docs("p", "churn", 3))
+
+    def full() -> None:
+        raise StorageFullError("below the free-space floor")
+
+    monkeypatch.setattr(vector_store_module, "ensure_room", full)
+    await store.delete(doc_id="churn", project_id="p")  # the rebuild fails, logged
+
+    name = collection_name(None, "p")
+    names = {c.name for c in _chroma_client().list_collections()}
+    assert name in names and f"{name}--new" not in names
+    assert sorted(stored_chunks(where={"project_id": "p"})["documents"]) == [
+        "kept part 0",
+        "kept part 1",
+    ]
+
+
+async def test_a_dropped_collection_takes_a_leftover_copy_with_it(
+    client: TestClient,
+) -> None:
+    """Kept, a copy left by a rebuild the engine stopped mid-way would be
+    taken for one to finish, and bring back deleted chunks."""
+    from chatbot_engine.rag.vector_store import _chroma_client
+
+    await ChromaChunkStore().write(
+        doc_id="d", project_id="p", chunks=_docs("p", "d", 2)
+    )
+    name = collection_name(None, "p")
+    _chroma_client().create_collection(f"{name}--new", embedding_function=None).add(
+        ids=["stale"], embeddings=[[0.1] * 64], documents=["deleted long ago"]
+    )
+
+    await ChromaChunkStore().delete(doc_id="d", project_id="p")
+
+    names = {c.name for c in _chroma_client().list_collections()}
+    assert name not in names and f"{name}--new" not in names
+    assert find_vector_store(None, "p") is None
+
+
+async def test_a_shared_collection_dropped_by_another_move_meanwhile_is_passed_over(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from chatbot_engine.rag import vector_store as vector_store_module
+
+    _shared_with({"alpha": 2})
+    real = vector_store_module._shared_collections
+    monkeypatch.setattr(
+        vector_store_module,
+        "_shared_collections",
+        lambda client: [*real(client), "documents--already-gone"],
+    )
+
+    await vector_store_module.ensure_moved("alpha")
+
+    assert count_chunks(find_vector_store(None, "alpha")) == 2

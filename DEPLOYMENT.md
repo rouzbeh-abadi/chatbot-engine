@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.29
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.29
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.29
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.29
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.30
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.30
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.30
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.30
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -47,7 +47,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.29 && git push origin v0.1.29
+git tag v0.1.30 && git push origin v0.1.30
 ```
 
 The Release workflow runs the full test suite, publishes the three images, and
@@ -315,12 +315,35 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
 
 ## Operational notes
 
+- **One collection per project, and the room a delete gives back.** Since
+  0.1.30 each project has a collection of its own for each embedding model
+  it uses. Chroma 1.5 keeps a deleted vector's room in its collection's
+  index, and keeps a dropped collection's files on disk, so the engine
+  gives the room back itself: a project's collection is dropped when its
+  last document goes or the project is purged, and rebuilt from its live
+  chunks once the chunks deleted from it (re-uploads, re-crawls) outnumber
+  them and pass 2,000. The files a dropped collection leaves are then
+  removed: every folder in `ENGINE_CHROMA_DIR` named like a segment that
+  Chroma's own catalogue (`chroma.sqlite3`) no longer names. Keep that
+  directory for Chroma alone. A Chroma server (`ENGINE_CHROMA_URL`) keeps
+  its own files, and they are not touched. A rebuild holds the project's
+  searches for as long as it copies, seconds for most projects.
+  `chroma.sqlite3` keeps the size it once reached, but reuses the room
+  freed in it, so it no longer grows with what was deleted.
+- **The first start of 0.1.30 moves every project's chunks** out of the one
+  collection per model that every project shared before, into its own: in
+  the background, and a project used before its turn is moved first. The
+  shared collection is dropped once it is empty. The volume needs room for a
+  second copy of the largest project while it moves; with less than
+  `ENGINE_MIN_FREE_MB` free it stops, logs why, and goes on when the
+  project is next used.
 - **What a delete leaves in Chroma's files for a while.** Embedded Chroma
   keeps each write in a log inside `chroma.sqlite3` until the collection's
   index takes it in, about every 1,000 records. A deleted chunk's text and
   vector can stay in that log until then, so a backup or a copy of the
-  volume taken meanwhile still holds them. On a busy engine that is soon;
-  on a quiet one it can be days. `chroma utils vacuum` on the stopped
+  volume taken meanwhile still holds them; a project's whole knowledge goes
+  from it at once when its collection is dropped. On a busy engine that is
+  soon; on a quiet one it can be days. `chroma utils vacuum` on the stopped
   volume, or a Chroma server (`ENGINE_CHROMA_URL`) whose own settings say
   when its log is purged, shortens it.
 - **Unprivileged containers.** Both services run as uid 10001 and the overlay

@@ -171,9 +171,6 @@ def _two_models(monkeypatch: pytest.MonkeyPatch):
     return default, large
 
 
-@pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_collection_found_by_the_delete_sweep_keeps_its_own_models_embedder(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -195,15 +192,12 @@ async def test_a_collection_found_by_the_delete_sweep_keeps_its_own_models_embed
     # Another tenant uploads a document under the default model.
     _put(client, "fares.md", CHUNKS["fares.md"], project_id="alpha")
 
-    store = open_vector_store(LARGE)
+    store = open_vector_store(LARGE, "beta")
     assert store.embeddings is large, (
         "the large model's collection is now bound to the default embedder"
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_after_the_sweep_a_project_on_another_model_can_still_retrieve(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -233,9 +227,6 @@ async def test_after_the_sweep_a_project_on_another_model_can_still_retrieve(
     assert [d.metadata["source"] for d, _ in hits] == ["baggage.md"]
 
 
-@pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_after_the_sweep_a_project_on_another_model_can_still_upload(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -280,7 +271,7 @@ def test_concurrent_searches_on_a_cold_index_build_it_once(client: TestClient) -
     executor, the one every project's vector search also runs on."""
     _seed(client)
     sparse.invalidate()
-    store = open_vector_store()
+    store = open_vector_store(None, "support")
     builds = 0
     lock = threading.Lock()
     original = sparse._build
@@ -315,7 +306,7 @@ def test_a_projects_keyword_index_holds_no_more_than_a_few_times_its_text(
     ]
     weights = [1 / (rank + 1) for rank in range(len(vocab))]
     texts = [" ".join(rng.choices(vocab, weights, k=170))[:1000] for _ in range(2_000)]
-    store = open_vector_store()
+    store = open_vector_store(None, "big")
     for start in range(0, len(texts), 500):
         batch = range(start, start + 500)
         store.add_texts(
@@ -369,7 +360,7 @@ async def test_keyword_search_matches_across_unicode_normalisation_forms(
     }
     _seed(client, chunks)
 
-    index = sparse.sparse_index(open_vector_store(), "support")
+    index = sparse.sparse_index(open_vector_store(None, "support"), "support")
     found = index.search(unicodedata.normalize("NFC", "prix du café crème"), 3)
 
     assert [d.metadata["source"] for d, _ in found][:1] == ["menu.md"], found
@@ -417,9 +408,6 @@ async def test_the_rerank_prompt_is_kept_within_the_prompt_budget(
 # --- a search under a model nothing was indexed with ---------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_search_under_a_model_nothing_was_indexed_with_creates_no_collection(
     client: TestClient,
 ) -> None:

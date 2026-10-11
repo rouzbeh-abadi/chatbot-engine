@@ -25,7 +25,11 @@ from chatbot_engine.documents.sqlite_registry import SqliteDocumentRegistry
 from chatbot_engine.rag import pipeline as pipeline_module
 from chatbot_engine.rag.pipeline import DocumentIngestPipeline, doc_id_for
 from chatbot_engine.rag.splitter import DocumentChunker
-from chatbot_engine.rag.vector_store import ChromaChunkStore, open_vector_store
+from chatbot_engine.rag.vector_store import (
+    ChromaChunkStore,
+    open_vector_store,
+    stored_chunks,
+)
 from chatbot_engine.services.documents import DocumentService
 from chatbot_engine.settings import get_settings
 from chatbot_engine.untrusted import framed
@@ -54,9 +58,8 @@ def _wired() -> tuple[
 
 
 def _stored(project_id: str, doc_id: str) -> list[str]:
-    found = open_vector_store().get(
-        where={"$and": [{"doc_id": doc_id}, {"project_id": project_id}]},
-        include=["documents"],
+    found = stored_chunks(
+        where={"$and": [{"doc_id": doc_id}, {"project_id": project_id}]}
     )
     return list(found["documents"])
 
@@ -297,7 +300,7 @@ async def test_documents_being_indexed_do_not_hold_up_every_chats_retrieval(
     monkeypatch.setattr(pipeline_module, "read_bounded", slow_read)
     pipeline, _, _, _ = _wired()
     await _put(pipeline, b"# Returns\n\nThirty days.\n", project_id="other")
-    store = open_vector_store()
+    store = open_vector_store(None, "other")
 
     uploads = [
         asyncio.create_task(

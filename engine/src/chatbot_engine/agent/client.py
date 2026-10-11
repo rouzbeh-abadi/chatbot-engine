@@ -934,7 +934,7 @@ async def run_tool_calls(
         for item in _not_run(call, call_id, server_for, TOO_MANY_CALLS_RESULT, "reply"):
             yield item
 
-    for index, call in enumerate(invalid, start=len(calls)):
+    for index, call in enumerate(invalid, start=len(calls) + len(over)):
         name = call.get("name") or ""
         call_id = call.get("id") or f"call-{index}"
         yield ToolCallStartedEvent(

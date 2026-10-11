@@ -47,7 +47,7 @@ from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import SourceRef
 from chatbot_engine.rag import sparse
 from chatbot_engine.rag.rerank import rerank
-from chatbot_engine.rag.vector_store import open_vector_store
+from chatbot_engine.rag.vector_store import gate, store_to_search, try_to_move
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
 from chatbot_engine.untrusted import framed, label, unnumbered
@@ -186,31 +186,46 @@ async def retrieve_with_usage(
     candidates = project.retrieval_candidates or settings.retrieval_candidates
     do_rerank = project.rerank if project.rerank is not None else settings.rerank
 
-    store = open_vector_store(project.embedding_model)
+    # The project's own collection (one per project and model since 0.1.30),
+    # its chunks moved there first if they were still in a shared one.
+    moved = await try_to_move(project.project_id)
     if queries is None:
         queries = await rewrite_queries(request, totals)
 
-    # The project's keyword index, the same for every query. In a thread, as
-    # each search is: building it reads and tokenises every chunk the project
-    # has, and a search scores them all, which on the event loop would hold
-    # up every other request in flight.
-    index = (
-        await asyncio.to_thread(sparse.sparse_index, store, project.project_id)
-        if mode == "hybrid"
-        else None
-    )
+    # Searched behind the project's gate, which a rebuild or drop of its
+    # collection waits for, so the collection is not replaced mid-search.
+    async with gate(project.project_id).shared():
+        store = await asyncio.to_thread(
+            lambda: store_to_search(
+                project.embedding_model, project.project_id, moved=moved
+            )
+        )
+        if store is None:
+            # Nothing indexed for the project with its model: no hits.
+            return [], totals
+        found = store
 
-    async def search(
-        query: str,
-    ) -> tuple[list[tuple[Document, float]], list[tuple[Document, float]]]:
-        dense = await _dense(store, project.project_id, query, candidates)
-        if index is None:
-            return dense, []
-        return dense, await asyncio.to_thread(index.search, query, candidates)
+        # The project's keyword index, the same for every query. In a thread,
+        # as each search is: building it reads and tokenises every chunk the
+        # project has, and a search scores them all, which on the event loop
+        # would hold up every other request in flight.
+        index = (
+            await asyncio.to_thread(sparse.sparse_index, found, project.project_id)
+            if mode == "hybrid"
+            else None
+        )
 
-    # All the queries at once: each is an embedding call and a search, and
-    # the turn waits for the slowest rather than for their sum.
-    searched = await asyncio.gather(*(search(query) for query in queries))
+        async def search(
+            query: str,
+        ) -> tuple[list[tuple[Document, float]], list[tuple[Document, float]]]:
+            dense = await _dense(found, project.project_id, query, candidates)
+            if index is None:
+                return dense, []
+            return dense, await asyncio.to_thread(index.search, query, candidates)
+
+        # All the queries at once: each is an embedding call and a search, and
+        # the turn waits for the slowest rather than for their sum.
+        searched = await asyncio.gather(*(search(query) for query in queries))
 
     # Across queries, a chunk keeps its best score. Keyed by content: the same
     # chunk can come back from both searches and from several queries.

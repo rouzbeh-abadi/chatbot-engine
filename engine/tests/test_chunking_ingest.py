@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
-from chatbot_engine.rag.vector_store import open_vector_store
+from chatbot_engine.rag.vector_store import stored_chunks
 
 MARKDOWN = (
     b"# Baggage\nOne cabin bag up to 8 kg.\n\n"
@@ -30,7 +30,7 @@ def _upload(client: TestClient, content: bytes, external_id: str, **form: object
 
 def _stored(doc_id: str) -> list[dict]:
     """The metadata of every chunk stored for one document."""
-    got = open_vector_store().get(where={"doc_id": doc_id}, include=["metadatas"])
+    got = stored_chunks(where={"doc_id": doc_id})
     return list(got["metadatas"])
 
 

@@ -23,7 +23,7 @@ import pytest
 
 from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.rag.pipeline import doc_id_for
-from chatbot_engine.rag.vector_store import ChromaChunkStore, open_vector_store
+from chatbot_engine.rag.vector_store import ChromaChunkStore, stored_chunks
 from chatbot_engine.settings import get_settings
 
 PROJECT = "6f1c0a52-0000-4000-8000-00000000000x"  # a chatbot's uuid in ChatFrom
@@ -94,9 +94,7 @@ def _what_the_engine_still_holds() -> dict[str, object]:
             "SELECT doc_id, external_id, status FROM documents WHERE project_id = ?",
             (PROJECT,),
         ).fetchall()
-    chunks = open_vector_store().get(
-        where={"project_id": PROJECT}, include=["documents"]
-    )
+    chunks = stored_chunks(where={"project_id": PROJECT})
     doc_id = doc_id_for(PROJECT, PAGE)
     blob = settings.blob_dir / doc_id
     return {
@@ -170,9 +168,6 @@ async def test_deleting_a_chatbot_during_its_first_upload_leaves_nothing_of_it(
 # --- INGEST-17: a deleted document's text stays in Chroma's write log -----
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-17 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_deleted_documents_text_is_gone_from_the_vector_store_file(
     engine: httpx.AsyncClient,
 ) -> None:
