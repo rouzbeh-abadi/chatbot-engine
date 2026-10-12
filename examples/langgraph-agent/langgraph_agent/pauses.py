@@ -49,6 +49,11 @@ class Pause:
     session_id: str
     spec_hash: str
     paused_at: float
+    #: The checkpoint it paused at, which the caller's pause id carries: a
+    #: resume claims this pause only, never one the turn made after it
+    #: (docs/review-2026-10.md, WORKFLOW-3). None for a pause recorded
+    #: before 0.1.31.
+    mark: str | None = None
 
 
 def spec_hash(spec: WorkflowSpec) -> str:
@@ -118,7 +123,16 @@ class Pauses:
             from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
             path.parent.mkdir(parents=True, exist_ok=True)
-            self._conn = await aiosqlite.connect(str(path))
+            conn = aiosqlite.Connection(
+                lambda: sqlite3.connect(str(path)), iter_chunk_size=64
+            )
+            # aiosqlite's worker thread would otherwise keep a process that
+            # never called `close` (a script, a server stopped as PID 1)
+            # from exiting at all (docs/review-2026-10.md, WORKFLOW-8).
+            worker = getattr(conn, "_thread", None)
+            if worker is not None:
+                worker.daemon = True
+            self._conn = await conn
             # So the room a forgotten turn took goes back to the volume, which
             # every tenant's index shares: pages freed as they are deleted
             # (`incremental_vacuum` in `forget`), and a write-ahead log cut
@@ -142,6 +156,14 @@ class Pauses:
                 " session_id TEXT NOT NULL, spec_hash TEXT NOT NULL,"
                 " paused_at REAL NOT NULL)"
             )
+            # Each pause's checkpoint, in a table of its own rather than a
+            # column: an engine before 0.1.31 writes `workflow_pauses` with
+            # five values, and on a file it shares with this one, or after a
+            # rollback, would fail on a sixth column.
+            await self._conn.execute(
+                "CREATE TABLE IF NOT EXISTS workflow_pause_marks ("
+                " thread_id TEXT PRIMARY KEY, mark TEXT NOT NULL)"
+            )
             await self._conn.commit()
             saver = AsyncSqliteSaver(self._conn)
             await saver.setup()
@@ -164,6 +186,14 @@ class Pauses:
         # for another turn to pause before it goes (WORKFLOW-5).
         await self._prune_if_due()
         return saver
+
+    async def close(self) -> None:
+        """Close the store's file; the next use opens it again. What the
+        engine's shutdown calls, through the agent that holds it."""
+        async with self._lock:
+            conn, self._conn, self._saver = self._conn, None, None
+        if conn is not None:
+            await conn.close()
 
     async def forget_where(self, project_id: str, session_id: str | None = None) -> int:
         """Forget the paused turns of a project, or of one of its sessions,
@@ -199,7 +229,9 @@ class Pauses:
             self._records[pause.thread_id] = pause
         else:
             await self._conn.execute(
-                "INSERT OR REPLACE INTO workflow_pauses VALUES (?, ?, ?, ?, ?)",
+                "INSERT OR REPLACE INTO workflow_pauses"
+                " (thread_id, project_id, session_id, spec_hash, paused_at)"
+                " VALUES (?, ?, ?, ?, ?)",
                 (
                     pause.thread_id,
                     pause.project_id,
@@ -208,6 +240,16 @@ class Pauses:
                     pause.paused_at,
                 ),
             )
+            if pause.mark is None:
+                await self._conn.execute(
+                    "DELETE FROM workflow_pause_marks WHERE thread_id = ?",
+                    (pause.thread_id,),
+                )
+            else:
+                await self._conn.execute(
+                    "INSERT OR REPLACE INTO workflow_pause_marks VALUES (?, ?)",
+                    (pause.thread_id, pause.mark),
+                )
             await self._conn.commit()
         await self._prune()
 
@@ -218,8 +260,10 @@ class Pauses:
             pause = self._records.get(thread_id)
         else:
             async with self._conn.execute(
-                "SELECT thread_id, project_id, session_id, spec_hash, paused_at"
-                " FROM workflow_pauses WHERE thread_id = ?",
+                "SELECT p.thread_id, p.project_id, p.session_id, p.spec_hash,"
+                " p.paused_at, m.mark FROM workflow_pauses p"
+                " LEFT JOIN workflow_pause_marks m ON m.thread_id = p.thread_id"
+                " WHERE p.thread_id = ?",
                 (thread_id,),
             ) as cursor:
                 row = await cursor.fetchone()
@@ -230,14 +274,22 @@ class Pauses:
         return pause
 
     async def claim(
-        self, thread_id: str, project_id: str, session_id: str
+        self,
+        thread_id: str,
+        project_id: str,
+        session_id: str,
+        mark: str | None = None,
     ) -> Pause | None:
         """Take the paused turn under `thread_id` for one resume, or None.
 
         The record is removed as it is read, in one step, so of two requests
         resuming the same turn only one gets it; the other finds nothing
         waiting, as for a turn that expired. A pause from another project or
-        conversation is neither returned nor removed. The turn's saved state
+        conversation is neither returned nor removed. Only the pause at the
+        checkpoint `mark` names is taken: an answer meant for one question,
+        arriving after the turn has paused on the next, takes nothing. No
+        `mark` (a pause id given out before 0.1.31) takes only a pause
+        recorded without one, for the same reason. The turn's saved state
         stays for the resume to read: a turn that pauses again is recorded
         again, and one that ends forgets its state.
         """
@@ -249,6 +301,7 @@ class Pauses:
                 pause is None
                 or pause.project_id != project_id
                 or pause.session_id != session_id
+                or pause.mark != mark
             ):
                 return None
             del self._records[thread_id]
@@ -257,14 +310,22 @@ class Pauses:
             async with self._conn.execute(
                 "DELETE FROM workflow_pauses"
                 " WHERE thread_id = ? AND project_id = ? AND session_id = ?"
+                " AND (SELECT m.mark FROM workflow_pause_marks m"
+                " WHERE m.thread_id = workflow_pauses.thread_id) IS ?"
                 " RETURNING thread_id, project_id, session_id, spec_hash, paused_at",
-                (thread_id, project_id, session_id),
+                (thread_id, project_id, session_id, mark),
             ) as cursor:
                 row = await cursor.fetchone()
+            if row is not None:
+                await self._conn.execute(
+                    "DELETE FROM workflow_pause_marks WHERE thread_id = ?",
+                    (thread_id,),
+                )
             await self._conn.commit()
             if row is None:
                 return None
-            pause = Pause(*row)
+            claimed, project, session, spec, paused_at = row
+            pause = Pause(claimed, project, session, spec, paused_at, mark)
         if time.time() - pause.paused_at > self._ttl_s:
             await self.forget(thread_id)
             return None
@@ -279,6 +340,9 @@ class Pauses:
         else:
             await self._conn.execute(
                 "DELETE FROM workflow_pauses WHERE thread_id = ?", (thread_id,)
+            )
+            await self._conn.execute(
+                "DELETE FROM workflow_pause_marks WHERE thread_id = ?", (thread_id,)
             )
             await self._conn.commit()
             # Give the freed pages back to the volume, and cut the log back.
@@ -302,6 +366,13 @@ class Pauses:
             ) as cursor:
                 stale = [row[0] for row in await cursor.fetchall()]
             stale += await self._orphans()
+            # Marks of pauses an engine before 0.1.31 forgot, which knows
+            # nothing of them.
+            await self._conn.execute(
+                "DELETE FROM workflow_pause_marks WHERE thread_id NOT IN"
+                " (SELECT thread_id FROM workflow_pauses)"
+            )
+            await self._conn.commit()
         for thread_id in stale:
             await self.forget(thread_id)
 

@@ -104,7 +104,10 @@ def _scored(**similarities: float):
 
 
 @pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-3 in docs/review-2026-10.md: fails until it is fixed"
+    strict=True,
+    reason="RETRIEVAL-3 in docs/review-2026-10.md: kept on purpose (an exact "
+    "keyword match, a code or a name, scores low on meaning), as docs/retrieval.md "
+    "says; ChatFrom's docs now say so too",
 )
 async def test_claim5_no_passage_under_the_floor_reaches_the_model_under_hybrid(
     client: TestClient,
@@ -128,7 +131,10 @@ async def test_claim5_no_passage_under_the_floor_reaches_the_model_under_hybrid(
 
 
 @pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-3 in docs/review-2026-10.md: fails until it is fixed"
+    strict=True,
+    reason="RETRIEVAL-3 in docs/review-2026-10.md: kept on purpose (an exact "
+    "keyword match, a code or a name, scores low on meaning), as docs/retrieval.md "
+    "says; ChatFrom's docs now say so too",
 )
 async def test_claim5_a_keyword_only_hit_with_no_vector_score_reaches_the_model(
     client: TestClient,
@@ -341,9 +347,6 @@ def test_a_projects_keyword_index_holds_no_more_than_a_few_times_its_text(
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-5 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_keyword_search_matches_across_unicode_normalisation_forms(
     client: TestClient,
 ) -> None:
@@ -369,9 +372,6 @@ async def test_keyword_search_matches_across_unicode_normalisation_forms(
 # --- the rerank prompt and the prompt budget ----------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="RETRIEVAL-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_the_rerank_prompt_is_kept_within_the_prompt_budget(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

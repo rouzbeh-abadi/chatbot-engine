@@ -32,6 +32,12 @@ class DocumentDeletedError(EngineError):
     being indexed, or a moment before: nothing of it is kept. Mapped to 409."""
 
 
+class OriginalChangedError(EngineError):
+    """The stored original is not the version the document's record
+    describes, so rebuilding from it would index text nobody sent as that
+    version. Mapped to 409: uploading the document again puts it right."""
+
+
 class StorageFullError(EngineError):
     """The engine's volume is below its free-space floor, so nothing more is
     written to it. Mapped to 503: the request was fine, and works again once

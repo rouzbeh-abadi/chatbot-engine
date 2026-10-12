@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from chatbot_engine.api import dependencies
+from chatbot_engine.api.body_limit import FORM_ROOM
 from chatbot_engine.api.documents import MAX_UPLOAD_BYTES
 from chatbot_engine.models.events import DoneEvent, TokenEvent
 from chatbot_engine.services.chat import ChatService
@@ -127,9 +128,6 @@ async def _asgi(
 
 
 @pytest.mark.parametrize("path,method", [("/documents", "PUT"), ("/extract", "POST")])
-@pytest.mark.xfail(
-    strict=True, reason="API-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_unauthenticated_upload_is_refused_before_its_body_is_read(
     monkeypatch: pytest.MonkeyPatch, path: str, method: str
 ) -> None:
@@ -149,9 +147,6 @@ def test_an_unauthenticated_upload_is_refused_before_its_body_is_read(
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_authenticated_upload_over_the_cap_is_refused_as_it_grows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -184,7 +179,10 @@ def test_an_authenticated_upload_over_the_cap_is_refused_as_it_grows(
     assert biggest_read <= MAX_UPLOAD_BYTES + 1, (
         f"the route held {biggest_read / MB:.1f} MB in memory before its check"
     )
-    assert consumed <= MAX_UPLOAD_BYTES + MB, (
+    # The cap is the file's limit and room for the form beside it (FORM_ROOM),
+    # so a file of exactly the limit still goes through; refused within one
+    # chunk past that.
+    assert consumed <= MAX_UPLOAD_BYTES + FORM_ROOM + MB, (
         f"the engine received {consumed / MB:.1f} MB before refusing"
     )
 
@@ -203,9 +201,6 @@ class _CountingJudge:
         return JudgeReport()
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_one_judge_request_cannot_carry_an_unbounded_run(
     client: TestClient, project: dict[str, object]
 ) -> None:
@@ -228,9 +223,6 @@ def test_one_judge_request_cannot_carry_an_unbounded_run(
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_one_rag_eval_request_cannot_carry_an_unbounded_run(
     client: TestClient, project: dict[str, object]
 ) -> None:
@@ -256,9 +248,6 @@ def test_one_rag_eval_request_cannot_carry_an_unbounded_run(
 # --- API-3: a 422 echoes the secrets it was sent ----------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-5 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_validation_error_does_not_echo_a_servers_header_values(
     client: TestClient, project: dict[str, object]
 ) -> None:
@@ -281,9 +270,6 @@ def test_a_validation_error_does_not_echo_a_servers_header_values(
     assert secret not in response.text, response.text
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-5 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_validation_error_does_not_echo_the_provider_key(
     client: TestClient, project: dict[str, object]
 ) -> None:
@@ -308,9 +294,6 @@ def test_a_validation_error_does_not_echo_the_provider_key(
 # --- API-4: unknown form fields and query parameters are accepted -------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_unknown_upload_field_is_refused(client: TestClient) -> None:
     """docs/backend-integration.md: 'Every model uses extra="forbid". A
     misspelled field is a 422 that names it.' A misspelled form field on the
@@ -326,9 +309,6 @@ def test_an_unknown_upload_field_is_refused(client: TestClient) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_unknown_extract_field_is_refused(client: TestClient) -> None:
     response = client.post(
         "/extract",
@@ -527,9 +507,6 @@ def test_a_forwarded_for_header_does_not_choose_the_rate_limit_bucket(
 # --- API-2b: an evaluation goes on after its caller has gone -----------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-3 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_evaluation_stops_when_its_caller_goes_away(
     monkeypatch: pytest.MonkeyPatch, project: dict[str, object]
 ) -> None:
@@ -694,9 +671,6 @@ def test_a_turn_is_answered_with_the_fake_provider(
     assert "error" not in kinds, _events(response)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_lone_surrogate_in_the_history_does_not_break_the_turn(
     monkeypatch: pytest.MonkeyPatch, project: dict[str, object]
 ) -> None:

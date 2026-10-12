@@ -22,8 +22,11 @@ be read within them is a `failed` record that says why.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
+import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TypedDict
@@ -48,16 +51,19 @@ from chatbot_engine.errors import (
     DocumentDeletedError,
     DocumentRejectedError,
     NotConfiguredError,
+    OriginalChangedError,
 )
 from chatbot_engine.models.documents import DocumentRecord, IngestStatus
 from chatbot_engine.ports.documents import DocumentRegistry
 from chatbot_engine.rag import sparse
 from chatbot_engine.rag.embeddings import resolve_embedding_model
 from chatbot_engine.rag.splitter import ChunkStrategy, DocumentChunker
-from chatbot_engine.rag.vector_store import ChromaChunkStore
+from chatbot_engine.rag.vector_store import ChromaChunkStore, EmbeddedChunks
 from chatbot_engine.rag.workers import KeyedLocks, run_indexing
 from chatbot_engine.settings import get_settings
 from chatbot_engine.untrusted import instruction_warnings
+
+logger = logging.getLogger(__name__)
 
 #: The most of a reader's own words a failed record repeats.
 _REASON_CHARS = 200
@@ -65,8 +71,16 @@ _REASON_CHARS = 200
 
 def doc_id_for(project_id: str, external_id: str) -> str:
     """A stable id, so re-uploading a file overwrites rather than duplicates."""
-    # The NUL separator stops ("a", "bc") from colliding with ("ab", "c").
-    seed = f"{project_id}\x00{external_id}".encode()
+    # The NUL separator stops ("a", "bc") from colliding with ("ab", "c"), as
+    # long as neither holds a NUL itself. One that does is told apart by the
+    # project's length first (docs/review-2026-10.md, INGEST-9): such a seed
+    # has two NULs or more, every other seed exactly one, so none can be
+    # another's. Only an id with a NUL in it changes from what an engine
+    # before 0.1.31 gave it.
+    if "\x00" in project_id or "\x00" in external_id:
+        seed = f"{len(project_id)}:{project_id}\x00{external_id}".encode()
+    else:
+        seed = f"{project_id}\x00{external_id}".encode()
 
     return hashlib.sha256(seed).hexdigest()[:32]
 
@@ -258,6 +272,28 @@ def _was_purged(project_id: str) -> bool:
     return at is not None and time.monotonic() - at <= PURGED_FOR_S
 
 
+@contextlib.asynccontextmanager
+async def _turn(key: tuple[str, str]) -> AsyncIterator[_Upload]:
+    """An ingest or re-index of one document, its turn once the one before
+    it is done (INGEST-3).
+
+    Listed among the uploads under way before it waits, so a delete that
+    arrives meanwhile cancels it too. Whatever it does with the document's
+    record and stored original it reads after its turn has come: read before,
+    they could be an earlier version's, which a failure would then write
+    back over the version that answers.
+    """
+    upload = _Upload()
+    _uploads.setdefault(key, set()).add(upload)
+    try:
+        async with _indexing(key):
+            yield upload
+    finally:
+        _uploads[key].discard(upload)
+        if not _uploads[key]:
+            del _uploads[key]
+
+
 class DocumentIngestPipeline:
     """Turns uploaded bytes into chunks, and remembers what happened."""
 
@@ -292,9 +328,11 @@ class DocumentIngestPipeline:
     ) -> DocumentRecord:
         """Ingest one document and report what happened to it.
 
-        Identical bytes answer `unchanged` and do no work, which is what makes
-        `make seed` cheap to re-run once embedding costs money per chunk; not
-        when they are to be cut or embedded differently from last time.
+        Identical bytes answer `unchanged` and embed nothing, which is what
+        makes `make seed` cheap to re-run once embedding costs money per chunk;
+        not when they are to be cut or embedded differently from last time.
+        The stored original is read to check it is theirs, and stored again
+        when it is not.
 
         Raises:
             UnsupportedDocumentTypeError: No extractor handles `mimetype`.
@@ -306,7 +344,6 @@ class DocumentIngestPipeline:
 
         doc_id = doc_id_for(project_id, external_id)
         content_hash = hashlib.sha256(data).hexdigest()
-        current = await self._registry.get(project_id=project_id, doc_id=doc_id)
 
         # Only when the request actually specifies chunking. Otherwise the
         # chunker this pipeline was wired with stands, which is what keeps it
@@ -325,46 +362,60 @@ class DocumentIngestPipeline:
         effective = chunker or self._chunker
         model = resolve_embedding_model(embedding_model)
 
-        if (
-            current is not None
-            and current.content_hash == content_hash
-            and current.status is not IngestStatus.FAILED
-            and _cut_the_same(current, effective, requested=requested)
-            and _embedded_the_same(
-                current,
-                model,
-                requested=bool(embedding_model),
-                embeds=self._vectors is not None,
+        async with _turn((project_id, doc_id)) as upload:
+            self._still_wanted(upload, project_id, filename)
+            current = await self._registry.get(project_id=project_id, doc_id=doc_id)
+            if (
+                current is not None
+                and current.content_hash == content_hash
+                and current.status is not IngestStatus.FAILED
+                and _cut_the_same(current, effective, requested=requested)
+                and _embedded_the_same(
+                    current,
+                    model,
+                    requested=bool(embedding_model),
+                    embeds=self._vectors is not None,
+                )
+            ):
+                async with _committing((project_id, doc_id)):
+                    self._still_wanted(upload, project_id, filename)
+                    if current.error is not None:
+                        # The bytes of the version that answers, sent again:
+                        # whatever failed since is no longer the news.
+                        current = await self._registry.upsert(
+                            current.model_copy(update={"error": None})
+                        )
+                await self._restore_original(upload, current, data)
+                # `unchanged` describes this call, not the document, so the
+                # stored record keeps the status it earned last time.
+                return current.model_copy(update={"status": IngestStatus.UNCHANGED})
+
+            now = datetime.now(UTC)
+            record = DocumentRecord(
+                doc_id=doc_id,
+                external_id=external_id,
+                project_id=project_id,
+                filename=filename,
+                mimetype=mimetype,
+                size_bytes=len(data),
+                content_hash=content_hash,
+                status=IngestStatus.RECEIVED,
+                created_at=current.created_at if current is not None else now,
+                updated_at=now,
+                **_settings_of(effective),
             )
-        ):
-            # `unchanged` describes this call, not the document, so the stored
-            # record keeps the status it earned last time.
-            return current.model_copy(update={"status": IngestStatus.UNCHANGED})
 
-        now = datetime.now(UTC)
-        record = DocumentRecord(
-            doc_id=doc_id,
-            external_id=external_id,
-            project_id=project_id,
-            filename=filename,
-            mimetype=mimetype,
-            size_bytes=len(data),
-            content_hash=content_hash,
-            status=IngestStatus.RECEIVED,
-            created_at=current.created_at if current is not None else now,
-            updated_at=now,
-            **_settings_of(effective),
-        )
-
-        return await self._index(
-            record,
-            extractor,
-            data,
-            keep_original=True,
-            embedding_model=model,
-            chunker=chunker,
-            first=current is None,
-        )
+            return await self._index_one(
+                record,
+                extractor,
+                data,
+                upload=upload,
+                keep_original=True,
+                embedding_model=model,
+                chunker=chunker,
+                first=current is None,
+                kept=self._kept(current),
+            )
 
     async def reindex(
         self,
@@ -390,18 +441,14 @@ class DocumentIngestPipeline:
             NotConfiguredError: No blob store, so the original was never kept.
             LookupError: No such document in the registry.
             ChunkingError: The settings cannot work together.
+            OriginalChangedError: The stored original is not the version the
+                record describes.
         """
         if self._blobs is None:
             raise NotConfiguredError(
                 "no BlobStore is registered -- the original bytes were never "
                 "kept, so re-index the document by uploading it again"
             )
-
-        # First, and scoped by project: the stored file is kept by `doc_id`
-        # alone, so only the project's own record may lead to it.
-        record = await self._registry.get(project_id=project_id, doc_id=doc_id)
-        if record is None:
-            raise LookupError(f"no document {doc_id!r} in project {project_id!r}")
 
         requested = (chunking_strategy, chunk_size, chunk_overlap) != (None, None, None)
         chunker = (
@@ -413,70 +460,131 @@ class DocumentIngestPipeline:
             if requested
             else self._chunker
         )
-        data = await self._blobs.read(doc_id=doc_id)
-        extractor = select_extractor(record.mimetype)
-        rebuilt = record.model_copy(
-            update={
-                "status": IngestStatus.RECEIVED,
-                "updated_at": datetime.now(UTC),
-                **_settings_of(chunker),
-            }
-        )
 
-        return await self._index(
-            rebuilt,
-            extractor,
-            data,
-            keep_original=False,
-            embedding_model=resolve_embedding_model(embedding_model),
-            chunker=chunker,
-        )
-
-    async def _index(
-        self,
-        record: DocumentRecord,
-        extractor: DocumentExtractor,
-        data: bytes,
-        *,
-        keep_original: bool,
-        embedding_model: str,
-        chunker: DocumentChunker | None = None,
-        first: bool = False,
-    ) -> DocumentRecord:
-        """Store, split, embed, record. Shared by `ingest` and `reindex`.
-
-        A failure anywhere leaves a `failed` record that says why, and the
-        version indexed before it, if any, still answering: the store embeds a
-        new version before it removes the old one.
-
-        One document at a time in this process: two uploads of it at once
-        would otherwise leave its stored original from one and its chunks
-        and record from the other (docs/review-2026-10.md, INGEST-3).
-        """
-        key = (record.project_id, record.doc_id)
-        async with _indexing(key):
-            if _was_purged(record.project_id):
-                raise DocumentDeletedError(
-                    f"{record.filename!r} was not indexed: its project was deleted "
-                    "a moment ago"
-                )
-            upload = _Upload()
-            _uploads.setdefault(key, set()).add(upload)
+        async with _turn((project_id, doc_id)) as upload:
+            # First, and scoped by project: the stored file is kept by
+            # `doc_id` alone, so only the project's own record may lead to it.
+            record = await self._registry.get(project_id=project_id, doc_id=doc_id)
+            if record is None:
+                raise LookupError(f"no document {doc_id!r} in project {project_id!r}")
+            self._still_wanted(upload, project_id, record.filename)
             try:
-                return await self._index_one(
-                    record,
-                    extractor,
-                    data,
-                    upload=upload,
-                    keep_original=keep_original,
-                    embedding_model=embedding_model,
-                    chunker=chunker,
-                    first=first,
+                data = await self._blobs.read(doc_id=doc_id)
+            except FileNotFoundError as exc:
+                raise OriginalChangedError(
+                    f"no original of {record.filename!r} is stored -- upload the "
+                    "document again"
+                ) from exc
+            if hashlib.sha256(data).hexdigest() != record.content_hash:
+                # The original of another version: left by an engine stopped
+                # part-way through an update, or by a disk that failed as it
+                # was stored. Rebuilding would index that version's text under
+                # this record (INGEST-14, INGEST-15); uploading the document
+                # again stores its original (`_restore_original`).
+                raise OriginalChangedError(
+                    f"the stored original of {record.filename!r} is not the "
+                    "version its record describes -- upload the document again"
                 )
-            finally:
-                _uploads[key].discard(upload)
-                if not _uploads[key]:
-                    del _uploads[key]
+            rebuilt = record.model_copy(
+                update={
+                    "status": IngestStatus.RECEIVED,
+                    "updated_at": datetime.now(UTC),
+                    **_settings_of(chunker),
+                }
+            )
+
+            return await self._index_one(
+                rebuilt,
+                select_extractor(record.mimetype),
+                data,
+                upload=upload,
+                keep_original=False,
+                embedding_model=resolve_embedding_model(embedding_model),
+                chunker=chunker,
+                first=False,
+                kept=self._kept(record),
+            )
+
+    def _still_wanted(self, upload: _Upload, project_id: str, filename: str) -> None:
+        """Refuse an upload whose document, or project, was deleted while it
+        waited for its turn: it has written nothing yet, so nothing is kept."""
+        if _was_purged(project_id):
+            raise DocumentDeletedError(
+                f"{filename!r} was not indexed: its project was deleted a moment ago"
+            )
+        if upload.cancelled:
+            raise DocumentDeletedError(
+                f"{filename!r} was deleted while it waited to be indexed, so "
+                "nothing of it is kept"
+            )
+
+    def _kept(self, current: DocumentRecord | None) -> DocumentRecord | None:
+        """The record of the version that stays if a new one fails: one that
+        answers (`indexed`), or one only stored by an engine that does not
+        embed (`received`). Not a `failed` one, nor the `received` record of a
+        first upload that never finished, which stand for nothing searchable."""
+        if current is None or current.status is IngestStatus.FAILED:
+            return None
+        if current.status is IngestStatus.RECEIVED and self._vectors is not None:
+            return None
+        return current
+
+    async def _restore_original(
+        self, upload: _Upload, current: DocumentRecord, data: bytes
+    ) -> None:
+        """Store `data` as the document's original if the stored one is not
+        it: `data` is the version the record describes (its hash matched), and
+        the stored original can be another's, or missing, after an engine
+        stopped part-way through an update, or a disk that failed as it was
+        written. Uploading the document again is then what puts it right."""
+        if self._blobs is None:
+            return
+        try:
+            stored: bytes | None = await self._blobs.read(doc_id=current.doc_id)
+        except FileNotFoundError:
+            stored = None
+        except Exception:
+            logger.warning(
+                "could not read the stored original of %s",
+                current.doc_id,
+                exc_info=True,
+            )
+            return
+        if stored != data:
+            await self._store_original(upload, current, data)
+            if upload.cancelled:
+                raise DocumentDeletedError(
+                    f"{current.filename!r} was deleted while it was being stored"
+                )
+
+    async def _store_original(
+        self, upload: _Upload, record: DocumentRecord, data: bytes
+    ) -> None:
+        """Write the document's original once its record is written.
+
+        Outside `_committing`, so a delete never waits on a large file being
+        written; one that came meanwhile has cancelled this upload, and the
+        file is taken away again. A failure is logged, not raised: the
+        document is indexed all the same, and re-index asks for the document
+        to be uploaded again.
+        """
+        assert self._blobs is not None
+        try:
+            ensure_room()
+            await self._blobs.write(
+                doc_id=record.doc_id, data=data, mimetype=record.mimetype
+            )
+        except Exception:
+            logger.warning(
+                "could not store the original of %s; re-index will ask for it "
+                "to be uploaded again",
+                record.doc_id,
+                exc_info=True,
+            )
+            return
+        if upload.cancelled:
+            with contextlib.suppress(Exception):
+                await self._blobs.delete(doc_id=record.doc_id)
 
     async def _index_one(
         self,
@@ -489,12 +597,27 @@ class DocumentIngestPipeline:
         embedding_model: str,
         chunker: DocumentChunker | None,
         first: bool,
+        kept: DocumentRecord | None,
     ) -> DocumentRecord:
+        """Store, split, embed, record. Shared by `ingest` and `reindex`, in
+        the document's turn (`_turn`).
+
+        `kept` is the record of the version already there, if one is: the
+        store embeds a new version before it removes the old one, so a
+        failure before the new version has landed leaves that version
+        answering, and its record goes on describing it, with the failure in
+        `error` (INGEST-8). Its original is replaced only once the new
+        version's chunks and record are written (INGEST-14). With no version
+        kept, or a failure once the new version had landed, the record is
+        the new version's, `failed`, and says why.
+        """
         # Before anything is written, the record included: a full volume can
         # hang embedded Chroma for every tenant (DISK-3), and a version
         # already indexed goes on answering, so its record stays as it is.
         ensure_room()
         key = (record.project_id, record.doc_id)
+        blobs = self._blobs if keep_original else None
+        embedded = EmbeddedChunks()
         try:
             if first:
                 # A first upload is recorded before anything else is written,
@@ -503,10 +626,11 @@ class DocumentIngestPipeline:
                 # stored original is not left where no delete reaches it
                 # (INGEST-16).
                 await self._registry.upsert(record)
-            # The original first: if chunking or embedding fails, the bytes are
-            # still there to retry from.
-            if keep_original and self._blobs is not None:
-                await self._blobs.write(
+            # With no version kept, the original first: if chunking or
+            # embedding fails, the bytes are still there to retry from. A kept
+            # version's original stays until this one has replaced it.
+            if blobs is not None and kept is None:
+                await blobs.write(
                     doc_id=record.doc_id, data=data, mimetype=record.mimetype
                 )
 
@@ -522,7 +646,10 @@ class DocumentIngestPipeline:
                 # that vanishes.
                 store = ChromaChunkStore(embedding_model)
                 await store.write(
-                    doc_id=record.doc_id, project_id=record.project_id, chunks=chunks
+                    doc_id=record.doc_id,
+                    project_id=record.project_id,
+                    chunks=chunks,
+                    embedded=embedded,
                 )
                 # The keyword index is built from the collection; this process
                 # must not keep searching the version from before this write.
@@ -535,14 +662,28 @@ class DocumentIngestPipeline:
                         f"{record.filename!r} was deleted while it was being indexed"
                     ) from exc
                 # Keep the failure in GET /documents, not only in a log line.
+                # The version kept goes on answering only if the new one did
+                # not land: once every slice has, the failure came as the old
+                # version's chunks were removed, and the new one answers. It
+                # is then `failed`, so sending it again indexes it again.
                 await self._registry.upsert(
-                    record.model_copy(
-                        update={"status": IngestStatus.FAILED, "error": str(exc)}
+                    kept.model_copy(
+                        update={"error": _update_failed(exc, embedded.chunks)}
+                    )
+                    if kept is not None and not embedded.landed
+                    else record.model_copy(
+                        update={
+                            "status": IngestStatus.FAILED,
+                            "error": str(exc),
+                            # Embedded, and billed, before it failed; none of
+                            # it is kept (INGEST-19).
+                            "chunk_count": embedded.chunks,
+                        }
                     )
                 )
             raise
 
-        embedded = self._vectors is not None
+        vectors = self._vectors is not None
         async with _committing(key):
             if upload.cancelled:
                 # Deleted while it was being indexed: what it wrote goes too,
@@ -552,7 +693,7 @@ class DocumentIngestPipeline:
                     f"{record.filename!r} was deleted while it was being indexed, "
                     "so nothing of it is kept"
                 )
-            return await self._registry.upsert(
+            saved = await self._registry.upsert(
                 record.model_copy(
                     update={
                         "chunk_count": len(chunks),
@@ -560,13 +701,19 @@ class DocumentIngestPipeline:
                         "warnings": warnings,
                         # `indexed` is earned by the vectors landing, not claimed.
                         "status": IngestStatus.INDEXED
-                        if embedded
+                        if vectors
                         else IngestStatus.RECEIVED,
                         # What made the vectors, so a change of model is noticed.
-                        "embedding_model": embedding_model if embedded else None,
+                        "embedding_model": embedding_model if vectors else None,
                     }
                 )
             )
+        if blobs is not None and kept is not None:
+            # After the record: an engine stopped between the two keeps a
+            # record and chunks that agree, and an original that re-index
+            # refuses rather than rebuilds another version from.
+            await self._store_original(upload, record, data)
+        return saved
 
     async def _discard(self, record: DocumentRecord) -> None:
         """Remove what an upload that was cancelled wrote: its chunks, under
@@ -625,3 +772,10 @@ class DocumentIngestPipeline:
                 "it into smaller files, or use larger chunks"
             )
         return chunks, instruction_warnings(extracted.text)
+
+
+def _update_failed(exc: Exception, embedded: int) -> str:
+    """The `error` of a record whose version stays after an update failed,
+    with what the failed update had embedded, and so cost (INGEST-19)."""
+    spent = f" ({embedded:,} chunks were embedded before it failed)" if embedded else ""
+    return f"the last update was not indexed{spent}, so this version stays: {exc}"

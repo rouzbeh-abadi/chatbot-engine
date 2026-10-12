@@ -13,6 +13,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from chatbot_engine.models.common import Incoming
+
 #: How a document is cut into chunks. Part of the contract: it is sent with an
 #: upload and named in the assistant configuration.
 ChunkStrategy = Literal["size", "headings", "page"]
@@ -64,7 +66,7 @@ class DocumentRecord(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
-class ReindexRequest(BaseModel):
+class ReindexRequest(Incoming):
     """The body of `POST /documents/{doc_id}/reindex`; every field optional.
 
     Settings work as on upload: an empty body rebuilds with the engine's
@@ -127,9 +129,14 @@ class ExtractUsage(BaseModel):
 
     input_tokens: int
     output_tokens: int
-    #: What the provider billed, or the listed price; null for an unpriced model.
+    #: What the provider billed, or the listed price; null for an unpriced
+    #: model, and for estimated tokens.
     cost_usd: float | None = None
     model: str | None = None
+    #: The tokens are the engine's estimate: the provider did not say what
+    #: the read used, or the read was cut off at its deadline (a 502 then
+    #: carries this usage, the most the read may have cost).
+    estimated: bool = False
 
 
 class ExtractedText(BaseModel):

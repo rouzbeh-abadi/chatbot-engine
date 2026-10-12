@@ -294,9 +294,6 @@ def _judge_replying(content: str):
     ],
     ids=["fractional", "out-of-range", "no-reason"],
 )
-@pytest.mark.xfail(
-    strict=True, reason="EVALTRACE-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_one_unreadable_verdict_leaves_the_other_cases_graded(monkeypatch, bad):
     """`build_judge_report` promises a case the judge skipped shows as `not
     judged` rather than vanishing. A judge that grades one case 7.5 (the
@@ -334,9 +331,6 @@ def test_one_unreadable_verdict_leaves_the_other_cases_graded(monkeypatch, bad):
 @pytest.mark.parametrize(
     "question", ["", "x" * 32_001], ids=["empty-question", "over-32000-chars"]
 )
-@pytest.mark.xfail(
-    strict=True, reason="API-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_case_the_chat_turn_would_refuse_is_refused_or_reported_not_a_crash(
     monkeypatch, question
 ):
@@ -363,9 +357,6 @@ def test_a_case_the_chat_turn_would_refuse_is_refused_or_reported_not_a_crash(
     assert by_id["b"].score is None and by_id["b"].reason.startswith("error")
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-2 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_one_evaluation_request_cannot_carry_an_unbounded_number_of_cases():
     """The eval limit charges one token per request (rate_limit.py), and each
     case is a full turn with up to `ENGINE_TURN_DEADLINE_S` of its own, run
@@ -404,9 +395,6 @@ def test_a_reading_that_is_not_json_is_logged_without_the_visitors_words(caplog)
 # --- EVALTRACE-7: an answer under test can forge the judge's transcript -------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="EVALTRACE-7 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_answer_cannot_add_a_case_to_the_judges_transcript():
     """The answer is the chatbot's output, which can repeat text planted in a
     crawled page. It is pasted into the transcript unframed, so an answer
@@ -435,9 +423,6 @@ def test_an_answer_cannot_add_a_case_to_the_judges_transcript():
 # --- retry count ----------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="EVALTRACE-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_the_rag_judge_client_uses_the_engines_timeout_and_retries(monkeypatch):
     """DEPLOYMENT.md: `ENGINE_PROVIDER_TIMEOUT_S` bounds one provider call,
     and the calls that are not streamed are retried "with the same count".
@@ -561,9 +546,6 @@ def test_sound_a_workflows_tool_step_and_hand_off_run_nothing_under_the_judge(
         ),
     ],
     ids=["tracing-secret", "mcp-header-value"],
-)
-@pytest.mark.xfail(
-    strict=True, reason="API-5 in docs/review-2026-10.md: fails until it is fixed"
 )
 def test_a_refused_request_does_not_echo_the_secrets_it_carried(client, bad, secret):
     """models/chat.py: header errors "name the header, never its value: a

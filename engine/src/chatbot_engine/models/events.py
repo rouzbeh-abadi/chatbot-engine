@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr
 
 
 class _Event(BaseModel):
@@ -101,6 +101,20 @@ class ToolCallFinishedEvent(_Event):
     duration_ms: int | None = None
     result_preview: str | None = None
     error: str | None = None
+    #: Whether the turn offered a tool of this name, which only the engine
+    #: knows; not part of the event a caller reads. Only an offered name is
+    #: counted under its own metric label: any other is whatever the model
+    #: wrote (docs/review-2026-10.md, EVALTRACE-10).
+    _offered: bool = PrivateAttr(default=False)
+
+    @property
+    def offered(self) -> bool:
+        return self._offered
+
+    def as_offered(self, offered: bool = True) -> ToolCallFinishedEvent:
+        """This event, marked as for a tool the turn offered (or not)."""
+        self._offered = offered
+        return self
 
 
 class AskOption(BaseModel):

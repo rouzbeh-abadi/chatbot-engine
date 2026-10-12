@@ -7,8 +7,9 @@ RAGAS dependency both live here, which is why the caller cannot run it itself.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
+from chatbot_engine.api.callers import while_waited_for
 from chatbot_engine.api.dependencies import RagEvaluatorDep, SettingsDep
 from chatbot_engine.models.evals import RagEvalRequest, RagReport
 
@@ -19,8 +20,11 @@ router = APIRouter(prefix="/eval/rag", tags=["evaluation"])
     "", responses={501: {"description": "No model provider key is configured."}}
 )
 async def score_retrieval(
-    request: RagEvalRequest, evaluator: RagEvaluatorDep, settings: SettingsDep
+    request: RagEvalRequest,
+    evaluator: RagEvaluatorDep,
+    settings: SettingsDep,
+    http: Request,
 ) -> RagReport:
-    """Answer and score every retrieval case."""
+    """Answer and score every retrieval case; stopped if the caller goes away."""
     settings.require_provider_key(request.project.provider_api_key)
-    return await evaluator(request)
+    return await while_waited_for(http, evaluator(request))

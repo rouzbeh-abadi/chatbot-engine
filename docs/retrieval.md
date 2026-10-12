@@ -46,7 +46,9 @@ the question ("to", "a", "have"), and because being in both rankings beats
 being first in one, such matches would push out the chunk closest in meaning
 whenever it shares no word with the question. "How long do I have to return a
 lamp?" against a page that says "accepts returns within 30 days" is the case:
-the tokenizer does not stem, so "returns" is not "return", and before this
+the tokenizer does not stem, so "returns" is not "return" (it does fold case
+and Unicode forms since 0.1.31, so a PDF's decomposed "café" meets a typed
+one, and "Straße" meets "STRASSE"), and before this
 limit that page lost its place in the top five to passages that merely
 contained "to".
 
@@ -84,7 +86,10 @@ The top `top_k` are then taken from that order. The score on each chunk stays
 its vector similarity, so a citation's score is not an artefact of position.
 
 Reranking costs one model call per turn, with a prompt containing every
-candidate. It is off by default. It is worth enabling for an assistant whose
+candidate, within `ENGINE_PROMPT_CHARS`: since 0.1.31 each passage is cut to
+an equal share of it, and when the candidates are too many for each to have
+300 characters, the first ones are ranked and the rest follow in their fused
+order. It is off by default. It is worth enabling for an assistant whose
 answers are read carefully and where retrieval quality matters more than
 latency, and the RAGAS harness is how to find out whether it helps on a given
 knowledge base.

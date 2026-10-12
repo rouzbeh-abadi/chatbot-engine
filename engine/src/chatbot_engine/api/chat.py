@@ -47,6 +47,7 @@ async def chat(
         service.stream(request),
         caller=caller.name,
         agent=request.project.agent or settings.agent,
+        metrics=settings.metrics_enabled,
     )
 
     return StreamingResponse(

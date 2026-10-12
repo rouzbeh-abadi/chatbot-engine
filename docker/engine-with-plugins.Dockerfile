@@ -6,7 +6,9 @@
 # `agent: graph` for exactly the same reason your deployment would.
 #
 # Built from the repository root, from the lockfile, like engine/Dockerfile.
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
+# By digest as well as tag, so a rebuild of one commit starts from the same
+# base (docs/review-2026-10.md, INFRA-6); Dependabot proposes the next one.
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca
 
 # `copy`, because the cache below is a mount that is gone at run time.
 ENV UV_LINK_MODE=copy

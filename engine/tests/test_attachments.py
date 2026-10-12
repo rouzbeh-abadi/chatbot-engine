@@ -569,6 +569,7 @@ def test_an_image_is_read_by_a_vision_model_into_its_text_and_what_it_shows(
         "output_tokens": 60,
         "cost_usd": 0.0004,
         "model": "openai/gpt-4.1-mini",
+        "estimated": False,
     }
     # The utility model reads it, with the image itself, not its bytes as text.
     assert built.call_args.args[0].model == "openai/gpt-4.1-mini"
@@ -591,7 +592,11 @@ def test_an_image_is_read_untraced_once_and_within_the_callers_patience(
     # No callback config either: that is how the Langfuse handler travels.
     assert vision.config is None
     assert built.call_args.kwargs["max_retries"] == 0
-    assert built.call_args.kwargs["timeout_s"] == 45.0
+    timeout = built.call_args.kwargs["timeout_s"]
+    assert timeout.read == 45.0
+    # Reaching the provider is cut sooner, so a provider that cannot be
+    # reached is told apart from a read cut off once the picture was sent.
+    assert timeout.connect == vision_module.CONNECT_TIMEOUT_S < timeout.read
 
 
 def test_the_caller_can_name_the_model_that_reads_an_image(client: TestClient) -> None:
@@ -717,3 +722,54 @@ def test_images_are_metered_as_chat_turns(metered_extract: TestClient) -> None:
     ):
         assert _extract(metered_extract, PNG, "m.png", "image/png").status_code == 200
         assert _extract(metered_extract, PNG, "n.png", "image/png").status_code == 429
+
+
+class _Unreachable:
+    """A vision model whose provider cannot be reached, or does not answer."""
+
+    def __init__(self, cause: Exception) -> None:
+        self.cause = cause
+
+    async def ainvoke(self, messages, config=None):
+        import httpx
+        import openai
+        from langchain_openai.chat_models.base import OpenAITimeoutError
+
+        request = httpx.Request("POST", "https://openrouter.test/v1")
+        # As it arrives: the SDK's error, wrapped again by LangChain's.
+        try:
+            raise openai.APITimeoutError(request=request) from self.cause
+        except openai.APITimeoutError as sdk:
+            raise OpenAITimeoutError(request=request) from sdk
+
+
+@pytest.mark.parametrize(
+    ("cause", "billed"),
+    [("connect", False), ("pool", False), ("read", True)],
+)
+def test_only_a_read_cut_off_after_the_image_was_sent_says_what_it_may_cost(
+    client: TestClient, cause: str, billed: bool
+) -> None:
+    """A provider that could not be reached never got the picture, so it bills
+    nothing: a plain 502. One that stopped answering mid-read may still bill
+    it, so its 502 carries the most the read may have cost (INGEST-18)."""
+    import httpx
+
+    request = httpx.Request("POST", "https://openrouter.test/v1")
+    causes = {
+        "connect": httpx.ConnectTimeout("connect", request=request),
+        "pool": httpx.PoolTimeout("pool", request=request),
+        "read": httpx.ReadTimeout("read", request=request),
+    }
+    with patch.object(
+        vision_module, "build_chat_model", return_value=_Unreachable(causes[cause])
+    ):
+        response = _extract(client, PNG, "mug.png", "image/png")
+
+    assert response.status_code == 502
+    usage = response.json().get("usage")
+    if billed:
+        assert usage["estimated"] is True and usage["cost_usd"] is None
+        assert usage["output_tokens"] == vision_module.MAX_DESCRIPTION_TOKENS
+    else:
+        assert usage is None

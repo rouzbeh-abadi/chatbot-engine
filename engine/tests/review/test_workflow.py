@@ -241,9 +241,6 @@ TWO_QUESTIONS = {
 }
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-3 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_resume_replayed_after_the_turn_asked_its_next_question_is_refused():
     """Docs: "A question is resumed once ... a second request with the same
     `thread_id` (a double click, a client that retried) gets
@@ -430,9 +427,6 @@ async def test_an_unanswered_question_is_forgotten_after_the_ttl_while_the_engin
 # --- WORKFLOW-6: a stale finish reason after a pause --------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_resumed_turn_does_not_report_the_cut_of_a_reply_before_the_pause():
     """`finish_reason` is a channel of the saved state, so a reply cut at
     `max_output_tokens` before the pause (whose own `done` said
@@ -546,9 +540,6 @@ _EXIT_SCRIPT = textwrap.dedent(
 )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_process_that_paused_a_turn_can_exit(tmp_path):
     """`Pauses.sqlite` opens an aiosqlite connection that nothing closes (no
     `close()`, no shutdown hook in the app's lifespan); its worker thread is
@@ -580,9 +571,6 @@ def test_a_process_that_paused_a_turn_can_exit(tmp_path):
 # --- WORKFLOW-9: max_steps is not the cap on visits ---------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-9 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_max_steps_caps_the_visits_in_one_turn():
     """Docs: "`max_steps` (default 30) caps the visits in one turn"
     (agents.md). The recursion limit is `max_steps + 4 + asks`, so a loop of
@@ -600,11 +588,8 @@ async def test_max_steps_caps_the_visits_in_one_turn():
     from langgraph_agent.workflow import WorkflowAgent
 
     agent = WorkflowAgent(tools=Tools(), pauses=Pauses.memory())
-    said = []
-    try:
-        async for event in agent.run(_request(spec)):
-            said.append(event)
-    except Exception:  # the turn's end is not what is checked here
-        pass
+    said = [event async for event in agent.run(_request(spec))]
 
     assert len(_text(said)) <= 2, f"{_text(said)!r}: more visits than max_steps"
+    # And the turn ends as any turn does, not in LangGraph's recursion error.
+    assert isinstance(said[-1], DoneEvent) and said[-1].finish_reason == "stop"

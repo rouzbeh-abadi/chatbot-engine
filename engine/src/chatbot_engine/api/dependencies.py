@@ -42,6 +42,10 @@ from chatbot_engine.settings import Settings, get_settings
 
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
+#: The agent routers built here, so the app's shutdown can close what their
+#: agents hold open (`close_agents`).
+_routers: list[AgentRouter] = []
+
 
 @lru_cache
 def get_agent() -> Agent:
@@ -52,7 +56,9 @@ def get_agent() -> Agent:
     is constructed on first use, so a plugin's dependencies are imported only
     when a request asks for it.
     """
-    return AgentRouter(tools=get_tool_provider())
+    router = AgentRouter(tools=get_tool_provider())
+    _routers.append(router)
+    return router
 
 
 @lru_cache
@@ -64,6 +70,7 @@ def get_judge() -> Judge:
     (`EvalToolProvider`), so an evaluation books, emails and changes nothing.
     """
     agent = AgentRouter(tools=EvalToolProvider(get_tool_provider()))
+    _routers.append(agent)
 
     async def judge(request: JudgeRequest) -> JudgeReport:
         return await evaluate_dataset(request, agent=agent)
@@ -183,6 +190,16 @@ RagEvaluatorDep = Annotated[RagEvaluator, Depends(get_rag_evaluator)]
 DocumentServiceDep = Annotated[DocumentService, Depends(get_document_service)]
 
 
+async def close_agents() -> None:
+    """Close what the agents built here hold open: a workflow's store of
+    paused turns, whose file would otherwise stay open past the shutdown
+    (docs/review-2026-10.md, WORKFLOW-8)."""
+    # Kept listed: the routers stay cached, and a store a later turn opens
+    # again is closed at the next shutdown too. Closing is idempotent.
+    for router in list(_routers):
+        await router.aclose()
+
+
 def reset_dependency_cache() -> None:
     """Drop cached services. For tests, and after re-wiring an implementation.
 
@@ -205,6 +222,7 @@ def reset_dependency_cache() -> None:
         get_rag_evaluator,
     ):
         cached.cache_clear()
+    _routers.clear()
 
     # The Chroma client is a lock-guarded singleton, not an lru_cache, so it has
     # its own reset rather than a `.cache_clear()`.

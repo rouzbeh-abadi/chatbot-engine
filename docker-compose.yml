@@ -18,14 +18,18 @@ services:
     build:
       context: ./examples/frontend
     ports:
-      - "5173:80"
+      # This machine only, as every port this file publishes: it is the demo
+      # stack, with demo passwords and no keys by default. The production
+      # overlay is for anything reachable from elsewhere.
+      - "127.0.0.1:5173:80"
     depends_on:
       - backend
 
   postgres:
     image: postgres:17
     ports:
-      - "5432:5432"
+      # This machine only: the password is committed to this repository.
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_DB: support_agent
       POSTGRES_USER: support_agent
@@ -45,10 +49,14 @@ services:
       # own Dockerfile still builds a plain, framework-free image on its own.
       context: .
       dockerfile: docker/engine-with-plugins.Dockerfile
+    # An init as PID 1: uvicorn ends a stop by raising the signal again, which
+    # PID 1 ignores, and the init reaps the processes that read PDFs.
+    init: true
     ports:
-      # Published for /docs and curl. In a real deployment only the backend needs
-      # to reach the engine.
-      - "8100:8100"
+      # Published for /docs and curl, on this machine only: with no
+      # ENGINE_API_KEY anyone who reaches the port spends the provider key. In
+      # a real deployment only the backend needs to reach the engine.
+      - "127.0.0.1:8100:8100"
     environment:
       ENGINE_API_KEY: ${ENGINE_API_KEY:-}
       ENGINE_OPENROUTER_API_KEY: ${ENGINE_OPENROUTER_API_KEY:-}
@@ -77,7 +85,9 @@ services:
       context: .
       dockerfile: examples/backend/Dockerfile
     ports:
-      - "8000:8000"
+      # This machine only: with BACKEND_ADMIN_KEY unset, /admin and the
+      # document write routes are open to whoever reaches the port.
+      - "127.0.0.1:8000:8000"
     environment:
       BACKEND_ENGINE_URL: http://engine:8100
       BACKEND_ENGINE_API_KEY: ${ENGINE_API_KEY:-}
@@ -88,6 +98,10 @@ services:
       # The engine dials the tool server, so this has to be the service name
       # rather than localhost. Which tools are allowed stays in support.yaml.
       BACKEND_MCP_TOOLS_URL: http://mcp-tools:8200/mcp
+      # The token the tool server asks for, which the engine is sent for that
+      # server alone. Optional here, where the tool server's port is this
+      # machine's only; the production overlay requires it.
+      BACKEND_MCP_TOOLS_TOKEN: ${MCP_TOOLS_TOKEN:-}
     depends_on:
       engine:
         condition: service_healthy
@@ -101,9 +115,17 @@ services:
       dockerfile: examples/backend/Dockerfile
     command: ["python", "-m", "support_agent.mcp_tools"]
     ports:
-      - "8200:8200"
+      # This machine only. The engine reaches it over the compose network; a
+      # tool server takes its caller's word for who the customer is, so
+      # nothing else should reach it.
+      - "127.0.0.1:8200:8200"
     environment:
       BACKEND_DATABASE_URL: postgresql+psycopg://support_agent:support_agent@postgres:5432/support_agent
+      # Every interface inside the container, so the engine's container can
+      # reach it. It still answers only to the Host below and to loopback.
+      BACKEND_MCP_TOOLS_HOST: 0.0.0.0
+      BACKEND_MCP_TOOLS_URL: http://mcp-tools:8200/mcp
+      BACKEND_MCP_TOOLS_TOKEN: ${MCP_TOOLS_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

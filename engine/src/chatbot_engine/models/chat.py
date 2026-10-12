@@ -13,6 +13,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from chatbot_engine.models.common import Incoming
 from chatbot_engine.models.workflow import WorkflowSpec
 
 
@@ -210,7 +211,7 @@ class Attachment(BaseModel):
     sent_now: bool = False
 
 
-class ChatRequest(BaseModel):
+class ChatRequest(Incoming):
     """The body of `POST /chat`.
 
     `user_id` is opaque: the engine forwards it to MCP servers so *they* can

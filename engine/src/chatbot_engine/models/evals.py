@@ -10,6 +10,16 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from chatbot_engine.models.chat import AssistantConfig, Message
+from chatbot_engine.models.common import Incoming
+
+#: The most cases one evaluation request may carry. Each is a chat turn and a
+#: share of a grading call, and the evaluation rate limit counts requests, so
+#: an unbounded list would buy any number of turns for one token
+#: (docs/review-2026-10.md, API-2). A larger dataset goes in several requests.
+MAX_EVAL_CASES = 100
+
+#: A question's bounds: a chat turn's message's, since each is asked as one.
+QUESTION_CHARS = 32_000
 
 
 class EvalCase(BaseModel):
@@ -17,19 +27,19 @@ class EvalCase(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
-    category: str
-    question: str
+    id: str = Field(max_length=200)
+    category: str = Field(max_length=200)
+    question: str = Field(min_length=1, max_length=QUESTION_CHARS)
     #: Prose, not an exact string: there are many good phrasings of one correct
     #: answer, and the judge compares behaviour rather than wording.
-    expected: str
+    expected: str = Field(max_length=QUESTION_CHARS)
     #: An answer to grade as it is, instead of asking the assistant. For
     #: checking the grader itself: a case whose right score is known, sent
     #: with an answer, shows whether the judge can be trusted with the rest.
-    answer: str | None = None
+    answer: str | None = Field(default=None, max_length=QUESTION_CHARS)
 
 
-class JudgeRequest(BaseModel):
+class JudgeRequest(Incoming):
     """A dataset to answer and then grade."""
 
     model_config = ConfigDict(extra="forbid")
@@ -38,8 +48,8 @@ class JudgeRequest(BaseModel):
     project: AssistantConfig
     #: The rubric. The caller's, because only the caller knows what "correct"
     #: means for their assistant.
-    judge_prompt: str = Field(min_length=1)
-    cases: list[EvalCase] = Field(min_length=1)
+    judge_prompt: str = Field(min_length=1, max_length=QUESTION_CHARS)
+    cases: list[EvalCase] = Field(min_length=1, max_length=MAX_EVAL_CASES)
     #: The model that grades, when it should not be the one that answered: a
     #: model grading its own answers tends to be kind to them. It grades at
     #: temperature 0, so one run grades like the next, and without the
@@ -116,26 +126,26 @@ class RagEvalCase(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
+    id: str = Field(max_length=200)
     #: `single_turn` (the question stands alone) or `follow_up` (the subject is
     #: in `history`, so the question alone is ambiguous).
-    category: str
-    question: str
+    category: str = Field(max_length=200)
+    question: str = Field(min_length=1, max_length=QUESTION_CHARS)
     #: Earlier turns, for a follow-up whose subject is not in the question.
-    history: list[Message] = Field(default_factory=list)
+    history: list[Message] = Field(default_factory=list, max_length=50)
     #: The ground-truth answer, used by context recall to check the retrieved
     #: chunks actually contain what the question needs.
-    reference: str = Field(min_length=1)
+    reference: str = Field(min_length=1, max_length=QUESTION_CHARS)
 
 
-class RagEvalRequest(BaseModel):
+class RagEvalRequest(Incoming):
     """A retrieval dataset to answer and then score."""
 
     model_config = ConfigDict(extra="forbid")
 
     #: Supplies the model and retrieval settings, exactly as a chat turn does.
     project: AssistantConfig
-    cases: list[RagEvalCase] = Field(min_length=1)
+    cases: list[RagEvalCase] = Field(min_length=1, max_length=MAX_EVAL_CASES)
 
 
 class RagCaseResult(BaseModel):

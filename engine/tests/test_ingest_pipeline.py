@@ -306,8 +306,9 @@ async def test_a_received_document_is_embedded_once_the_engine_can() -> None:
 async def test_a_failed_re_embedding_keeps_the_version_already_indexed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A provider outage mid re-index: the record says `failed` and why, and
-    the version indexed before still answers."""
+    """A provider outage mid re-index: the version indexed before still
+    answers, and its record goes on describing it, with why the update
+    failed in `error` (INGEST-8)."""
     pipeline, registry = _embedding_pipeline()
     first = await _ingest_with(pipeline)
     before = sorted(stored_chunks()["documents"])
@@ -317,8 +318,10 @@ async def test_a_failed_re_embedding_keeps_the_version_already_indexed(
         await _ingest_with(pipeline, data=TEXT + b" Two bags on Flexible fares.")
 
     stored = await registry.get(project_id="support", doc_id=first.doc_id)
-    assert stored is not None and stored.status == "failed"
-    assert stored.error == "provider down"
+    assert stored is not None and stored.status == "indexed"
+    assert stored.content_hash == first.content_hash
+    assert stored.chunk_count == first.chunk_count
+    assert stored.error is not None and stored.error.endswith("provider down")
     assert count_chunks() == first.chunk_count
     assert sorted(stored_chunks()["documents"]) == before
 

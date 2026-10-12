@@ -150,7 +150,11 @@ Settings work as on upload. An empty body rebuilds with the engine's current
 defaults, after a change to `ENGINE_CHUNK_SIZE` for example, and a field left
 out takes the engine's default. The response is the rebuilt record. `404`
 means the project has no such document, `501` means the engine keeps no
-originals, and `422` means settings that cannot work together: `chunk_size`
+originals, `409` (since 0.1.31) means the stored original is not the version
+the record describes (an engine stopped part-way through an update, or a
+disk that failed as it was stored, can leave that): uploading the document
+again stores its original, and the re-index then works, and `422`
+means settings that cannot work together: `chunk_size`
 runs from 100 to 8000 characters, `chunk_overlap` from 0 to 2000 and can be
 at most half the size. A larger overlap would have each piece start only a
 few characters after the last, and embed a document many times over.

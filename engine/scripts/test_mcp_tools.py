@@ -1,4 +1,5 @@
 import asyncio
+import os
 
 from chatbot_engine.mcp.client import McpToolProvider
 from chatbot_engine.models.chat import AssistantConfig, McpServerConfig
@@ -15,6 +16,12 @@ async def main() -> None:
             McpServerConfig(
                 name="support-tools",
                 url="http://localhost:8200/mcp",
+                # The demo tool server's token, when it is started with one.
+                headers=(
+                    {"Authorization": f"Bearer {token}"}
+                    if (token := os.environ.get("BACKEND_MCP_TOOLS_TOKEN"))
+                    else {}
+                ),
                 allowed_tools=[
                     "get_booking_status",
                     "get_flight_status",
@@ -32,6 +39,7 @@ async def main() -> None:
         name="get_booking_status",
         arguments={
             "booking_reference": "AB12CD",
+            "last_name": "Miller",
         },
     )
 

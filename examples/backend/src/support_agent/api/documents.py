@@ -9,7 +9,7 @@ from __future__ import annotations
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile, status
 
 from support_agent.api.auth import AdminOnly
-from support_agent.assistant import ProjectNotFoundError, load_project
+from support_agent.api.projects import project_or_404
 from support_agent.engine import EngineDep
 from support_agent.engine_client.models import DeleteResult, DocumentRecord
 
@@ -26,13 +26,6 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 # Matches the engine's own limit. Enforced here too, so an oversized file is
 # rejected before it crosses the network.
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-
-
-def _project_id(name: str | None) -> str:
-    try:
-        return load_project(name).project_id
-    except ProjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("", status_code=status.HTTP_201_CREATED, dependencies=[AdminOnly])
@@ -56,13 +49,11 @@ async def upsert_document(
         )
 
     # Resolve the project first, so an unknown name is a 404 from us rather than
-    # an error from the engine. `load_project` is cached, so reading the config
-    # again for its embedding model costs nothing.
-    project_id = _project_id(project)
-    config = load_project(project)
+    # an error from the engine.
+    config = project_or_404(project)
 
     return await engine.ingest_document(
-        project_id=project_id,
+        project_id=config.project_id,
         external_id=external_id,
         filename=file.filename or external_id,
         mimetype=file.content_type or "application/octet-stream",
@@ -79,7 +70,7 @@ async def list_documents(
     engine: EngineDep, project: str | None = None
 ) -> list[DocumentRecord]:
     """List the documents indexed for a project."""
-    return await engine.list_documents(project_id=_project_id(project))
+    return await engine.list_documents(project_id=project_or_404(project).project_id)
 
 
 @router.delete("/{doc_id}", dependencies=[AdminOnly])
@@ -87,4 +78,6 @@ async def delete_document(
     doc_id: str, engine: EngineDep, project: str | None = None
 ) -> DeleteResult:
     """Remove a document."""
-    return await engine.delete_document(project_id=_project_id(project), doc_id=doc_id)
+    return await engine.delete_document(
+        project_id=project_or_404(project).project_id, doc_id=doc_id
+    )

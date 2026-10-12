@@ -30,6 +30,7 @@ from chatbot_engine.models.chat import AssistantConfig
 from chatbot_engine.observability import REQUEST_ID_HEADER, request_id
 from chatbot_engine.ports.agent import ToolError
 from chatbot_engine.settings import get_settings
+from chatbot_engine.untrusted import visible
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,51 @@ def caller_headers(user_id: str | None, session_id: str | None) -> dict[str, str
     }
 
 
+#: The most servers' tool lists kept at once; past it the oldest goes first.
+#: Each chatbot may have servers of its own, so the cache would otherwise
+#: grow with every chatbot served (docs/review-2026-10.md, MCP-4).
+MAX_CACHED_TOOL_LISTS = 1024
+
+#: The longest tool description bound to the model: a server's own text,
+#: which it can change at any time, so it is not given unlimited room.
+MAX_TOOL_DESCRIPTION_CHARS = 2_000
+
+
+#: The parts of a tool's schema that are prose for the model, and so are
+#: cleaned. Everything else (an `enum`, a `const`, a `default`, a `pattern`)
+#: is a value the server checks, and is passed on as the server wrote it.
+_PROSE = frozenset({"description", "title"})
+
+
+#: The keywords whose value is data the server checks, whatever its shape:
+#: passed on whole, an object's `title` key included.
+_VALUES = frozenset({"const", "default", "enum", "example", "examples"})
+
+
+def _cleaned(value: Any) -> Any:
+    """A tool's schema with nothing invisible in its descriptions and titles
+    (MCP-5)."""
+    if isinstance(value, Mapping):
+        return {
+            key: item
+            if key in _VALUES
+            else visible(item)
+            if key in _PROSE and isinstance(item, str)
+            else _cleaned(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_cleaned(item) for item in value]
+    return value
+
+
+def _named(
+    tools: list[Mapping[str, Any]], target: McpTarget
+) -> list[Mapping[str, Any]]:
+    """`tools` under the name the asking chatbot gave their server."""
+    return [{**tool, "server": target.name} for tool in tools]
+
+
 class McpServerNotFoundError(ValueError):
     """Raised when the requested MCP server is not configured."""
 
@@ -217,26 +263,43 @@ class McpToolProvider:
 
         cached = self._discovered.get(key) if cacheable else None
         if cached is not None and now - cached[0] < self._tools_ttl_s:
-            return cached[1]
+            return _named(cached[1], target)
 
         async with _session(target) as session:
             result = await session.list_tools()
 
+        # What a server says about its tools reaches the model as it is
+        # bound; the allowlist pins a tool's name, not that.
+        # Kept without the server's name: chatbots sharing a server each call
+        # it by a name of their own (docs/review-2026-10.md, TURN-5, MCP-1).
         tools: list[Mapping[str, Any]] = [
             {
-                "server": target.name,
                 "name": tool.name,
-                "description": tool.description or "",
-                "input_schema": tool.input_schema,
+                "description": visible(tool.description or "")[
+                    :MAX_TOOL_DESCRIPTION_CHARS
+                ],
+                "input_schema": _cleaned(tool.input_schema),
             }
             for tool in result.tools
             if target.allows(tool.name)
         ]
 
         if cacheable:
+            # Last in, so the oldest entry is always the first.
+            self._discovered.pop(key, None)
             self._discovered[key] = (now, tools)
+            self._forget_stale(now)
 
-        return tools
+        return _named(tools, target)
+
+    def _forget_stale(self, now: float) -> None:
+        """Drop the expired lists, then the oldest past the most kept."""
+        for key, (stamp, _) in list(self._discovered.items()):
+            if now - stamp < self._tools_ttl_s:
+                break
+            del self._discovered[key]
+        while len(self._discovered) > MAX_CACHED_TOOL_LISTS:
+            del self._discovered[next(iter(self._discovered))]
 
     async def call_tool(
         self,

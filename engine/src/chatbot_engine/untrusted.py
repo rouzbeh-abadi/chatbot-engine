@@ -188,7 +188,10 @@ def instruction_warnings(text: str) -> list[str]:
             f"Text that reads like instructions to an AI: “{_excerpt(clean, first.start(), first.end())}”{_places(len(found))}"
         )
 
-    markup = list(_ROLE_MARKUP.finditer(text))
+    # On the text the model reads: a zero-width space inside `<|im_start|>`
+    # hides it from a match on the raw text, and is removed before the model
+    # sees it whole (INGEST-7).
+    markup = list(_ROLE_MARKUP.finditer(clean))
     if markup:
         warnings.append(
             f"Chat markup that imitates an AI's roles: “{markup[0].group(0)}”{_places(len(markup))}"

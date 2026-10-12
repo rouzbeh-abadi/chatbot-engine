@@ -1,6 +1,6 @@
 [project]
 name = "chatbot-engine"
-version = "0.1.30"
+version = "0.1.31"
 description = "A standalone RAG and MCP tool-calling service."
 readme = "README.md"
 license = "Apache-2.0"
@@ -22,7 +22,7 @@ dependencies = [
     "prometheus-client>=0.20",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.7",
-    "pypdf>=6.16.1",
+    "pypdf>=6.19.0",
 ]
 
 [build-system]

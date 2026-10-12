@@ -8,8 +8,9 @@ No service layer: unlike chat and documents there is nothing to coordinate.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 
+from chatbot_engine.api.callers import while_waited_for
 from chatbot_engine.api.dependencies import JudgeDep, SettingsDep
 from chatbot_engine.models.evals import JudgeReport, JudgeRequest
 
@@ -20,8 +21,8 @@ router = APIRouter(prefix="/judge", tags=["evaluation"])
     "", responses={501: {"description": "No model provider key is configured."}}
 )
 async def score_run(
-    request: JudgeRequest, judge: JudgeDep, settings: SettingsDep
+    request: JudgeRequest, judge: JudgeDep, settings: SettingsDep, http: Request
 ) -> JudgeReport:
-    """Score every case in the transcript."""
+    """Score every case in the transcript; stopped if the caller goes away."""
     settings.require_provider_key(request.project.provider_api_key)
-    return await judge(request)
+    return await while_waited_for(http, judge(request))

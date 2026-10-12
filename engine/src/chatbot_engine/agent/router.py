@@ -88,6 +88,18 @@ class AgentRouter:
                 forgotten += await forget(project_id, session_id)
         return forgotten
 
+    async def aclose(self) -> None:
+        """Let each agent built here close what it holds open (a workflow's
+        store of paused turns), as the engine shuts down."""
+        for name, agent in list(self._built.items()):
+            close = getattr(agent, "aclose", None)
+            if close is None:
+                continue
+            try:
+                await close()
+            except Exception as exc:
+                logger.warning("agent %r did not close cleanly: %s", name, exc)
+
 
 async def within_deadline(
     events: AsyncIterator[Event], request: ChatRequest, seconds: float

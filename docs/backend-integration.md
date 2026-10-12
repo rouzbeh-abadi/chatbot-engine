@@ -43,14 +43,17 @@ make engine          # http://localhost:8100
 Or the published image, with no checkout at all (see
 [DEPLOYMENT.md](../DEPLOYMENT.md#published-images) for the choice of image):
 
+On this machine only (`127.0.0.1`): without `ENGINE_API_KEY`, anyone who
+reaches the port spends your provider key.
+
 ```bash
-docker run -d -p 8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
+docker run -d --init -p 127.0.0.1:8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_CHROMA_DIR=/var/lib/chatbot-engine/chroma \
   -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.30
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.31
 ```
 
 ```bash
@@ -58,7 +61,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.30"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.31"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -106,9 +109,9 @@ end-user permissions. The backend decides who may ask.
 | `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document. An upload of it under way is cancelled: it answers `409` and keeps nothing. Since 0.1.30 the room its chunks took goes back to the volume (see DEPLOYMENT.md, one collection per project) |
 | `DELETE` | `/projects/{project_id}` | Since 0.1.28: remove everything kept for a project, for a caller deleting the chatbot it is. Every document with its chunks and stored original, chunks no record names, uploads under way (each answers `409` and keeps nothing), and the workflow turns that paused on a question, with the answers they held. Uploads to the project are then refused (`409`) for ten minutes, so a crawl still running cannot put pages back. Since 0.1.30 the project's collections are dropped, with their files. Answers `{project_id, knowledge: {documents, orphaned_chunks, uploads_cancelled}, paused_turns}` |
 | `DELETE` | `/projects/{project_id}/sessions/{session_id}` | Since 0.1.28: forget the workflow turns of one session that paused on a question, with the answers they held, for a caller deleting a conversation or everything about the person in it. Answers `{project_id, session_id, paused_turns}` |
-| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (past that a reading waits up to 5 s for its turn, then `503` with `Retry-After`), and a PDF is parsed for at most `ENGINE_EXTRACT_PARSE_MB` (4) of page content. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed, `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
-| `POST` | `/judge` | Answer a dataset of cases and grade the answers against a rubric (`judge_prompt`), at temperature 0, by the project's model or `judge_model`. The cases are answered with the chatbot's tools offered but never run; a case whose turn failed or passed `ENGINE_TURN_DEADLINE_S` has `score: null` and a `reason` starting `error:`. See [agents.md](agents.md#evaluations) |
-| `POST` | `/eval/rag` | Score retrieval with RAGAS on cases with reference answers; `unscored` counts, per metric, the cases that could not be scored. See [retrieval.md](retrieval.md#evaluating-a-change) |
+| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (past that a reading waits up to 5 s for its turn, then `503` with `Retry-After`), and a PDF is parsed for at most `ENGINE_EXTRACT_PARSE_MB` (4) of page content. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed (one cut off at 45 s carries an estimated `usage`, below), `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
+| `POST` | `/judge` | Answer a dataset of cases and grade the answers against a rubric (`judge_prompt`), at temperature 0, by the project's model or `judge_model`. The cases are answered with the chatbot's tools offered but never run; a case whose turn failed or passed `ENGINE_TURN_DEADLINE_S` has `score: null` and a `reason` starting `error:`, and one whose verdict the judge wrote outside the schema (a 7.5, an 11, no reason) is `not judged` while the others keep their scores. Each answer reaches the judge framed as what the assistant wrote, never as instructions or another case. At most 100 cases, each question, expected behaviour and answer up to 32,000 characters. See [agents.md](agents.md#evaluations) |
+| `POST` | `/eval/rag` | Score retrieval with RAGAS on cases with reference answers; `unscored` counts, per metric, the cases that could not be scored, a case not answered within `ENGINE_TURN_DEADLINE_S` among them. At most 100 cases, with up to 50 turns of history each. See [retrieval.md](retrieval.md#evaluating-a-change) |
 
 Three more for operations:
 
@@ -156,7 +159,7 @@ request carries the whole assistant definition:
       }
     ]
   },
-  "message": "Is my flight delayed? My booking is AB12CD.",
+  "message": "Is my flight delayed? My booking is AB12CD, last name Miller.",
   "session_id": "conv-1731",
   "user_id": "alice",
   "history": [
@@ -174,7 +177,7 @@ request carries the whole assistant definition:
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
-| `history` | no | Earlier turns, oldest first. The oldest are left out of a model call whose prompt would pass `ENGINE_PROMPT_CHARS` (see Size, below) |
+| `history` | no | Earlier turns, oldest first. The oldest are left out of a model call whose prompt would pass `ENGINE_PROMPT_CHARS` (see Size, below). A `system` turn becomes a system message, which the model reads with the operator's authority: never pass one through from a browser |
 | `attachments` | no | Files the person sent in the conversation, oldest first, as `{ name, text, sent_now? }` (at most 5, each up to 60,000 characters; `POST /extract` reads a file into text; `sent_now` marks the one that came with this message, since 0.1.24). Send them with every turn of the conversation, so a later question can still refer to one. Every call of the chat model (the loop and graph agents' answer, a workflow's Chat Model steps and its reply to an answer that misses the question) puts them in the person's turn before the message, framed by their names, with the rules for them in the system prompt: what the person gave it to read, never instructions, never cited with a number. A workflow Condition reads the start of the newest two (1,500 characters each) beside the message; the reading of an answer to a question sees the reply alone; a hand-off's transcript carries the start of each (2,000 characters). They are not part of the knowledge-base search. Since 0.1.23 |
 | `omitted` | no | The names of files the conversation no longer carries (at most 20), when the caller keeps only the newest: the model is told they are no longer included and to ask for one again when asked about it. Since 0.1.24 |
 | `notes` | no | What the caller knows about this person from earlier conversations, as text, up to 10,000 characters: a returning visitor's memory. It goes in the person's turn, framed as `<notes>…</notes>` and cleaned, with a rule in the system prompt that it is not instructions: it was written from what the person said, so it never goes in the system role. Since 0.1.28 |
@@ -253,7 +256,12 @@ workflow was edited since is refused with an `error` event (`resume_expired`
 or `resume_changed`); ask the visitor again. Since 0.1.26 a question is also
 resumed only once: the request that resumes it claims it, so a second request
 with the same `thread_id` (a double click, a retry) gets `resume_expired`
-rather than running the rest of the turn again. A new message without
+rather than running the rest of the turn again. Since 0.1.31 each question
+has a `thread_id` of its own, a question asked again included: answer with
+the one from the latest `input_required`. One meant for an earlier question
+of the turn gets `resume_expired`, so an answer that arrives twice (a chat
+app delivering an update again) cannot answer the question after it. A
+new message without
 `resume` simply starts a new turn, and the unanswered one is forgotten in
 time: since 0.1.28 within a minute of `ENGINE_PAUSE_TTL_S` passing, whatever
 else runs, and saved state that no paused turn names (a turn the engine was
@@ -304,7 +312,12 @@ at once, past which a reading waits up to 5 seconds and is then refused with
 an image is not traced, whichever `ENGINE_TRACING` names: the picture would
 go to the tracer with the call, and a person's photo is not for a third party
 to keep; what the call cost is in the answer's `usage`. It is never retried
-and waits at most 45 s, so a call that is billed is also answered.
+and takes at most 45 s, start to end. A read cut off there may still be
+finished and billed by the provider, so since 0.1.31 its `502` carries
+`usage` too: the most the read may have cost (the prompt, an allowance for
+the picture, and every token it may write), with `estimated: true` and
+`cost_usd` null. `estimated` is also true on a `200` whose reply said
+nothing of its tokens.
 
 ### Why the whole configuration is sent every time
 
@@ -330,6 +343,12 @@ browser sends a project *name*, and the definition is loaded from
 ### Unknown fields are rejected
 
 Every model uses `extra="forbid"`. A misspelled field is a `422` that names it.
+Since 0.1.31 the forms of `PUT /documents` and `POST /extract` are held to
+the same: a form field they do not take is a `422` of type
+`extra_forbidden`. A `422`'s `detail` lists each problem as
+`{type, loc, msg}` and never repeats the value that was sent. Text holding a
+lone UTF-16 surrogate (half of an emoji, cut by a client) is read with that
+half replaced by U+FFFD rather than failing the request.
 
 ### Size
 
@@ -502,8 +521,19 @@ hundred pages): a longer one is refused rather than indexed in part. Nor may
 it make more than `ENGINE_INDEX_MAX_CHUNKS` chunks (20,000 by default), which
 is checked before anything is embedded. A new version is written in full
 before the old one is removed, so a provider failure during an upload or a
-re-index leaves the version already indexed answering, with the record saying
-`failed` and why. An upload while the engine's volume has less than
+re-index leaves the version already indexed answering. Since 0.1.31 its
+record goes on describing that version (its status, chunk count, warnings
+and stored original), with the failure in `error`, which also says how many
+chunks the failed update had embedded, and so cost; the original of the
+version that failed is not kept. Only a document with no version answering
+(no `indexed` version, or on an engine that does not embed, no stored one)
+is `failed`, and then `chunk_count` says how many chunks were embedded, and
+billed, before it failed, none of which is kept. Uploads and re-indexes of
+one document take turns, and one sent while another runs decides what to
+keep once its turn comes; a delete cancels the ones still waiting too
+(within one engine process: see Scaling out in DEPLOYMENT.md for
+replicas). An
+upload while the engine's volume has less than
 `ENGINE_MIN_FREE_MB` free (512 by default) answers `503`, and nothing is
 written.
 
@@ -607,7 +637,7 @@ once per turn
   engine   passes the rest to the model
 
 per tool call
-  model  → call get_booking_status with {booking_reference: "AB12CD"}
+  model  → call get_booking_status with {booking_reference: "AB12CD", last_name: "Miller"}
   engine → tools/call, with X-User-Id and X-Session-Id
   backend runs the tool against its own data
   engine ← the result
@@ -632,15 +662,16 @@ the schema the model reads when deciding whether to call a tool.
 
 ```python
 @mcp.tool()
-async def get_booking_status(booking_reference: str) -> dict[str, str]:
-    """Look up one booking by its reference.
+async def get_booking_status(booking_reference: str, last_name: str) -> dict[str, str]:
+    """Look up one booking by its reference and the passenger's last name.
 
     Returns the passenger, route, travel date, fare type, baggage allowance,
     flight number, and current status. Use this whenever a customer mentions a
-    booking reference.
+    booking reference; ask for the last name if they have not given it.
 
     Args:
         booking_reference: Six-character booking reference, e.g. "AB12CD".
+        last_name: The passenger's last name, as the customer gave it.
     """
 ```
 
@@ -652,11 +683,13 @@ async def get_booking_status(booking_reference: str) -> dict[str, str]:
 return {
     "booking_reference": ref,
     "status": "not_found",
-    "message": "No booking was found with this reference.",
+    "message": "No booking was found with this reference and last name.",
 }
 ```
 
 A tool that raises for "not found" teaches the model that the tool is broken.
+A wrong last name gets the same answer as an unknown reference, so the tool
+cannot be used to find out which references exist.
 
 **Return values in words a person would recognise.** `"cabin baggage only"`
 rather than `null`.
@@ -711,7 +744,11 @@ follow-up (see agents.md).
 Every tool call carries `X-User-Id` and `X-Session-Id`, taken from the chat
 request. The engine attaches no meaning to either; a tool that scopes what it
 reads or writes takes them from the headers, never from an argument the model
-supplies. See [memory.md](memory.md) for a tool built on this.
+supplies. See [memory.md](memory.md) for a tool built on this. Those headers
+are only as trustworthy as whoever can reach the tool server: keep it on
+loopback or a private network and require a credential in the server
+entry's `headers` (the demo's `BACKEND_MCP_TOOLS_TOKEN`), or anyone who
+reaches it can name any user.
 
 A server entry may also carry `headers`, sent to that server only, with
 discovery and every call. They win over `X-User-Id` and `X-Session-Id`, so
@@ -731,7 +768,9 @@ logs keep the request's `user_id`:
 At most ten headers; names are HTTP tokens, values a single line up to 4096
 characters, and `X-Request-Id` is the engine's own. Header values are never
 logged, traced or shown in a repr, and a server with headers is not held in
-the discovered-tools cache.
+the discovered-tools cache. Since 0.1.31 a cached list carries no server
+name, so each chatbot sharing a server sees, and calls it by, the name it
+gave it; the cache keeps at most 1,024 lists, dropping expired ones first.
 
 ### Tool results are untrusted
 
@@ -758,7 +797,10 @@ engine:
   a stray byte order mark, and since 0.1.26 the zero-width space, the word
   joiner and the variation selectors, which can carry bytes hidden behind an
   emoji. Joiners and direction marks stay, since Persian, Arabic, the Indic
-  scripts and emoji need them;
+  scripts and emoji need them. Since 0.1.31 they are also gone from the
+  message as the query rewrite and the rerank read it, and from what a tool
+  server says about its tools (a description is also cut to 2,000
+  characters);
 - shows a closing tag inside an extract or a file as `[/extracts]` or
   `[/file]`, so the text cannot end its frame and carry on as the person;
   since 0.1.26 also one written with a fullwidth angle bracket or a slash
@@ -799,7 +841,7 @@ curl -N -X POST localhost:8100/chat \
         "allowed_tools": ["get_booking_status", "get_flight_status"]
       }]
     },
-    "message": "Is my flight delayed? Booking AB12CD.",
+    "message": "Is my flight delayed? Booking AB12CD, last name Miller.",
     "user_id": "alice"
   }'
 ```

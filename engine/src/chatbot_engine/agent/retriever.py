@@ -50,7 +50,7 @@ from chatbot_engine.rag.rerank import rerank
 from chatbot_engine.rag.vector_store import gate, store_to_search, try_to_move
 from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
-from chatbot_engine.untrusted import framed, label, unnumbered
+from chatbot_engine.untrusted import framed, label, unnumbered, visible
 
 #: A retrieved chunk and its score: its vector similarity to the question.
 Hit = tuple[Document, float]
@@ -126,9 +126,16 @@ async def rewrite_queries(
     the search can match, and splits a message that asks several things into
     one query each, at most `MAX_QUERIES` and none twice. Skipped when there
     is no history, so a first-turn question costs no extra model call.
+
+    The message is searched for, and read by the rewrite, without what a
+    reader cannot see: hidden text must not steer which knowledge the turn
+    is given (docs/review-2026-10.md, TURN-4).
     """
+    # A message of nothing visible is searched as it was sent: an empty query
+    # is one the embeddings provider refuses.
+    message = visible(request.message) or request.message
     if not request.history:
-        return [request.message]
+        return [message]
 
     history = transcript(request)
     config = utility_config(request.project).model_copy(
@@ -139,7 +146,7 @@ async def rewrite_queries(
             SystemMessage(REWRITE_SYSTEM),
             HumanMessage(
                 f"Conversation so far:\n{history}\n\n"
-                f"Latest message: {request.message}\n\nSearch queries:"
+                f"Latest message: {message}\n\nSearch queries:"
             ),
         ],
         config=run_config(request, name="rewrite"),
@@ -153,7 +160,7 @@ async def rewrite_queries(
         # Cut off by the cap: the last line is a query's first words only.
         lines = lines[:-1]
     queries = list(dict.fromkeys(line for line in lines if line))[:MAX_QUERIES]
-    return queries or [request.message]
+    return queries or [message]
 
 
 async def retrieve(request: ChatRequest) -> list[Hit]:

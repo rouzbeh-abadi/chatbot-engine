@@ -7,6 +7,12 @@ over MCP and invokes them; it never owns their implementation.
 
     make tools     # streamable HTTP on http://localhost:8200/mcp
 
+It listens on loopback unless `BACKEND_MCP_TOOLS_HOST` says otherwise, answers
+only to a Host it knows, and asks for a bearer token when
+`BACKEND_MCP_TOOLS_TOKEN` is set (see `http_app`). The token is what lets it
+believe the `X-User-Id` a call carries: only the engine, sent the token by the
+backend, can make one.
+
 Two conventions the tools follow, both aimed at the model that reads them:
 
 * every value comes back as a string, in the words a customer would recognise
@@ -19,17 +25,32 @@ Two conventions the tools follow, both aimed at the model that reads them:
 
 from __future__ import annotations
 
+import hmac
 import logging
 from datetime import date
+from urllib.parse import urlsplit
 
+import uvicorn
 from mcp.server.mcpserver import Context, MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from sqlalchemy import select
+from starlette.applications import Starlette
+from starlette.datastructures import Headers
+from starlette.responses import PlainTextResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from support_agent.database.connection import get_session_factory
 from support_agent.database.models import Booking, Flight, Memory, SupportTicket
+from support_agent.settings import Settings, get_settings
 
-HOST = "0.0.0.0"
+#: Where the server listens unless `BACKEND_MCP_TOOLS_HOST` says otherwise:
+#: loopback, so nothing beyond this machine reaches it.
+HOST = "127.0.0.1"
 PORT = 8200
+
+#: The Host and Origin values that mean this machine.
+LOOPBACK_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"]
+LOOPBACK_ORIGINS = ["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"]
 
 logger = logging.getLogger(__name__)
 
@@ -64,37 +85,68 @@ mcp = MCPServer(
 )
 
 
+def _is_last_name(passenger_name: str, given: str) -> bool:
+    """Whether `given` is how the booking's passenger name ends, in any case.
+
+    "Miller" and "Daniel Miller" both match "Daniel Miller"; "Mill" does not.
+    """
+    name, said = passenger_name.casefold().split(), given.casefold().split()
+    return bool(said) and name[-len(said) :] == said
+
+
 @mcp.tool()
 async def get_booking_status(
     ctx: Context,
     booking_reference: str,
+    last_name: str = "",
 ) -> dict[str, str]:
-    """Look up one booking by its reference.
+    """Look up one booking by its reference and the passenger's last name.
 
     Returns the passenger, route, travel date, fare type, checked baggage
     allowance, flight number, and current status. Use this whenever a customer
-    mentions a booking reference, and use the flight number it returns to check
-    that flight's status.
+    mentions a booking reference; ask for the passenger's last name too if
+    they have not given it, and pass both. Use the flight number it returns to
+    check that flight's status.
 
     Args:
         booking_reference: Six-character booking reference, e.g. "AB12CD".
+        last_name: The passenger's last name, as the customer gave it,
+            e.g. "Miller".
 
     Returns:
-        Booking details and its current status, or a not-found result.
+        Booking details and its current status, a request for the last name,
+        or a not-found result.
     """
     _trace(ctx, "get_booking_status")
     reference = booking_reference.strip().upper()
+
+    # The reference alone is not enough. It is six characters that travel on
+    # confirmations, boarding passes and forwarded emails, and with nothing
+    # else it would hand a passenger's name, route and date to whoever typed
+    # it. The last name is checked here, against the booking, where the model
+    # cannot talk its way past it.
+    if not last_name.strip():
+        return {
+            "booking_reference": reference,
+            "status": "last_name_required",
+            "message": (
+                "Ask the customer for the passenger's last name as it is on the "
+                "booking, then look the booking up again with both."
+            ),
+        }
 
     async with get_session_factory()() as session:
         booking = await session.scalar(
             select(Booking).where(Booking.booking_reference == reference)
         )
 
-    if booking is None:
+    # A wrong name is answered exactly as an unknown reference, so the tool
+    # cannot be used to learn which references exist.
+    if booking is None or not _is_last_name(booking.passenger_name, last_name):
         return {
             "booking_reference": reference,
             "status": "not_found",
-            "message": "No booking was found with this reference.",
+            "message": "No booking was found with this reference and last name.",
         }
 
     result = {
@@ -189,6 +241,7 @@ async def create_support_ticket(
     booking_reference: str,
     summary: str,
     category: str,
+    last_name: str = "",
 ) -> dict[str, str]:
     """Escalate to a human agent and return the new ticket reference.
 
@@ -202,6 +255,8 @@ async def create_support_ticket(
         summary: One or two sentences describing what the customer needs.
         category: One of "refund", "baggage", "schedule_change", "complaint",
             "other".
+        last_name: The passenger's last name, as the customer gave it,
+            checked against the booking as for `get_booking_status`.
 
     Returns:
         The created ticket, or a rejection explaining what to fix.
@@ -225,21 +280,31 @@ async def create_support_ticket(
             "message": "A summary is required so the agent knows what to act on.",
         }
 
+    if not last_name.strip():
+        return {
+            "booking_reference": reference,
+            "status": "last_name_required",
+            "message": (
+                "Ask the customer for the passenger's last name as it is on the "
+                "booking, then create the ticket again with both."
+            ),
+        }
+
     async with get_session_factory()() as session:
-        # Tickets hang off a real booking. Creating one for a reference that does
-        # not exist would hand a human agent an unactionable ticket.
+        # Tickets hang off a real booking, the customer's own: a reference on
+        # its own would let anyone file against someone else's booking, and
+        # learn which references exist. A wrong name is answered exactly as
+        # an unknown reference.
         booking = await session.scalar(
-            select(Booking.booking_reference).where(
-                Booking.booking_reference == reference
-            )
+            select(Booking).where(Booking.booking_reference == reference)
         )
-        if booking is None:
+        if booking is None or not _is_last_name(booking.passenger_name, last_name):
             return {
                 "booking_reference": reference,
                 "status": "not_found",
                 "message": (
-                    "No booking was found with this reference, so no ticket was "
-                    "created. Confirm the reference with the customer."
+                    "No booking was found with this reference and last name, so "
+                    "no ticket was created. Confirm both with the customer."
                 ),
             }
 
@@ -275,7 +340,9 @@ def _owner(ctx: Context) -> tuple[str, str | None, str]:
 
     The owner comes from the header the engine forwards, never from a tool
     argument: a model that could name the owner could write into someone else's
-    memory, or read it back.
+    memory, or read it back. The header is only as good as the caller, which is
+    why the server asks for a token wherever more than this machine can reach
+    it (see `http_app`).
 
     Raises rather than guessing. A note written to the wrong person, or read
     from everyone, is worse than a tool that says it cannot run.
@@ -338,7 +405,9 @@ async def remember(
             session.add(
                 Memory(
                     user_id=user_id,
-                    session_id=session_id,
+                    # Where it was noted, for the debug view only: cut to the
+                    # column, since a chat's session id may run to 256.
+                    session_id=session_id[:64] if session_id else None,
                     project_id=project_id,
                     subject=subject,
                     content=content,
@@ -351,13 +420,81 @@ async def remember(
     return {"status": "stored", "subject": subject, "content": content}
 
 
+# --- serving -------------------------------------------------------------------
+
+
+def transport_security(settings: Settings) -> TransportSecuritySettings:
+    """The MCP SDK's DNS-rebinding guard, on whatever address the server listens.
+
+    The SDK turns it on by itself only for a loopback address, and listening on
+    0.0.0.0 turned it off. Here it is always on: a request is answered only when
+    its Host is this machine or the host the engine is told to dial
+    (`BACKEND_MCP_TOOLS_URL`, `mcp-tools` under Compose), so a web page that
+    points its own name at this server is refused.
+    """
+    hosts = list(LOOPBACK_HOSTS)
+    name = urlsplit(settings.mcp_tools_url or "").hostname
+    if name:
+        name = f"[{name}]" if ":" in name else name
+        hosts += [name, f"{name}:*"]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=hosts,
+        allowed_origins=list(LOOPBACK_ORIGINS),
+    )
+
+
+class RequireToken:
+    """Answers 401 to an HTTP request without `Authorization: Bearer <token>`.
+
+    Compared in constant time. The engine sends the header with discovery and
+    with every call, because the backend puts it in this server's entry
+    (`assistant._apply_deployment_overrides`).
+    """
+
+    def __init__(self, app: ASGIApp, token: str) -> None:
+        self.app = app
+        self.expected = f"Bearer {token}".encode()
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            given = Headers(scope=scope).get("authorization", "").encode()
+            if not hmac.compare_digest(given, self.expected):
+                refused = PlainTextResponse(
+                    "missing or wrong bearer token",
+                    status_code=401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+                await refused(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
+def http_app(settings: Settings | None = None) -> Starlette:
+    """The server as `main` serves it.
+
+    The rebinding guard is always on, and a bearer token is required when
+    `BACKEND_MCP_TOOLS_TOKEN` is set.
+    """
+    settings = settings or get_settings()
+    app = mcp.streamable_http_app(transport_security=transport_security(settings))
+    if settings.mcp_tools_token:
+        app.add_middleware(RequireToken, token=settings.mcp_tools_token)
+    return app
+
+
 def main() -> None:
     """Start the backend MCP tool server over streamable HTTP."""
-    mcp.run(
-        transport="streamable-http",
-        host=HOST,
-        port=PORT,
-    )
+    settings = get_settings()
+    host = settings.mcp_tools_host or HOST
+    if not settings.mcp_tools_token and host not in ("127.0.0.1", "localhost", "::1"):
+        logger.warning(
+            "listening on %s with no BACKEND_MCP_TOOLS_TOKEN: whatever reaches "
+            "port %d can call every tool and write into any person's memory",
+            host,
+            PORT,
+        )
+    uvicorn.run(http_app(settings), host=host, port=PORT, log_level="info")
 
 
 if __name__ == "__main__":

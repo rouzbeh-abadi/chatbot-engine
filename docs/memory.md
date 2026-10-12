@@ -30,6 +30,7 @@ the `resolve_memory_owner` dependency.
 | --- | --- | --- | --- |
 | `1` (proxy authenticates callers) | the authenticated user | `X-User-Id`, set by the proxy | no |
 | unset (default) | the browser's client id | `X-Client-Id`, set by the browser | yes |
+| unset, with no `X-Client-Id` | nobody: no notes are read or kept | none | no |
 
 The two headers are deliberately distinct. `X-User-Id` is the proxy's: the
 bundled nginx clears it on every request, so a browser can never reach the
@@ -67,15 +68,15 @@ the assistant to store a note and continue answering.
 ## Read path
 
 Reading is performed by the backend, not by the model. Before a request is sent
-to the engine, `recall_for_prompt` loads the caller's notes and appends them to
-the system prompt.
+to the engine, `recall_for_prompt` loads the caller's notes, one cleaned line
+each, and sends them as the request's `notes`, which the engine puts in the
+person's turn inside `<notes>`, never in the system prompt.
 
 ```
 POST /chat  X-Client-Id: u-123
       |
       +-- load notes for u-123
-      +-- append to the system prompt
-      +-- send the assistant configuration to the engine
+      +-- send them as `notes`, beside the assistant configuration
 ```
 
 Recall is not exposed as a tool. A tool-based read depends on the model electing
@@ -132,11 +133,12 @@ before it is written.
 
 ## Notes are untrusted input
 
-Note content originates from customer input and is reinserted into the system
-prompt on later turns. It is treated as the same class of input as a retrieved
-document. The injected block states that the notes are information rather than
+Note content originates from customer input and comes back on later turns.
+It is treated as the same class of input as a retrieved document: it travels
+in the person's turn, framed as `<notes>`, with what a reader cannot see
+removed, under a line saying the notes are information rather than
 instructions, and the system prompt's rule covering tool results applies to
-them.
+them. A note cannot open a section of the system prompt of its own.
 
 Because notes cross conversations, content injected in one conversation reaches
 all later conversations for that user.

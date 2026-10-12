@@ -215,9 +215,6 @@ def local_client(monkeypatch: pytest.MonkeyPatch):
 # ------------------------------------------------- INGEST-14: failed update
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-14 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_rejected_update_keeps_the_original_of_the_version_still_answering(
     client: TestClient,
 ) -> None:
@@ -248,9 +245,6 @@ def test_a_rejected_update_keeps_the_original_of_the_version_still_answering(
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-14 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_after_a_rejected_update_reindex_still_rebuilds_the_version_that_answers(
     client: TestClient,
 ) -> None:
@@ -279,9 +273,6 @@ def test_after_a_rejected_update_reindex_still_rebuilds_the_version_that_answers
 # ------------------------------- INGEST-15: stop or kill during an update
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-15 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_stop_during_an_update_does_not_leave_another_versions_original_under_the_record(
     tmp_path: Path, local_client
 ) -> None:
@@ -345,9 +336,6 @@ def test_a_stop_during_an_update_does_not_leave_another_versions_original_under_
 
 
 @pytest.mark.parametrize("how", ["killed", "disk_full"])
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-15 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_kill_while_the_original_is_written_leaves_one_whole_version(
     tmp_path: Path, how: str
 ) -> None:
@@ -506,14 +494,7 @@ def _children(pid: int) -> list[int]:
     "pause_store_opened",
     [
         pytest.param(False, id="no_pause_store"),
-        pytest.param(
-            True,
-            id="pause_store_opened",
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="WORKFLOW-8 in docs/review-2026-10.md: fails until it is fixed",
-            ),
-        ),
+        pytest.param(True, id="pause_store_opened"),
     ],
 )
 def test_the_engine_as_pid_1_exits_on_sigterm_with_nothing_in_flight(

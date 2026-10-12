@@ -13,6 +13,13 @@ on:
   # The release runs this whole workflow before it publishes anything, so a
   # tag is held to exactly what `main` is held to.
   workflow_call:
+    inputs:
+      # The release passes false: an advisory published the day of an urgent
+      # release, with no fixed version yet, must not hold it up. Every push
+      # and pull request is still audited.
+      audit:
+        type: boolean
+        default: true
 
 # A new push to the same branch makes the previous run pointless. Called from
 # the release, `github.workflow` names the caller, so the `ci-` keeps this
@@ -57,7 +64,9 @@ jobs:
           enable-cache: true
 
       # Every extra, so the type checker sees the optional dependencies too.
-      - run: uv sync --all-packages --all-extras
+      # `--locked`: a lockfile out of step with the manifests fails here, rather
+      # than CI testing a set the images, installed `--frozen`, do not ship.
+      - run: uv sync --all-packages --all-extras --locked
 
       - name: Lint
         run: uv run ruff check .
@@ -77,6 +86,35 @@ jobs:
       # configuration at all, which is the same promise `make dev` makes.
       - name: Run the engine and backend tests
         run: uv run pytest -q
+
+  audit:
+    name: Dependency audit
+    # `inputs` is empty on a push or pull request, so only the release's
+    # explicit false skips it.
+    if: ${{ inputs.audit != false }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      # What the images install, against the published advisories. Ignored,
+      # each with no fixed version and not reachable here:
+      #   PYSEC-2026-311, -3813, -3814, -3815: Chroma's server (model
+      #     repositories, its own auth); the engine embeds Chroma, and the
+      #     scale overlay's server is on the private network only.
+      #   PYSEC-2026-2447: diskcache's pickle, for whoever can write its
+      #     directory; nothing writes one the engine reads.
+      #   PYSEC-2026-3046: RAGAS's multi-modal faithfulness, never used.
+      - name: Audit the locked dependencies
+        run: |
+          uv export --frozen --no-dev --all-packages --all-extras --no-hashes \
+            --no-emit-workspace -o "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/requirements.txt" --no-deps \
+            --disable-pip --progress-spinner off \
+            --ignore-vuln PYSEC-2026-311 --ignore-vuln PYSEC-2026-3813 \
+            --ignore-vuln PYSEC-2026-3814 --ignore-vuln PYSEC-2026-3815 \
+            --ignore-vuln PYSEC-2026-2447 --ignore-vuln PYSEC-2026-3046
 
   frontend:
     name: Frontend tests
@@ -155,6 +193,7 @@ jobs:
           ENGINE_API_KEY: ci-placeholder
           BACKEND_ADMIN_KEY: ci-placeholder
           ENGINE_OPENROUTER_API_KEY: ci-placeholder
+          MCP_TOOLS_TOKEN: ci-placeholder
         run: |
           docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
 

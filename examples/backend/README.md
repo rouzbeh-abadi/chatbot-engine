@@ -23,12 +23,13 @@ It owns no prompts, no retrieval, no chunking and no model calls.
 | `app.py` | The app, `/health`, and engine-error → HTTP status mapping |
 | `api/chat.py` | `POST /chat`, `/chat/sync` |
 | `api/documents.py` | Upload, list and delete the knowledge base |
-| `api/memory.py` | Read and erase a person's notes, and load them into the prompt |
+| `api/memory.py` | Read and erase a person's notes, and load them for the engine |
 | `api/admin.py` | The admin dashboard: data views and evaluation runs |
 | `api/auth.py` | The `BACKEND_ADMIN_KEY` guard on the privileged routes |
 | `api/identity.py` | Who the caller is; the seam for real authentication |
 | `api/rate_limit.py` | Per-caller limits on the routes that cost money |
 | `api/options.py` | The model choices the UI may offer |
+| `api/projects.py` | The project a request names, or 404 |
 | `api/schemas.py` | The browser-facing request and response shapes |
 | `api/streaming.py` | SSE framing and folding, for the browser |
 | `engine_client/client.py` | `EngineClient` and its error taxonomy |
@@ -42,8 +43,15 @@ It owns no prompts, no retrieval, no chunking and no model calls.
 
 ```bash
 make backend    # :8000 -- needs the engine on :8100
-make tools      # :8200 -- the MCP tool server
+make tools      # 127.0.0.1:8200 -- the MCP tool server
 ```
+
+The tool server listens on loopback unless `BACKEND_MCP_TOOLS_HOST` says
+otherwise, and answers only to loopback and the host in `BACKEND_MCP_TOOLS_URL`.
+Set `BACKEND_MCP_TOOLS_TOKEN` to the same value for both processes and the tool
+server refuses a call without it, while the backend has the engine send it to
+that server alone. The tools take the customer's id from the call, so anywhere
+more than this machine reaches the server, set the token.
 
 ## Configuration
 
@@ -61,14 +69,16 @@ application database:
 
 | Tool | Returns |
 | --- | --- |
-| `get_booking_status` | passenger, route, fare, baggage, **flight number**, status |
+| `get_booking_status` | passenger, route, fare, baggage, **flight number**, status; needs the passenger's last name with the reference |
 | `get_flight_status` | on time / delayed / cancelled, times, gate |
-| `create_support_ticket` | a ticket row, after checking the booking exists |
+| `create_support_ticket` | a ticket row, after checking the booking exists and the passenger's last name matches it |
 | `remember` | stores one note about the customer, kept for later conversations |
 
 `get_booking_status` returns the flight number so the model can chain a second
-call ("my booking is AB12CD, is my flight delayed?"), which is the conversation
-the demo is built around.
+call ("my booking is AB12CD, last name Miller, is my flight delayed?"), which is
+the conversation the demo is built around. The reference alone gets no
+passenger data: it travels on every confirmation and boarding pass, so the tool
+checks the last name against the booking as well.
 
 They run *here*, not in the engine: they read this application's data and must
 execute with the calling user's permissions, which the engine cannot evaluate.
@@ -98,14 +108,14 @@ The seed is idempotent and its dates are **relative to today**, so the check-in
 window case stays inside the window whenever you run it. Six bookings, each
 covering a case the knowledge base discusses:
 
-| Booking | Case | Documents it exercises |
-| --- | --- | --- |
-| `AB12CD` | Flexible fare, refundable, inside the check-in window | refunds, check_in |
-| `XY34ZT` | Basic fare, non-refundable, already cancelled | refunds, cancellations |
-| `RF77KL` | Airline cancelled the flight (involuntary refund) | cancellations, refunds |
-| `MS55TR` | Two-leg itinerary, partial refund scope | refunds, booking_changes |
-| `BG88QP` | Cabin baggage only, no checked allowance | baggage |
-| `PS22WD` | Travel already completed, refund window closed | refunds |
+| Booking | Last name | Case | Documents it exercises |
+| --- | --- | --- | --- |
+| `AB12CD` | Miller | Flexible fare, refundable, inside the check-in window | refunds, check_in |
+| `XY34ZT` | Wilson | Basic fare, non-refundable, already cancelled | refunds, cancellations |
+| `RF77KL` | Fischer | Airline cancelled the flight (involuntary refund) | cancellations, refunds |
+| `MS55TR` | Rossi | Two-leg itinerary, partial refund scope | refunds, booking_changes |
+| `BG88QP` | Lindqvist | Cabin baggage only, no checked allowance | baggage |
+| `PS22WD` | Byrne | Travel already completed, refund window closed | refunds |
 
 Fare names match the knowledge base (`Flexible` / `Standard` / `Basic`) so a
 retrieved policy and a tool result never contradict each other.
@@ -134,9 +144,13 @@ make eval-rag                   # score retrieval with RAGAS
 make eval-rag ARGS="--only follow_up"
 ```
 
-`make eval` answers the `lookup` cases with the real tools, so it also needs
-`make tools`; if the engine runs under Docker, point it at the tool server's
-Docker address: `BACKEND_MCP_TOOLS_URL=http://mcp-tools:8200/mcp make eval`.
+`make eval` offers the model the chatbot's tools, as a chat does, but runs
+none of them: an evaluation acts on nothing, so a `lookup` case is graded on
+the call the model makes and on inventing nothing, not on a booking's data.
+The tool list still comes from the tool server, so it needs `make tools`; if
+the engine runs under Docker, point it at the tool server's Docker address:
+`BACKEND_MCP_TOOLS_URL=http://mcp-tools:8200/mcp make eval`, with
+`BACKEND_MCP_TOOLS_TOKEN` set to `MCP_TOOLS_TOKEN` when that is set.
 
 `make eval-rag` needs the engine's `eval` extra (RAGAS) installed
 (`uv pip install -e "engine[eval]"`) but no tool server -- retrieval eval never

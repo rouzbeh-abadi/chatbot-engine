@@ -86,7 +86,8 @@ export interface ChatRequest {
   model?: string;
   /** Overrides the assistant's configured agent. The engine validates it. */
   agent?: string;
-  history?: { role: "user" | "assistant" | "system"; content: string }[];
+  /** Earlier turns, oldest first; the backend takes at most 200. */
+  history?: { role: "user" | "assistant"; content: string }[];
 }
 
 export interface DocumentRecord {

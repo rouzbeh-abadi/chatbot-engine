@@ -434,6 +434,11 @@ class WorkflowAgent:
         paused on a question, with what they held (`chatbot_engine.ports.agent.Forgets`)."""
         return await self.pauses.forget_where(project_id, session_id)
 
+    async def aclose(self) -> None:
+        """Close the store of paused turns, if a turn opened it."""
+        if self._pauses is not None:
+            await self._pauses.close()
+
     async def run(self, request: ChatRequest) -> AsyncIterator[Event]:
         spec = request.project.workflow or DEFAULT_WORKFLOW
         events: asyncio.Queue[Any] = asyncio.Queue()
@@ -443,10 +448,10 @@ class WorkflowAgent:
         graph = self._build(spec, request, events, saver)
         config: dict[str, Any] = {
             **run_config(request, name="workflow"),
-            # The one question a resume passes adds its reading and one step
-            # after it; a choice with no options passes without pausing and
-            # adds its reading. Every other question pauses at once.
-            "recursion_limit": spec.max_steps + 4 + asks,
+            # A backstop only: the owner's steps are capped at `max_steps`
+            # (`_build`), and each may bring a question's hidden steps (its
+            # reading, a reply to what was not an answer) and the finish.
+            "recursion_limit": spec.max_steps * 3 + 4 + asks,
         }
         project_id = request.project.project_id
         session_id = request.session_id or ""
@@ -459,15 +464,18 @@ class WorkflowAgent:
             "message": request.message,
             "since": 0,
         }
-        thread_id = f"{project_id}:{uuid.uuid4().hex}"
+        # Within a resume's 200 characters once a pause's checkpoint is added
+        # (`_pause_id`), whatever the project's id.
+        thread_id = f"{project_id[:64]}:{uuid.uuid4().hex}"
         if request.resume is not None:
+            thread_id, answered = _split_pause_id(request.resume.thread_id)
             # Claimed before anything runs, so a second request with the same
             # answer (a double click, a retry) finds nothing waiting and is
-            # told so, rather than running the rest of the turn again.
+            # told so, rather than running the rest of the turn again. And
+            # only for the question it answers: one replayed once the turn
+            # has asked its next question must not answer that (WORKFLOW-3).
             pause = (
-                await self.pauses.claim(
-                    request.resume.thread_id, project_id, session_id
-                )
+                await self.pauses.claim(thread_id, project_id, session_id, answered)
                 if can_pause
                 else None
             )
@@ -489,7 +497,6 @@ class WorkflowAgent:
                 yield ErrorEvent(code=problem[0], message=problem[1])
                 yield DoneEvent(finish_reason="error")
                 return
-            thread_id = request.resume.thread_id
             start = Command(
                 resume={
                     "value": request.resume.value or "",
@@ -515,16 +522,33 @@ class WorkflowAgent:
                 return
 
             question = asked[0].value
+            # The checkpoint it paused at, in the record and the caller's
+            # pause id alike, so a resume claims this pause and no later one.
+            snapshot = await graph.aget_state(config)
+            mark = _mark_of(snapshot.config)
+            if mark and len(thread_id) + 1 + len(mark) > MAX_PAUSE_ID:
+                # A turn begun before 0.1.31 under a long project id: its id
+                # stays the thread alone, as then, rather than pass the most
+                # a resume takes.
+                mark = None
             await self.pauses.record(
-                Pause(thread_id, project_id, session_id, spec_hash(spec), time.time())
+                Pause(
+                    thread_id,
+                    project_id,
+                    session_id,
+                    spec_hash(spec),
+                    time.time(),
+                    mark,
+                )
             )
             waiting = True
-            snapshot = await graph.aget_state(config)
             values = snapshot.values
             if not question.get("error"):
                 # After a reply to what the visitor said, the question follows as its own paragraph.
                 yield TokenEvent(text=("\n\n" if spoke else "") + question["prompt"])
-            yield InputRequiredEvent(thread_id=thread_id, **question)
+            yield InputRequiredEvent(
+                thread_id=f"{thread_id}.{mark}" if mark else thread_id, **question
+            )
             # What this part of the turn spent: nothing on a plain refusal, the reading on a reply that was read.
             spent = {
                 k: v - values.get("reported", {}).get(k, 0)
@@ -555,6 +579,34 @@ class WorkflowAgent:
     ) -> Any:
         project = request.project
         discovered: list[dict[str, Any]] | None = None
+        # The owner's steps this request has run: the graph is built for
+        # each request, so a resumed turn counts from its answer.
+        visits = 0
+        # A resumed request runs the question it answers first: that visit was
+        # counted when the question was asked.
+        answering = request.resume is not None
+        owned = {n.id for n in spec.nodes}
+
+        def counted(step: Any) -> Any:
+            async def run(state: _State) -> _State:
+                nonlocal visits, answering
+                if answering:
+                    answering = False
+                else:
+                    visits += 1
+                return await step(state)
+
+            return run
+
+        def stops_before(to: str) -> bool:
+            """Whether the turn finishes rather than go on to `to`: one of the
+            workflow's own steps, once the turn has made the visits
+            `max_steps` allows (docs/review-2026-10.md, WORKFLOW-9). The
+            steps around a question, and the finish, always run."""
+            if to not in owned or visits < spec.max_steps:
+                return False
+            logger.warning("workflow stopped at its max_steps of %d", spec.max_steps)
+            return True
 
         async def tools_of() -> list[dict[str, Any]]:
             """The assistant's tools, discovered once per turn."""
@@ -667,7 +719,9 @@ class WorkflowAgent:
                     ok=False,
                     duration_ms=0,
                     error="tool unavailable: its server could not be reached, does not offer it, or does not allow it",
-                )
+                    # Named by the workflow's owner, not written by a model:
+                    # counted under its own name, as when its server is up.
+                ).as_offered()
             )
             return ToolMessage(
                 content=f"Tool {tool!r} is unavailable right now.", tool_call_id=call_id
@@ -965,6 +1019,10 @@ class WorkflowAgent:
                             "skipped": bool(answer.get("skipped")),
                         }
                     },
+                    # How a reply before the pause ended was reported then;
+                    # this part of the turn says how its own reply ends
+                    # (docs/review-2026-10.md, WORKFLOW-6).
+                    "finish_reason": "stop",
                     "since": len(state.get("messages", [])),
                     "reported": {
                         k: v - state.get("reported", {}).get(k, 0)
@@ -1244,19 +1302,19 @@ class WorkflowAgent:
         graph = StateGraph(_State)  # ty: ignore[invalid-argument-type]
         for node in spec.nodes:
             if isinstance(node, RetrieveNode):
-                graph.add_node(node.id, retrieve)  # ty: ignore[invalid-argument-type]
+                graph.add_node(node.id, counted(retrieve))
             elif isinstance(node, ModelNode):
-                graph.add_node(node.id, model_node(node))
+                graph.add_node(node.id, counted(model_node(node)))
             elif isinstance(node, ConditionNode):
-                graph.add_node(node.id, condition_node(node))
+                graph.add_node(node.id, counted(condition_node(node)))
             elif isinstance(node, ToolNode):
-                graph.add_node(node.id, tool_node(node))
+                graph.add_node(node.id, counted(tool_node(node)))
             elif isinstance(node, ReplyNode):
-                graph.add_node(node.id, reply_node(node))
+                graph.add_node(node.id, counted(reply_node(node)))
             elif isinstance(node, HandoffNode):
-                graph.add_node(node.id, handoff_node(node))
+                graph.add_node(node.id, counted(handoff_node(node)))
             elif isinstance(node, AskNode):
-                graph.add_node(node.id, ask_node(node))
+                graph.add_node(node.id, counted(ask_node(node)))
                 graph.add_node(_hidden("understand", node.id), understand_node(node))
                 graph.add_node(_hidden("again", node.id), reply_to_node(node, True))
                 if node.on_other is None:
@@ -1266,14 +1324,37 @@ class WorkflowAgent:
                 if node.on_decline is None:
                     graph.add_node(_hidden("declined", node.id), declined_node(node))
             else:
-                graph.add_node(node.id, end_step)  # ty: ignore[invalid-argument-type]
+                graph.add_node(node.id, counted(end_step))
         graph.add_node("__finish__", finish)
+
+        def onward(src: str, to: str) -> None:
+            """An edge to `to`, or to the finish once the turn may visit no
+            more of its steps (`stops_before`)."""
+            if to not in owned:
+                graph.add_edge(src, to)
+                return
+            graph.add_conditional_edges(
+                src,
+                lambda _s, to=to: "__finish__" if stops_before(to) else to,
+                {to: to, "__finish__": "__finish__"},
+            )
+
+        def routed(src: str, routes: dict[Hashable, str]) -> None:
+            """Edges chosen by the step's `route`, or the finish when the
+            route leads to a step the turn may no longer visit."""
+            graph.add_conditional_edges(
+                src,
+                lambda s: (
+                    _CAPPED if stops_before(routes.get(s["route"], "")) else s["route"]
+                ),
+                {**routes, _CAPPED: "__finish__"},
+            )
 
         graph.add_edge(START, spec.start)
         for node in spec.nodes:
             if isinstance(node, ConditionNode):
                 routes: dict[Hashable, str] = dict(node.branches.items())
-                graph.add_conditional_edges(node.id, lambda s: s["route"], routes)
+                routed(node.id, routes)
             elif isinstance(node, AskNode):
                 understand = _hidden("understand", node.id)
                 again = _hidden("again", node.id)
@@ -1288,10 +1369,8 @@ class WorkflowAgent:
                     "again": again,
                     "leave": leave,
                 }
-                graph.add_conditional_edges(
-                    understand, lambda s: s["route"], ask_routes
-                )
-                graph.add_edge(again, node.id)
+                routed(understand, ask_routes)
+                onward(again, node.id)
                 if node.on_other is None:
                     graph.add_edge(leave, "__finish__")
                 if node.on_decline is None:
@@ -1307,13 +1386,48 @@ class WorkflowAgent:
                 after = spec.next_of(node.id) or "__finish__"
                 graph.add_conditional_edges(
                     node.id,
-                    lambda s, after=after: "__finish__" if s.get("halted") else after,
+                    lambda s, after=after: (
+                        "__finish__"
+                        if s.get("halted") or stops_before(after)
+                        else after
+                    ),
                     {after: after, "__finish__": "__finish__"},
                 )
             else:
-                graph.add_edge(node.id, spec.next_of(node.id) or "__finish__")
+                onward(node.id, spec.next_of(node.id) or "__finish__")
         graph.add_edge("__finish__", END)
         return graph.compile(checkpointer=saver)
+
+
+#: The route taken once a turn has made the visits `max_steps` allows: a
+#: label nobody writes, and a branch given it would only end its turn early.
+_CAPPED = "\x00capped"
+
+
+#: The longest pause id a resume takes (`ResumeInput.thread_id`).
+MAX_PAUSE_ID = 200
+
+
+def _mark_of(config: Any) -> str | None:
+    """The checkpoint a turn paused at, as its pause id carries it: what tells
+    one question of a turn from the next (docs/review-2026-10.md, WORKFLOW-3)."""
+    checkpoint = ((config or {}).get("configurable") or {}).get("checkpoint_id")
+    return checkpoint.replace("-", "") if isinstance(checkpoint, str) else None
+
+
+def _split_pause_id(pause_id: str) -> tuple[str, str | None]:
+    """The thread and the checkpoint a pause id names; no checkpoint for one
+    given out before 0.1.31, which named the thread alone."""
+    found = re.fullmatch(r"(.+)\.([0-9a-f]{32})", pause_id)
+    if found is None:
+        return pause_id, None
+    return found[1], found[2]
+
+
+def thread_of(pause_id: str) -> str:
+    """The turn's thread a pause id names: what the store of paused turns,
+    and LangGraph's checkpoints, are kept under."""
+    return _split_pause_id(pause_id)[0]
 
 
 def _hidden(kind: str, node_id: str) -> str:

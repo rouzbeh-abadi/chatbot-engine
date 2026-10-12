@@ -201,9 +201,6 @@ def _request(message: str, **kwargs: Any) -> ChatRequest:
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_the_query_rewrite_reads_no_invisible_characters_in_the_message():
     """The rewrite cleans the history (`transcript`) but puts the latest
     message in raw (retriever.py:142), so the tag characters a pasted
@@ -225,9 +222,6 @@ async def test_the_query_rewrite_reads_no_invisible_characters_in_the_message():
     assert not _has_tag_characters(read), "tag characters reached the rewrite model"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_the_rerank_reads_no_invisible_characters_in_the_question():
     """On a first turn the rerank's question is the message itself
     (retriever.py:131, :250), put in raw (rerank.py:75) while the passages
@@ -331,9 +325,6 @@ def lenient(monkeypatch):
 
 
 @pytest.mark.parametrize("where", ["history", "message", "system_prompt"])
-@pytest.mark.xfail(
-    strict=True, reason="API-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_lone_surrogate_does_not_fail_the_turn(lenient, project, where: str) -> None:
     """JavaScript's `slice` can cut an emoji in half, and JSON.stringify sends
     the half as `\\ud83d` (ChatFrom's `boundHistory` cuts each turn at 16,000
@@ -500,9 +491,6 @@ def test_framing_a_file_of_unclosed_closers_takes_linear_time() -> None:
 # --- the shared tool-list cache names another chatbot's server --------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-5 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_cached_tool_list_carries_the_asking_chatbots_server_name() -> None:
     """The discovery cache is keyed by (url, allowlist), and the cached rows
     keep the `server` name of whichever chatbot filled it (mcp/client.py:185,
@@ -659,9 +647,6 @@ async def test_a_turn_stopped_mid_answer_does_not_report_the_rewrite_as_its_whol
         {"system_prompt": None, "provider_api_key": "sk-or-SECRET"},
     ],
     ids=["header", "missing-field"],
-)
-@pytest.mark.xfail(
-    strict=True, reason="API-5 in docs/review-2026-10.md: fails until it is fixed"
 )
 def test_a_refused_chat_request_does_not_echo_its_secrets(
     client, project, project_patch

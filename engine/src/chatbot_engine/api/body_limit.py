@@ -7,21 +7,34 @@ refuses a body over `ENGINE_MAX_BODY_BYTES` first: at once when its
 `Content-Length` says it is larger, and as soon as it grows past the cap
 when it arrives in chunks without one.
 
-The uploads are left to their own limit: `PUT /documents` and
-`POST /extract` take a file of up to 25 MB, spooled to disk rather than
-held, and check its size themselves.
+The uploads, `PUT /documents` and `POST /extract`, take a file of up to
+25 MB and have a cap of their own: that and room for the form around it.
+Their key is checked here as well, before any of the body is read: FastAPI
+parses a form before it runs a route's dependencies, the key's included, so
+a caller without the key could otherwise make the engine take in, and spool
+to disk, any amount before it heard 401 (docs/review-2026-10.md, API-1).
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection
+import logging
+from collections.abc import Callable, Mapping
 
 from fastapi import HTTPException, status
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-#: The routes that take a file, by method and path, with a limit of their own.
+from chatbot_engine.api.auth import _match
+from chatbot_engine.settings import get_settings
+
+logger = logging.getLogger(__name__)
+
+#: The routes that take a file, by method and path.
 UPLOADS = frozenset({("PUT", "/documents"), ("POST", "/extract")})
+
+#: Room in an upload's body for its form beside the file: the fields, the
+#: boundaries and the part headers.
+FORM_ROOM = 64 * 1024
 
 
 def _too_large(max_bytes: int) -> str:
@@ -40,21 +53,38 @@ class BodyLimitMiddleware:
         app: ASGIApp,
         *,
         max_bytes: int,
-        exempt: Collection[tuple[str, str]] = UPLOADS,
+        own_limits: Mapping[tuple[str, str], Callable[[], int]] | None = None,
     ) -> None:
         self.app = app
         self.max_bytes = max_bytes
-        self.exempt = exempt
+        self.own_limits = own_limits or {}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or (scope["method"], _route(scope)) in self.exempt:
+        if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
 
-        declared = _content_length(scope)
-        if declared is not None and declared > self.max_bytes:
+        route = (scope["method"], _route(scope))
+        own = self.own_limits.get(route)
+        # Read for each request, so it is always the route's own limit.
+        cap = own() if own is not None else self.max_bytes
+        if route in UPLOADS and not _key_offered(scope):
+            # As the route's own check logs it: a refused key is the one sign
+            # of someone guessing at one. Never the key itself.
+            logger.warning(
+                "rejected an upload to %s: missing or invalid X-API-Key", route[1]
+            )
             response = JSONResponse(
-                {"detail": _too_large(self.max_bytes)},
+                {"detail": "missing or invalid X-API-Key"},
+                status_code=status.HTTP_401_UNAUTHORIZED,
+            )
+            await response(scope, receive, send)
+            return
+
+        declared = _content_length(scope)
+        if declared is not None and declared > cap:
+            response = JSONResponse(
+                {"detail": _too_large(cap)},
                 status_code=status.HTTP_413_CONTENT_TOO_LARGE,
             )
             await response(scope, receive, send)
@@ -67,16 +97,28 @@ class BodyLimitMiddleware:
             message = await receive()
             if message["type"] == "http.request":
                 received += len(message.get("body", b""))
-                if received > self.max_bytes:
+                if received > cap:
                     # Raised where the route reads its body: FastAPI passes an
                     # HTTPException from there on, and it answers 413.
                     raise HTTPException(
                         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-                        detail=_too_large(self.max_bytes),
+                        detail=_too_large(cap),
                     )
             return message
 
         await self.app(scope, counted, send)
+
+
+def _key_offered(scope: Scope) -> bool:
+    """Whether the request carries a key the engine knows, or the engine has
+    none (an open engine). The route checks it again, and names the caller."""
+    credentials = get_settings().credentials()
+    if not credentials:
+        return True
+    for name, value in scope.get("headers", []):
+        if name == b"x-api-key":
+            return _match(value.decode("latin-1"), credentials) is not None
+    return False
 
 
 def _route(scope: Scope) -> str:

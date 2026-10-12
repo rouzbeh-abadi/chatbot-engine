@@ -112,9 +112,6 @@ def test_overlap_cannot_multiply_a_documents_chunks_without_bound(
 # --- INGEST-2: an upload's body is read whole before auth and the 25 MB cap -----
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_an_upload_past_the_limit_is_refused_before_it_is_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -380,9 +377,6 @@ def _pdf_with_one_bad_glyph() -> bytes:
     return _pdf_with_unicode_map(mapping, shown)
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_chat_file_with_one_unmappable_glyph_is_still_read(
     client: TestClient,
 ) -> None:
@@ -396,9 +390,6 @@ def test_a_chat_file_with_one_unmappable_glyph_is_still_read(
     assert response.status_code == 200, f"{response.status_code} {response.text}"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_knowledge_pdf_with_one_unmappable_glyph_is_indexed(
     client: TestClient,
 ) -> None:
@@ -416,9 +407,6 @@ def test_a_knowledge_pdf_with_one_unmappable_glyph_is_indexed(
 # --- INGEST-7: role markup split by an invisible character draws no warning -------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-7 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_role_markup_hidden_behind_a_zero_width_space_is_warned_about(
     client: TestClient,
 ) -> None:
@@ -445,9 +433,6 @@ def test_role_markup_hidden_behind_a_zero_width_space_is_warned_about(
 # --- INGEST-8: a failed update wipes the warnings of the version still answering ---
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-8 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_failed_update_keeps_the_warnings_of_the_version_still_indexed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -478,9 +463,6 @@ async def test_a_failed_update_keeps_the_warnings_of_the_version_still_indexed(
 # --- INGEST-9: doc ids collide across projects when an id holds a NUL -------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-9 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_nul_in_an_id_cannot_make_two_projects_share_a_document(
     client: TestClient,
 ) -> None:
@@ -511,9 +493,6 @@ def test_a_nul_in_an_id_cannot_make_two_projects_share_a_document(
 # --- INGEST-10: a UTF-8 byte order mark is warned about as hidden text ------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-10 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_file_saved_with_a_byte_order_mark_draws_no_warning(
     client: TestClient,
 ) -> None:
@@ -534,9 +513,6 @@ def test_a_file_saved_with_a_byte_order_mark_draws_no_warning(
 # --- INGEST-11: a misspelled upload field is ignored, not refused -----------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_misspelled_upload_field_is_refused(client: TestClient) -> None:
     """docs/backend-integration.md: "Every model uses extra="forbid". A
     misspelled field is a 422 that names it." The upload is a form, not a

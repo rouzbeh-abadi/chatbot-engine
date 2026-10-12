@@ -567,3 +567,30 @@ async def test_a_redirect_within_the_server_is_followed():
         server.shutdown()
 
     assert [t["name"] for t in tools] == ["lookup"]
+
+
+def test_a_tool_schema_loses_hidden_characters_in_its_prose_only() -> None:
+    """Descriptions and titles are prose for the model; an `enum`, a `const`
+    or a `default` is a value the server checks, and an emoji's variation
+    selector in one is part of it (MCP-5)."""
+    from chatbot_engine.mcp.client import _cleaned
+
+    heart = "❤️"
+    schema = {
+        "type": "object",
+        "description": "Rate​ it",
+        "properties": {
+            "title": {"type": "string", "title": "Ti⁠tle"},
+            "mood": {"type": "string", "enum": ["\U0001f44d", heart]},
+            "kind": {"const": {"title": "a​b"}, "default": heart},
+        },
+        "required": ["title"],
+    }
+
+    cleaned = _cleaned(schema)
+
+    assert cleaned["description"] == "Rate it"
+    assert cleaned["properties"]["title"]["title"] == "Title"
+    assert cleaned["properties"]["mood"]["enum"] == ["\U0001f44d", heart]
+    assert cleaned["properties"]["kind"] == {"const": {"title": "a​b"}, "default": heart}
+    assert cleaned["required"] == ["title"]

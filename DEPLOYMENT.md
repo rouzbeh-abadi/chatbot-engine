@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.30
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.30
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.30
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.30
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.31
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.31
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.31
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.31
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -25,8 +25,9 @@ when an assistant names either.
 Each is also tagged `0.1`, `0` and `latest`. Pin to a full version in
 production.
 
-The Python images install from `uv.lock`, so two builds of one commit produce
-the same image. Both are built with the repository root as context:
+The Python images install from `uv.lock`, on a base pinned by digest, so two
+builds of one commit install the same packages on the same base. Each
+published image carries an SBOM and build provenance. Both are built with the repository root as context:
 
 ```bash
 docker build -f engine/Dockerfile .
@@ -47,10 +48,10 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.30 && git push origin v0.1.30
+git tag v0.1.31 && git push origin v0.1.31
 ```
 
-The Release workflow runs the full test suite, publishes the three images, and
+The Release workflow runs the full test suite, publishes the four images, and
 creates a GitHub release with generated notes. The suite runs again because a
 tag can point at any commit.
 
@@ -84,13 +85,14 @@ and `GET /metrics` needs the API key; see [Observability](#observability).
 
 ## Secrets
 
-Generate real values; `openssl rand -hex 32` is sufficient for all three.
+Generate real values; `openssl rand -hex 32` is sufficient for all four.
 
 | Variable | Guards |
 | --- | --- |
 | `ENGINE_API_KEY` | The engine, which holds the model provider credentials. Set the same value as `BACKEND_ENGINE_API_KEY`. For more than one caller use `ENGINE_API_KEYS`; see below. |
 | `BACKEND_ADMIN_KEY` | `/admin` and the document write routes: bookings, tickets, evaluation runs, and the knowledge base. |
 | `POSTGRES_PASSWORD` | The database. The demo value is committed to this repository. |
+| `MCP_TOOLS_TOKEN` | The tool server, which takes the customer's id from each call. The production overlay gives it to the tool server and to the backend, which has the engine send it as a bearer token to that server alone. |
 
 Pass secrets through the platform's secret mechanism. Nothing in this
 repository reads a secret at build time.
@@ -132,6 +134,18 @@ Nothing in this repository terminates TLS. Put Caddy, Traefik, nginx or a cloud
 load balancer in front of the frontend port and set `Strict-Transport-Security`
 there. The frontend container speaks plain HTTP to whatever is in front of it,
 so an HSTS header set inside it would be ignored.
+
+The terminator must add the visitor's address to `X-Forwarded-For` (Caddy and
+Traefik do by default; nginx needs `proxy_set_header X-Forwarded-For
+$proxy_add_x_forwarded_for`). The frontend's nginx believes that header only
+from private addresses (`set_real_ip_from` in `examples/frontend/nginx.conf`),
+so any machine or container on a private network in front of it may say who
+the visitor is, and choose its own rate-limit bucket. Narrow the ranges to
+where the terminator's requests come from: with the production overlay's
+`127.0.0.1:8080`, that is the compose network's subnet (`docker network
+inspect` names it; its gateway can change when the network is made again),
+not `127.0.0.1`. A terminator on a public address is not believed at all, so
+every visitor then shares its bucket: list its address there.
 
 ## Authentication
 
@@ -232,11 +246,15 @@ terminal. The backend has the same switch, `BACKEND_LOG_FORMAT`.
 
 **Metrics** at the engine's `GET /metrics`, in Prometheus format: turns by
 caller, agent and outcome; turn latency; tokens and cost by model; tool calls
-by result. Locally the route is open, like `/health`. Under
+by tool and result. A tool is counted by name only when the turn offered it,
+up to 64 characters of the name; a call to a name the model made up is
+counted under `not_offered`, so what a visitor steers the model into writing
+neither adds a series nor is served here. Locally the route is open, like `/health`. Under
 `ENGINE_ENV=production` it needs `X-API-Key` like any other caller, since its
 counts name the callers and the models, so a scraper sends a key of its own.
 `ENGINE_METRICS_PUBLIC=true` opens it for a scraper on a private network that
-cannot send a header. `ENGINE_METRICS_ENABLED=false` removes the route.
+cannot send a header. `ENGINE_METRICS_ENABLED=false` removes the route and,
+since 0.1.31, stops the counting too; turns are still logged.
 
 Not included: distributed tracing. The request id gives the correlation;
 spans and a trace backend are a deployment's own choice.
@@ -286,6 +304,20 @@ setting:
 Nothing above any of these seams changes. The published images include every
 driver, so each setting works without a rebuild.
 
+What one process keeps in memory, and replicas therefore do not share: the
+turns a document's uploads and re-indexes take, a delete cancelling the
+uploads of its document under way, and a project's uploads refused for ten
+minutes after it is purged. Each holds within one replica. Across replicas,
+send a document's writes, and its delete, to one replica (by the project, at
+the load balancer), or let a caller send one at a time, as ChatFrom's
+knowledge pages do.
+
+The workflow agent's paused turns stay in a file, `ENGINE_CHECKPOINT_DB`, on
+the engine's volume: replicas share them only when they share that volume,
+as the scale overlay's do on one host. On separate hosts, a question asked by
+one replica is answered `resume_expired` by another; send a conversation's
+turns to one replica.
+
 The scale overlay applies all of them and runs two engine replicas:
 
 ```bash
@@ -315,6 +347,13 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
 
 ## Operational notes
 
+- **Stopping.** Since 0.1.31 the engine closes a workflow's store of paused
+  turns as it shuts down, so a stop after a turn that paused no longer waits
+  for Docker's kill. Run the container with an init all the same (`init:
+  true` in compose, or `docker run --init`): uvicorn ends its shutdown by
+  raising the signal again, which a process running as PID 1 ignores, so
+  anything left running would keep the container up until the kill; and an
+  init reaps the processes the engine starts to read PDFs.
 - **One collection per project, and the room a delete gives back.** Since
   0.1.30 each project has a collection of its own for each embedding model
   it uses. Chroma 1.5 keeps a deleted vector's room in its collection's
@@ -382,8 +421,11 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   `ENGINE_PROVIDER_TIMEOUT_S` (default 60) bounds one provider call. Set the
   retries to 0 if a proxy in front of OpenRouter already retries, or the two
   will compound. Reading an image for `POST /extract` is never retried and
-  waits at most 45 s, so a call that is billed is also answered within the
-  caller's patience.
+  takes at most 45 s, start to end, within the caller's patience; one cut off
+  there answers `502` with an estimated `usage`, since the provider may still
+  bill it. The RAGAS judge of `POST /eval/rag` keeps to the same timeout and
+  retries (before 0.1.31 it had the SDK's ten minutes and six retries), and
+  each of its cases is answered within `ENGINE_TURN_DEADLINE_S`.
 - **Turn deadline.** `ENGINE_TURN_DEADLINE_S` (default 120) is the longest one
   chat turn may take, retrieval, model calls, retries and tool calls
   together. Past it the turn stops where it is and ends with the assistant's
@@ -413,7 +455,11 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   JSON body the engine reads. A larger one is refused with 413 before it is
   read, at once when its `Content-Length` says so and otherwise as soon as it
   grows past the cap. `PUT /documents` and `POST /extract` keep their own
-  limit of 25 MB.
+  limit of 25 MB, with 64 KB of room for the form around the file, held the
+  same way since 0.1.31: a larger upload is refused before it is read, and
+  so is one whose API key is wrong (`401`). An evaluation (`POST /judge`,
+  `POST /eval/rag`) whose caller goes away is stopped, rather than going on
+  answering and grading on the caller's key; nobody reads its `499`.
 - **Reading files for a chat.** `ENGINE_EXTRACT_TIMEOUT_S` (default 20)
   bounds the reading of one document for `POST /extract`: it runs in a
   process of its own, bounded in CPU time and memory where the system allows,

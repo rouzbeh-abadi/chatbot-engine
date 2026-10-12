@@ -37,7 +37,12 @@ from chatbot_engine.models.workflow import AskNode, WorkflowSpec
 
 pytest.importorskip("langgraph_agent.workflow")
 from langgraph_agent.pauses import Pause, Pauses
-from langgraph_agent.workflow import WorkflowAgent, check_answer, parse_verdict
+from langgraph_agent.workflow import (
+    WorkflowAgent,
+    check_answer,
+    parse_verdict,
+    thread_of,
+)
 
 
 class Tools:
@@ -193,7 +198,9 @@ async def test_a_turn_pauses_on_a_question_and_resumes_where_it_stopped():
         tools,
     )
     choice = _asked(second)
-    assert choice.thread_id == asked.thread_id
+    # The same turn, but a question of its own: an answer to the first cannot answer it.
+    assert thread_of(choice.thread_id) == thread_of(asked.thread_id)
+    assert choice.thread_id != asked.thread_id
     assert [o.label for o in choice.options] == ["Wed 10:00", "Wed 14:00"]
     assert _text(second) == "When suits you?"
 
@@ -201,7 +208,7 @@ async def test_a_turn_pauses_on_a_question_and_resumes_where_it_stopped():
         _request(
             CALLBACK,
             message="Wed 14:00",
-            resume={"thread_id": asked.thread_id, "value": "2026-09-16T14:00"},
+            resume={"thread_id": choice.thread_id, "value": "2026-09-16T14:00"},
         ),
         pauses,
         tools,
@@ -213,7 +220,9 @@ async def test_a_turn_pauses_on_a_question_and_resumes_where_it_stopped():
         "book",
         {"phone": "+442079460958", "slot": "2026-09-16T14:00", "why": "please call me"},
     )
-    assert await pauses.find(asked.thread_id) is None, "a finished turn keeps nothing"
+    assert await pauses.find(thread_of(asked.thread_id)) is None, (
+        "a finished turn keeps nothing"
+    )
 
 
 async def test_a_refused_answer_asks_again_with_the_reason():
@@ -241,7 +250,7 @@ async def test_a_refused_answer_asks_again_with_the_reason():
         _request(
             CALLBACK,
             message="+4915112345678",
-            resume={"thread_id": asked.thread_id, "value": "+4915112345678"},
+            resume={"thread_id": retry.thread_id, "value": "+4915112345678"},
         ),
         pauses,
         tools,
@@ -252,7 +261,7 @@ async def test_a_refused_answer_asks_again_with_the_reason():
 async def test_a_choice_outside_the_options_is_refused():
     pauses, tools = Pauses.memory(), Tools()
     thread = _asked(await _run(_request(CALLBACK), pauses, tools)).thread_id
-    await _run(
+    when = await _run(
         _request(
             CALLBACK, "+4915112345678", {"thread_id": thread, "value": "+4915112345678"}
         ),
@@ -261,7 +270,9 @@ async def test_a_choice_outside_the_options_is_refused():
     )
 
     events = await _run(
-        _request(CALLBACK, "Friday", {"thread_id": thread, "value": "Friday"}),
+        _request(
+            CALLBACK, "Friday", {"thread_id": _asked(when).thread_id, "value": "Friday"}
+        ),
         pauses,
         tools,
         ScriptedModel(rounds=[_verdict("answered", "Friday")], seen=[]),
@@ -287,7 +298,7 @@ async def test_a_choice_outside_the_options_goes_where_the_step_sends_other_repl
     }
     pauses, tools = Pauses.memory(), Tools()
     thread = _asked(await _run(_request(spec), pauses, tools)).thread_id
-    await _run(
+    when = await _run(
         _request(
             spec, "+4915112345678", {"thread_id": thread, "value": "+4915112345678"}
         ),
@@ -296,7 +307,9 @@ async def test_a_choice_outside_the_options_goes_where_the_step_sends_other_repl
     )
 
     events = await _run(
-        _request(spec, "Friday", {"thread_id": thread, "value": "Friday"}),
+        _request(
+            spec, "Friday", {"thread_id": _asked(when).thread_id, "value": "Friday"}
+        ),
         pauses,
         tools,
         ScriptedModel(rounds=[_verdict("answered", "Friday")], seen=[]),
@@ -398,7 +411,7 @@ async def test_an_expired_pause_is_forgotten():
     thread = _asked(await _run(_request(PROJECT), pauses, tools)).thread_id
 
     with patch("langgraph_agent.pauses.time.time", return_value=time.time() + 120):
-        assert await pauses.find(thread) is None
+        assert await pauses.find(thread_of(thread)) is None
 
 
 async def test_usage_before_the_pause_is_reported_once():
@@ -536,7 +549,7 @@ async def test_the_sqlite_store_keeps_a_pause_across_restarts(tmp_path):
 
     # A new store on the same file: an engine that restarted in between.
     second = Pauses.sqlite(path, ttl_s=3600)
-    pause = await second.find(thread)
+    pause = await second.find(thread_of(thread))
     assert isinstance(pause, Pause) and pause.session_id == "s1"
     await _run(
         _request(PROJECT, "x.com", {"thread_id": thread, "value": "x.com"}),
@@ -545,7 +558,7 @@ async def test_the_sqlite_store_keeps_a_pause_across_restarts(tmp_path):
     )
 
     assert tools.calls == [("book", {"name": "Project X", "url": "https://x.com"})]
-    assert await second.find(thread) is None
+    assert await second.find(thread_of(thread)) is None
 
 
 @pytest.mark.parametrize(
@@ -622,7 +635,7 @@ async def test_a_visitor_who_declines_is_not_taken_as_answering():
     assert tools.calls == [], "nothing was created"
     assert _text(events) == "No problem, I won't create one."
     assert events[-1].finish_reason == "stop"
-    assert await pauses.find(thread) is None, "the question no longer waits"
+    assert await pauses.find(thread_of(thread)) is None, "the question no longer waits"
 
 
 async def test_a_decline_goes_where_the_step_says_or_says_its_own_words():
@@ -657,7 +670,10 @@ async def test_a_question_back_is_answered_and_the_question_asked_again_then_lef
     )
 
     again = _asked(events)
-    assert again.node == "name" and again.thread_id == thread and not again.error
+    assert again.node == "name" and not again.error
+    # The same turn, asking afresh: the reply that was not an answer cannot be replayed.
+    assert thread_of(again.thread_id) == thread_of(thread)
+    assert again.thread_id != thread
     assert (
         _text(events)
         == "A project groups your tasks.\n\nWhat should the project be called?"
@@ -674,7 +690,7 @@ async def test_a_question_back_is_answered_and_the_question_asked_again_then_lef
         _request(
             NAMED,
             "how much does it cost?",
-            {"thread_id": thread, "value": "how much does it cost?"},
+            {"thread_id": again.thread_id, "value": "how much does it cost?"},
         ),
         pauses,
         tools,
@@ -684,7 +700,7 @@ async def test_a_question_back_is_answered_and_the_question_asked_again_then_lef
     )
     assert _text(last) == "It is free."
     assert not any(isinstance(e, InputRequiredEvent) for e in last)
-    assert tools.calls == [] and await pauses.find(thread) is None
+    assert tools.calls == [] and await pauses.find(thread_of(thread)) is None
 
 
 async def test_replies_that_still_do_not_answer_go_where_the_step_says():
@@ -721,7 +737,7 @@ async def test_a_valid_reply_of_a_checked_kind_needs_no_reading():
 async def test_a_typed_choice_is_read_as_the_option_it_means():
     pauses, tools = Pauses.memory(), Tools()
     thread = _asked(await _run(_request(CALLBACK), pauses, tools)).thread_id
-    await _run(
+    when = await _run(
         _request(
             CALLBACK, "+4915112345678", {"thread_id": thread, "value": "+4915112345678"}
         ),
@@ -733,7 +749,7 @@ async def test_a_typed_choice_is_read_as_the_option_it_means():
         _request(
             CALLBACK,
             "the afternoon one",
-            {"thread_id": thread, "value": "the afternoon one"},
+            {"thread_id": _asked(when).thread_id, "value": "the afternoon one"},
         ),
         pauses,
         tools,
@@ -821,15 +837,17 @@ async def test_an_answer_of_the_wrong_kind_is_asked_again_however_often():
     }
     pauses, tools = Pauses.memory(), Tools()
     thread = _asked(await _run(_request(spec), pauses, tools)).thread_id
+    latest = thread
     for text in ("+44 20", "+44 207"):
         events = await _run(
-            _request(spec, text, {"thread_id": thread, "value": text}),
+            _request(spec, text, {"thread_id": latest, "value": text}),
             pauses,
             tools,
             ScriptedModel(rounds=[_verdict("answered", text)], seen=[]),
         )
         assert "phone number" in (_asked(events).error or "")
-    assert await pauses.find(thread) is not None, "the question still waits"
+        latest = _asked(events).thread_id
+    assert await pauses.find(thread_of(thread)) is not None, "the question still waits"
     assert tools.calls == []
 
 
@@ -848,7 +866,7 @@ async def test_a_reading_that_cannot_be_had_asks_again_and_keeps_the_question():
         Broken(rounds=[], seen=[]),
     )
     assert "did not catch" in (_asked(events).error or "")
-    assert await pauses.find(thread) is not None, "the pause is kept"
+    assert await pauses.find(thread_of(thread)) is not None, "the pause is kept"
     assert tools.calls == [], "the reply was not taken as the name"
 
 
@@ -872,7 +890,9 @@ async def test_the_reading_of_a_refused_answer_is_reported_with_the_pause():
     assert (spent.input_tokens, spent.output_tokens) == (500, 20)
     later = await _run(
         _request(
-            CALLBACK, "+4915112345678", {"thread_id": thread, "value": "+4915112345678"}
+            CALLBACK,
+            "+4915112345678",
+            {"thread_id": _asked(events).thread_id, "value": "+4915112345678"},
         ),
         pauses,
         tools,
@@ -977,7 +997,9 @@ async def test_a_reading_that_cannot_be_had_twice_takes_the_reply_as_it_stands()
     )
     assert "did not catch" in (_asked(first).error or "") and tools.calls == []
     second = await _run(
-        _request(NAMED, "Apollo", {"thread_id": thread, "value": "Apollo"}),
+        _request(
+            NAMED, "Apollo", {"thread_id": _asked(first).thread_id, "value": "Apollo"}
+        ),
         pauses,
         tools,
         Broken(rounds=[], seen=[]),
@@ -998,13 +1020,19 @@ async def test_a_question_asked_twice_in_one_turn_starts_its_count_afresh():
         "max_steps": 12,
     }
     pauses, tools = Pauses.memory(), Tools()
-    thread = _asked(await _run(_request(loop, "new project"), pauses, tools)).thread_id
-    resume = lambda text, *rounds: _run(  # noqa: E731
-        _request(loop, text, {"thread_id": thread, "value": text}),
-        pauses,
-        tools,
-        ScriptedModel(rounds=list(rounds), seen=[]),
-    )
+    latest = [_asked(await _run(_request(loop, "new project"), pauses, tools))]
+
+    async def resume(text: str, *rounds: list) -> list:
+        # Each answer goes to the question the turn asked last.
+        events = await _run(
+            _request(loop, text, {"thread_id": latest[-1].thread_id, "value": text}),
+            pauses,
+            tools,
+            ScriptedModel(rounds=list(rounds), seen=[]),
+        )
+        latest.extend(e for e in events if isinstance(e, InputRequiredEvent))
+        return events
+
     await resume("what?", _verdict("other"), [AIMessageChunk(content="A label.")])
     await resume("Apollo", _verdict("answered", "Apollo"))
     events = await resume(
@@ -1054,18 +1082,18 @@ async def test_forgetting_a_session_forgets_its_paused_turns_and_no_other(tmp_pa
     )
 
     assert await pauses.forget_where("support", "s-gone") == 1
-    assert await pauses.find(gone.thread_id) is None
-    assert await pauses.find(kept.thread_id) is not None
-    assert await pauses.find(other.thread_id) is not None
+    assert await pauses.find(thread_of(gone.thread_id)) is None
+    assert await pauses.find(thread_of(kept.thread_id)) is not None
+    assert await pauses.find(thread_of(other.thread_id)) is not None
     db = sqlite3.connect(path)
     left = {row[0] for row in db.execute("SELECT DISTINCT thread_id FROM checkpoints")}
     db.close()
-    assert gone.thread_id not in left
-    assert {kept.thread_id, other.thread_id} <= left
+    assert thread_of(gone.thread_id) not in left
+    assert {thread_of(kept.thread_id), thread_of(other.thread_id)} <= left
 
     # A purge: every paused turn of the project.
     assert await pauses.forget_where("support") == 1
-    assert await pauses.find(kept.thread_id) is None
+    assert await pauses.find(thread_of(kept.thread_id)) is None
     await pauses._conn.close()
 
 
@@ -1093,7 +1121,8 @@ async def test_saved_state_no_paused_turn_names_goes_once_nothing_has_written_to
         db = sqlite3.connect(path)
         try:
             return db.execute(
-                "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?", (thread,)
+                "SELECT COUNT(*) FROM checkpoints WHERE thread_id = ?",
+                (thread_of(thread),),
             ).fetchone()[0]
         finally:
             db.close()

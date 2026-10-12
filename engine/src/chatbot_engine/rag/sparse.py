@@ -41,6 +41,7 @@ import re
 import sys
 import threading
 import time
+import unicodedata
 from array import array
 from collections import Counter, OrderedDict
 from concurrent.futures import Future
@@ -78,7 +79,10 @@ _WORD = re.compile(r"\w+")
 
 
 def tokenize(text: str) -> list[str]:
-    return _WORD.findall(text.lower())
+    """The words of `text`, in one form however they were typed or saved: a
+    PDF's or a Mac's `e` and accent is a visitor's `é` (NFKC), and case is
+    folded, so `Straße` meets `STRASSE` (docs/review-2026-10.md, RETRIEVAL-5)."""
+    return _WORD.findall(unicodedata.normalize("NFKC", text).casefold())
 
 
 @dataclass(eq=False)

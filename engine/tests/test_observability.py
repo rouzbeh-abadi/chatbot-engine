@@ -33,8 +33,13 @@ class _Agent:
     """A turn with one tool call and a priced usage event. No model."""
 
     async def run(self, request):
-        yield ToolCallFinishedEvent(call_id="c1", tool="get_booking_status", ok=True)
-        yield ToolCallFinishedEvent(call_id="c2", tool="get_flight_status", ok=False)
+        # Tools the turn offered, as `run_tool_calls` marks them.
+        yield ToolCallFinishedEvent(
+            call_id="c1", tool="get_booking_status", ok=True
+        ).as_offered()
+        yield ToolCallFinishedEvent(
+            call_id="c2", tool="get_flight_status", ok=False
+        ).as_offered()
         yield TokenEvent(text="Delayed.")
         yield UsageEvent(
             input_tokens=80,

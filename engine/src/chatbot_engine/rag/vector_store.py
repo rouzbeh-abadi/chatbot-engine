@@ -35,6 +35,7 @@ import sqlite3
 import threading
 import uuid
 from collections.abc import Collection
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
@@ -699,6 +700,23 @@ def _write(
     )
 
 
+class EmbeddedChunks:
+    """What a write has done so far: how many chunks it had embedded, paid
+    for whether or not the write then lands (docs/review-2026-10.md,
+    INGEST-19), and whether every one of them landed, so the version written
+    is the one that answers whatever fails after."""
+
+    __slots__ = ("chunks", "landed")
+
+    def __init__(self) -> None:
+        self.chunks = 0
+        self.landed = False
+
+
+#: The write under way in this task, for `_add` to count what it embeds.
+_EMBEDDING: ContextVar[EmbeddedChunks | None] = ContextVar("embedding", default=None)
+
+
 class ChromaChunkStore:
     """The write side: one document's chunks, replaced as a unit, in its
     project's own collection."""
@@ -709,7 +727,12 @@ class ChromaChunkStore:
         self._embedding_model = embedding_model
 
     async def write(
-        self, *, doc_id: str, project_id: str, chunks: list[Document]
+        self,
+        *,
+        doc_id: str,
+        project_id: str,
+        chunks: list[Document],
+        embedded: EmbeddedChunks | None = None,
     ) -> None:
         """Replace everything stored for one document with `chunks`.
 
@@ -727,6 +750,10 @@ class ChromaChunkStore:
         failure part-way removes what of the new version landed, so the
         version already indexed goes on answering, whole. The room the old
         version took is given back after (`tidy`).
+
+        `embedded`, when given, counts the chunks as each slice is embedded,
+        which the provider bills whether or not the slice then lands, and
+        says when every slice has landed.
         """
         await ensure_moved(project_id)
         version = uuid.uuid4().hex[:12]
@@ -738,6 +765,7 @@ class ChromaChunkStore:
         # would each remove the other's version as the old one, and leave
         # the document with part of one or none.
         async with _writing((project_id, doc_id)):
+            counting = _EMBEDDING.set(embedded)
             try:
                 for start in range(0, len(chunks), size):
                     tried = start + size
@@ -747,6 +775,10 @@ class ChromaChunkStore:
                     with contextlib.suppress(Exception):
                         await self._delete_ids(project_id, ids[:tried])
                 raise
+            finally:
+                _EMBEDDING.reset(counting)
+            if embedded is not None:
+                embedded.landed = True
 
             async with gate(project_id).shared():
                 replaced = await self._remove(
@@ -769,6 +801,10 @@ class ChromaChunkStore:
         """
         texts = [chunk.page_content for chunk in chunks]
         vectors = await run_indexing(_embed, self._embedding_model, texts)
+        # Billed now, whether or not the write below lands.
+        embedding = _EMBEDDING.get()
+        if embedding is not None:
+            embedding.chunks += len(texts)
         async with gate(project_id).shared():
             store = await asyncio.to_thread(
                 open_vector_store, self._embedding_model, project_id

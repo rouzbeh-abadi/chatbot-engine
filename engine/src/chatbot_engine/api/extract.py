@@ -13,13 +13,20 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from chatbot_engine.agent.vision import IMAGE_TYPES, describe_image
+from chatbot_engine.agent.vision import (
+    IMAGE_TYPES,
+    ImageReadCutOff,
+    ImageReading,
+    describe_image,
+)
 from chatbot_engine.api.auth import CallerDep
 from chatbot_engine.api.dependencies import SettingsDep
 from chatbot_engine.api.documents import MAX_UPLOAD_BYTES
+from chatbot_engine.api.forms import only_fields
 from chatbot_engine.api.rate_limit import limit_chat, limit_extract
 from chatbot_engine.documents.bounded import ReadFailed, read_bounded
 from chatbot_engine.documents.extractor import select_extractor
@@ -79,6 +86,7 @@ async def _take(slot: asyncio.Semaphore, room: int) -> None:
 
 @router.post(
     "/extract",
+    dependencies=[Depends(only_fields("file", "model", "provider_api_key"))],
     responses={
         400: {"description": "The file is empty."},
         413: {"description": "The file is larger than an upload may be."},
@@ -88,7 +96,11 @@ async def _take(slot: asyncio.Semaphore, room: int) -> None:
         },
         429: {"description": "Over the reading rate; an image, over the chat rate."},
         501: {"description": "An image, and no model provider key is configured."},
-        502: {"description": "An image, and the vision model refused or failed."},
+        502: {
+            "description": "An image, and the vision model refused or failed. "
+            "One cut off at its deadline carries `usage` too, estimated: the "
+            "provider may still bill it."
+        },
         503: {
             "description": "As many documents are being read as the engine allows at once."
         },
@@ -110,7 +122,8 @@ async def extract(
     both, and is read only as far as a chat file's text goes
     (`MAX_ATTACHMENT_CHARS`).
     """
-    data = await file.read()
+    # One byte past the limit at most: enough to know it is too large.
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
     if not data:
         raise HTTPException(status_code=400, detail="uploaded file is empty")
     if len(data) > MAX_UPLOAD_BYTES:
@@ -126,20 +139,22 @@ async def extract(
         settings.require_provider_key(key)
         # A model call, so counted as a chat turn is.
         await limit_chat(caller, settings)
-        text, usage = await describe_image(
-            data, mimetype, model=model, provider_api_key=key
-        )
+        try:
+            reading = await describe_image(
+                data, mimetype, model=model, provider_api_key=key
+            )
+        except ImageReadCutOff as exc:
+            return JSONResponse(  # ty: ignore[invalid-return-type]
+                status_code=502,
+                content={
+                    "detail": str(exc),
+                    "usage": _usage(exc.reading).model_dump(),
+                },
+            )
         # The call was made and billed whatever the model said, so the caller
         # hears what it cost even for an image it said nothing about.
         return ExtractedText(
-            text=text,
-            chars=len(text),
-            usage=ExtractUsage(
-                input_tokens=usage.input_tokens,
-                output_tokens=usage.output_tokens,
-                cost_usd=usage.cost_usd,
-                model=usage.model,
-            ),
+            text=reading.text, chars=len(reading.text), usage=_usage(reading)
         )
 
     # Before any reading, so an unknown type is a 415 (app.py), not a 422.
@@ -187,4 +202,14 @@ async def extract(
         pages=extracted.page_count,
         chars=len(extracted.text),
         truncated=extracted.truncated,
+    )
+
+
+def _usage(reading: ImageReading) -> ExtractUsage:
+    return ExtractUsage(
+        input_tokens=reading.usage.input_tokens,
+        output_tokens=reading.usage.output_tokens,
+        cost_usd=reading.usage.cost_usd,
+        model=reading.usage.model,
+        estimated=reading.estimated,
     )

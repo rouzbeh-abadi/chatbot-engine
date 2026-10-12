@@ -51,7 +51,19 @@ class Settings(BaseSettings):
 
     # Overrides the MCP server URL from projects/*.yaml. Set to the Compose
     # service name (http://mcp-tools:8200/mcp) when the engine runs in Docker.
+    # The tool server reads it too: the host it names is one it answers to.
     mcp_tools_url: str | None = None
+
+    # The bearer token the MCP tool server requires. Set the same value for
+    # both processes: the tool server refuses a call without it, and the
+    # backend has the engine send it to that server alone. Unset, the tool
+    # server takes any caller that reaches it, which is only fine while it
+    # listens on loopback.
+    mcp_tools_token: str | None = None
+
+    # The address the MCP tool server listens on. Unset, loopback, so only this
+    # machine reaches it; in a container, 0.0.0.0, so the engine's can.
+    mcp_tools_host: str | None = None
 
     # --- rate limits --------------------------------------------------------
     # Per caller, in this process. Generous for a person, tight for a script:
@@ -74,7 +86,9 @@ class Settings(BaseSettings):
     # which is fine on localhost and not fine anywhere else.
     admin_key: str | None = None
 
-    @field_validator("engine_api_key", "admin_key", "redis_url", mode="after")
+    @field_validator(
+        "engine_api_key", "admin_key", "redis_url", "mcp_tools_token", mode="after"
+    )
     @classmethod
     def _blank_means_unset(cls, value: str | None) -> str | None:
         """`BACKEND_ADMIN_KEY=` in a .env file arrives as "", not as None.

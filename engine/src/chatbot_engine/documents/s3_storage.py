@@ -60,10 +60,19 @@ class S3BlobStore(BlobStore):
         return self.uri_for(key)
 
     async def get(self, *, uri: str) -> bytes:
+        """The object's bytes; `FileNotFoundError` when there is none, as for
+        a local file, so a caller tells a missing original from a failure."""
+        from botocore.exceptions import ClientError
+
         bucket, key = self._parse(uri)
-        response = await asyncio.to_thread(
-            self._client.get_object, Bucket=bucket, Key=key
-        )
+        try:
+            response = await asyncio.to_thread(
+                self._client.get_object, Bucket=bucket, Key=key
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("NoSuchKey", "404"):
+                raise FileNotFoundError(uri) from exc
+            raise
         return await asyncio.to_thread(response["Body"].read)
 
     async def delete(self, *, uri: str) -> None:

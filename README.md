@@ -110,17 +110,19 @@ You need Docker and an [OpenRouter API key](https://openrouter.ai/keys). The
 published image takes the key as an environment variable and keeps its data
 (vectors, the document registry and the uploaded files) on one volume. The
 three directory settings point the stores at that volume. Images after 0.1.7
-use these paths by default.
+use these paths by default. The port is published on this machine only: with
+no API key set, anyone who reaches it can chat on your provider key and read
+or delete any project's documents (production, below, sets one).
 
 ```bash
-docker run -d --name engine -p 8100:8100 \
+docker run -d --init --name engine -p 127.0.0.1:8100:8100 \
   -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
   -e ENGINE_CHROMA_DIR=/var/lib/chatbot-engine/chroma \
   -e ENGINE_REGISTRY_DB=/var/lib/chatbot-engine/documents.sqlite3 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.30
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.31
 ```
 
 The readiness endpoint reports whether a provider key is set, whether the
@@ -287,7 +289,7 @@ default. Tracing is enabled with `ENGINE_TRACING` and the keys of the tracing
 backend.
 
 ```bash
-docker run -d --name engine -p 8100:8100 \
+docker run -d --init --name engine -p 8100:8100 \
   -e ENGINE_ENV=production \
   -e ENGINE_API_KEY=a-long-random-string \
   -e ENGINE_OPENROUTER_API_KEY=sk-or-... \
@@ -295,7 +297,7 @@ docker run -d --name engine -p 8100:8100 \
   -e ENGINE_LANGFUSE_PUBLIC_KEY=pk-lf-... \
   -e ENGINE_LANGFUSE_SECRET_KEY=sk-lf-... \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.30
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.31
 ```
 
 [DEPLOYMENT.md](DEPLOYMENT.md) covers the remaining topics, including rate

@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 import openai
 from fastapi import APIRouter, Depends, FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from chatbot_engine import __version__, tracing
@@ -30,7 +31,8 @@ from chatbot_engine.api import (
     projects,
 )
 from chatbot_engine.api.auth import require_api_key
-from chatbot_engine.api.body_limit import BodyLimitMiddleware
+from chatbot_engine.api.body_limit import FORM_ROOM, BodyLimitMiddleware
+from chatbot_engine.api.dependencies import close_agents
 from chatbot_engine.api.rate_limit import limit_chat, limit_eval
 from chatbot_engine.documents.extractor import UnsupportedDocumentTypeError
 from chatbot_engine.errors import (
@@ -41,6 +43,7 @@ from chatbot_engine.errors import (
     StorageFullError,
     provider_reason,
 )
+from chatbot_engine.models.common import whole
 from chatbot_engine.observability import RequestIdMiddleware, configure_logging
 from chatbot_engine.rag.vector_store import move_everything
 from chatbot_engine.settings import get_settings
@@ -80,6 +83,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     mover.cancel()
     with contextlib.suppress(asyncio.CancelledError):
         await mover
+    await close_agents()
     tracing.flush()
 
 
@@ -111,6 +115,25 @@ def create_app() -> FastAPI:
     async def not_configured(_: Request, exc: NotConfiguredError) -> JSONResponse:
         """501: the engine is missing configuration it needs for this route."""
         return JSONResponse(status_code=501, content={"detail": str(exc)})
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_request(_: Request, exc: RequestValidationError) -> JSONResponse:
+        """422 naming what is wrong and where, never what was sent.
+
+        FastAPI's own answer repeats each error's `input`: a server's whole
+        headers, or for a missing field the whole project, its keys included
+        (docs/review-2026-10.md, API-5); and one it cannot encode is a 500
+        (API-4). Here each error is its type, its place and its message.
+        """
+        errors = [
+            {
+                "type": error.get("type"),
+                "loc": [whole(part) for part in error.get("loc", ())],
+                "msg": whole(str(error.get("msg", ""))),
+            }
+            for error in exc.errors()
+        ]
+        return JSONResponse(status_code=422, content={"detail": errors})
 
     @app.exception_handler(UnknownAgentError)
     async def unknown_agent(_: Request, exc: UnknownAgentError) -> JSONResponse:
@@ -158,7 +181,15 @@ def create_app() -> FastAPI:
 
     # A JSON body over the cap is refused before it is read. Added first, so
     # it runs inside the request id's middleware and a 413 carries the id.
-    app.add_middleware(BodyLimitMiddleware, max_bytes=settings.max_body_bytes)
+    # An upload's cap is its route's own file limit and room for the form.
+    app.add_middleware(
+        BodyLimitMiddleware,
+        max_bytes=settings.max_body_bytes,
+        own_limits={
+            ("PUT", "/documents"): lambda: documents.MAX_UPLOAD_BYTES + FORM_ROOM,
+            ("POST", "/extract"): lambda: extract.MAX_UPLOAD_BYTES + FORM_ROOM,
+        },
+    )
 
     # Every request gets an id, kept from the caller when it sent one.
     app.add_middleware(RequestIdMiddleware)

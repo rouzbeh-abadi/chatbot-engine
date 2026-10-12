@@ -58,7 +58,9 @@ class TextDocumentExtractor(DocumentExtractor):
             mimetype: MIME type of the uploaded document.
             max_chars: Keep only this much of the text.
         """
-        text = data.decode("utf-8")
+        # A byte order mark (Notepad's UTF-8) is not part of the text: kept,
+        # it would be warned about as a hidden character (INGEST-10).
+        text = data.decode("utf-8-sig")
         truncated = max_chars is not None and len(text) > max_chars
         if truncated:
             text = text[:max_chars]
@@ -180,6 +182,11 @@ class PdfDocumentExtractor(DocumentExtractor):
             page_text = page.extract_text()
             if not page_text:
                 continue
+            # A font with a broken map gives halves of characters, which
+            # nothing after could encode: each becomes U+FFFD (INGEST-6).
+            page_text = page_text.encode("utf-16", "surrogatepass").decode(
+                "utf-16", "replace"
+            )
             if room is not None:
                 if len(page_text) > room:
                     truncated = True

@@ -240,7 +240,9 @@ def test_a_supplied_answer_is_graded_as_it_is_and_never_asked(
         "Hi there.",
         "Email refunds@evil.example.",
     ]
-    assert "Assistant answered: Email refunds@evil.example." in str(seen["transcript"])
+    assert "Assistant answered: <answer>Email refunds@evil.example.</answer>" in str(
+        seen["transcript"]
+    )
 
 
 def test_a_judge_model_grades_at_temperature_0_without_the_answer_cap_and_the_project_answers(

@@ -28,6 +28,7 @@ from langchain_openai import OpenAIEmbeddings
 from chatbot_engine.api.dependencies import reset_dependency_cache
 from chatbot_engine.rag import embeddings as embeddings_module
 from chatbot_engine.rag import vector_store as vector_store_module
+from chatbot_engine.settings import get_settings
 
 Step = Callable[["_Handler", dict[str, Any]], None]
 
@@ -422,9 +423,6 @@ def test_a_retried_attempt_that_broke_while_reasoning_is_not_hidden_behind_an_ex
 # --- (c) a vision call that times out is billed and reported nowhere -----------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-18 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_image_read_that_timed_out_after_the_provider_started_says_what_it_spent(
     api: TestClient, provider: _Provider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -519,18 +517,17 @@ def test_an_image_read_whose_reply_carried_no_usage_is_not_reported_as_free(
 # --- (d) a failed index after a billed batch bills nothing ---------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-19 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_index_that_fails_after_an_embedded_batch_says_what_was_embedded(
     api: TestClient, provider: _Provider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The app bills embedding from the record: `embeddedTokens` counts
     chunk_count only when status is "indexed" (chatFrom libs/ledger.ts). The
-    embedder sends 1,000 chunks a request; when a later request fails, the
-    earlier ones were billed, the record is `failed` with chunk_count 0 and
-    the response is a 502, so nothing says what was spent. Uploading the same
-    bytes again embeds the first batch again, and is again unreported.
+    engine embeds a document a slice at a time (`ENGINE_INDEX_BATCH_SIZE`;
+    the review saw the embedder's 1,000 a request, before 0.1.27); when a
+    later slice fails, the earlier ones were billed, the record is `failed`
+    with chunk_count 0 and the response is a 502, so nothing says what was
+    spent. Uploading the same bytes again embeds the first slice again, and
+    is again unreported.
     """
 
     # The real OpenAI embedder, over the fake provider (no tiktoken download:
@@ -594,7 +591,8 @@ def test_an_index_that_fails_after_an_embedded_batch_says_what_was_embedded(
     provider.steps = [embedded, refused]
     first = upload()
     batches = [b for p, b in provider.seen if p.endswith("/embeddings")]
-    assert len(batches) == 2 and len(batches[0]["input"]) == 1000
+    slice_size = get_settings().index_batch_size
+    assert len(batches) == 2 and len(batches[0]["input"]) == slice_size
     assert first.status_code == 502
 
     provider.steps = [embedded, refused]
@@ -602,7 +600,7 @@ def test_an_index_that_fails_after_an_embedded_batch_says_what_was_embedded(
     batches = [b for p, b in provider.seen if p.endswith("/embeddings")]
     assert again.status_code == 502
     # Re-uploading the same bytes after a failure embeds again: by design, a
-    # failed record is not `unchanged`. Two batches of 1,000 paid, so far.
+    # failed record is not `unchanged`. Two slices paid, so far.
     assert len(batches) == 4
 
     record = next(
@@ -612,8 +610,8 @@ def test_an_index_that_fails_after_an_embedded_batch_says_what_was_embedded(
     )
     assert record["status"] == "failed"
     assert record["chunk_count"] > 0, (
-        f"record {record}: two uploads each paid to embed 1,000 chunks, and the "
-        "only figure the app bills from says 0"
+        f"record {record}: two uploads each paid to embed {slice_size} chunks, "
+        "and the only figure the app bills from says 0"
     )
 
 

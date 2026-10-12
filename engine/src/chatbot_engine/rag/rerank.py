@@ -24,6 +24,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from chatbot_engine.agent.client import Totals, add_usage, build_chat_model
 from chatbot_engine.models.chat import ChatRequest
+from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
 from chatbot_engine.untrusted import unnumbered, visible
 
@@ -56,12 +57,16 @@ async def rerank(
     if len(candidates) < 2:
         return candidates
 
-    # Passages are someone else's text: nothing a reader cannot see reaches
-    # the ranking model either, and no line of one passes for another's number.
-    numbered = "\n\n".join(
-        f"[{index}]\n{unnumbered(visible(document.page_content))}"
-        for index, document in enumerate(candidates, start=1)
-    )
+    budget = get_settings().prompt_chars
+    # Nothing a reader cannot see steers the ranking (TURN-4).
+    query = visible(query)[: budget // 4]
+    asked = f"Question: {query}\n\nPassages:\n\n"
+    room = budget - len(RERANK_SYSTEM) - len(asked)
+    # As many as each get a useful share of the prompt (`ENGINE_PROMPT_CHARS`
+    # bounds this call too, RETRIEVAL-4); any after them keep their order.
+    ranked = candidates[: max(2, room // MIN_PASSAGE_CHARS)]
+    rest = candidates[len(ranked) :]
+    numbered = _numbered(ranked, room)
     # Imported here: `retriever` imports this module, and the config helper
     # lives beside the pipeline that uses it.
     from chatbot_engine.agent.retriever import utility_config
@@ -78,7 +83,7 @@ async def rerank(
         )
         if totals is not None:
             add_usage(totals, reply, utility=True)
-        order = _parse(reply.text, len(candidates))
+        order = _parse(reply.text, len(ranked))
     except Exception as exc:
         logger.warning("rerank failed, keeping fused order: %s", exc)
         return candidates
@@ -87,7 +92,26 @@ async def rerank(
         logger.warning("rerank reply was not a ranking, keeping fused order")
         return candidates
 
-    return [candidates[index - 1] for index in order]
+    return [ranked[index - 1] for index in order] + rest
+
+
+#: The least of a passage the ranking model is shown: enough to judge it by.
+MIN_PASSAGE_CHARS = 300
+
+
+def _numbered(candidates: list[Document], room: int) -> str:
+    """The passages as the ranking model reads them, within `room` characters,
+    each cut to an equal share of it.
+
+    Passages are someone else's text: nothing a reader cannot see reaches
+    the ranking model either, and no line of one passes for another's number.
+    """
+    blocks = [
+        f"[{index}]\n{unnumbered(visible(document.page_content))}"
+        for index, document in enumerate(candidates, start=1)
+    ]
+    share = max(0, room // len(blocks) - len("\n\n"))
+    return "\n\n".join(block[:share] for block in blocks)
 
 
 def _parse(text: str, count: int) -> list[int] | None:

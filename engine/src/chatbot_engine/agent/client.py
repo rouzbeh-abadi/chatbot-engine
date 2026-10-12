@@ -292,12 +292,12 @@ def build_chat_model(
     settings: Settings | None = None,
     *,
     max_retries: int | None = None,
-    timeout_s: float | None = None,
+    timeout_s: float | httpx.Timeout | None = None,
 ) -> ChatOpenAI:
     """Create the chat model using the assistant config and engine settings.
 
     `max_retries` and `timeout_s` stand in for the engine's settings for one
-    call. A model whose calls stream through `stream_reply` is built with
+    call; `timeout_s` may set the connection's own limits apart. A model whose calls stream through `stream_reply` is built with
     `max_retries=0`: `stream_reply` retries the whole call, and the client
     retrying underneath it would multiply the attempts. Reading an image
     must finish within a caller's patience.
@@ -919,7 +919,7 @@ async def run_tool_calls(
             duration_ms=int((time.monotonic() - started) * 1000),
             result_preview=result[:200],
             error=error,
-        )
+        ).as_offered(name in server_for)
         # tool_call_id pairs this result with the specific call it answers;
         # a result is a stranger's text too, and loses what a reader cannot see.
         text = visible(result)
@@ -946,7 +946,7 @@ async def run_tool_calls(
             ok=False,
             duration_ms=0,
             error=INVALID_ARGUMENTS_ERROR,
-        )
+        ).as_offered(name in server_for)
         yield ToolMessage(
             content=INVALID_ARGUMENTS_TEXT.format(name=name),
             tool_call_id=call.get("id") or "",
@@ -976,7 +976,7 @@ def _not_run(
         ),
         ToolCallFinishedEvent(
             call_id=call_id, tool=name, ok=False, duration_ms=0, error=error
-        ),
+        ).as_offered(name in server_for),
         ToolMessage(content=text, tool_call_id=call["id"] or ""),
     ]
 

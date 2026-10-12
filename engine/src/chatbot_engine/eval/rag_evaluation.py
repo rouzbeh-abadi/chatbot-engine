@@ -21,6 +21,7 @@ counted, so a run that lost half its faithfulness cells says so.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import logging
 import math
@@ -158,13 +159,16 @@ def _build_metrics(provider_api_key: str | None = None) -> tuple:
     )
 
     settings = get_settings()
-    # RAGAS fires many calls per case, so a rate-limited account (429s) will
-    # otherwise exhaust the client's default two retries and leave metric cells
-    # blank. More retries let the SDK back off and wait it out.
+    # Bounded as every other provider call is: the SDK's own default is ten
+    # minutes a call, which held an evaluation long after its caller had
+    # gone (docs/review-2026-10.md, EVALTRACE-8). RAGAS fires many calls per
+    # case, so a rate-limited account (429s) may leave metric cells blank;
+    # `ENGINE_PROVIDER_MAX_RETRIES` is the setting that waits it out.
     client = AsyncOpenAI(
         api_key=settings.require_provider_key(provider_api_key),
         base_url=settings.openrouter_base_url,
-        max_retries=6,
+        timeout=settings.provider_timeout_s,
+        max_retries=settings.provider_max_retries,
     )
     llm = llm_factory(settings.rag_judge_model, provider="openai", client=client)
     embeddings = embedding_factory(
@@ -259,8 +263,29 @@ async def _evaluate(request: RagEvalRequest) -> tuple[RagReport, dict[str, int]]
     results: list[RagCaseResult] = []
     unscored: Counter[str] = Counter()
     total = len(request.cases)
+    deadline = get_settings().turn_deadline_s
     for index, case in enumerate(request.cases, start=1):
-        answer, question, contexts = await _answer_and_contexts(request.project, case)
+        try:
+            # A chat turn's deadline: a stalled provider costs this case,
+            # not the cases already answered and scored.
+            async with asyncio.timeout(deadline):
+                answer, question, contexts = await _answer_and_contexts(
+                    request.project, case
+                )
+        except TimeoutError:
+            logger.warning(
+                "rag eval: case %s was not answered within %.0fs", case.id, deadline
+            )
+            unscored.update(_METRICS)
+            results.append(
+                RagCaseResult(
+                    id=case.id,
+                    category=case.category,
+                    question=case.question,
+                    answer="",
+                )
+            )
+            continue
         # Scoring a case is twenty-odd judge calls. Say when each finishes, so
         # an operator can see an evaluation move rather than guess at it.
         logger.info("rag eval: scoring case %d/%d %s", index, total, case.id)

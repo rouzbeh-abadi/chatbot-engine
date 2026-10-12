@@ -83,16 +83,20 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.30
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.31
+# The engine's environment is root's and has no pip; uv, which built it, is
+# in the image. The engine itself runs as `engine`, so switch back after.
+USER root
 COPY my-agent /opt/my-agent
-RUN pip install /opt/my-agent
+RUN uv pip install --python /app/.venv/bin/python /opt/my-agent
+USER engine
 ```
 
-The published engine image carries no plugins. This repository builds its demo
+The `engine` image carries no plugins. This repository builds its LangGraph
 engine the same way, in
 [`docker/engine-with-plugins.Dockerfile`](../docker/engine-with-plugins.Dockerfile),
-which is why `agent: graph` is available under `docker compose` and not from
-the published image alone.
+and publishes it as `engine-langgraph`, which is the image to pull for
+`agent: graph` or `agent: workflow`.
 
 **4. Select it** with `agent: my-agent`. It appears in `GET /agents` and in the
 example UI without further configuration, because both read the installed set.
@@ -115,6 +119,13 @@ depend on it.
 | `usage` | once, after the answer |
 | `input_required` | when the turn pauses on a question (the `workflow` agent's `ask` step), just before `done` |
 | `done` | last; `finish_reason` is `stop`, `length` (cut at `max_output_tokens`), `tool_limit` (still asking for tools after `max_tool_iterations` rounds, then answered with its tools off), `input_required` (paused on a question; the answer comes with `resume`) or `error` (after an `error` event) |
+
+A `tool_call_finished` is counted in `/metrics` under its tool's name only
+when the turn offered a tool of that name, or the workflow's owner named it
+in a step; a name a model wrote that nothing offered is counted, since
+0.1.31, under `not_offered`. `run_tool_calls` marks the calls it runs; an
+agent that builds the event itself marks a call to a tool it offered with
+`.as_offered()`, or its calls count as `not_offered`.
 
 **System prompt.** Send `request.project.system_prompt` to the model ahead of
 the conversation. This is not visible in the event stream: an agent that omits
@@ -357,7 +368,10 @@ no outgoing edge ends the turn, after which the agent emits the `usage` and
 unreachable nodes, a condition with edges, an `end` with an edge out of it,
 and a node with two outgoing
 edges, and takes at most 40 nodes and 80 edges; `max_steps` (default 30)
-caps the visits in one turn. Every node
+caps the visits to the workflow's own steps in one request: the turn then
+finishes, with what it has said, rather than looping on (before 0.1.31 a
+loop ran past it and ended in LangGraph's recursion error). A resumed turn
+counts again from the answer. Every node
 appears as a step in the trace when tracing is on. Without a `workflow`, the
 agent runs retrieve then model, the same shape as the `graph` agent.
 
@@ -401,7 +415,10 @@ What the step guarantees:
 - **A question is resumed once.** The request that resumes it claims the
   pause before anything runs, so a second request with the same `thread_id`
   (a double click, a client that retried) gets `resume_expired` instead of
-  running the rest of the turn again. A request from another project or
+  running the rest of the turn again. Each question has its own
+  `thread_id` (since 0.1.31: the turn's thread and the checkpoint it paused
+  at), so an answer meant for one question, arriving after the turn asked
+  the next, is refused rather than taken as the answer to that. A request from another project or
   session claims nothing. A resumed turn that is stopped on its way, by the
   caller going away or the turn's deadline, keeps no state.
 - **A choice with no options is skipped,** leaving the variable empty, so a

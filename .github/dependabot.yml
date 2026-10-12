@@ -1,0 +1,11 @@
+# The images' base is pinned by digest (engine/Dockerfile); this proposes the
+# next one, so a pinned base still gets its security fixes.
+version: 2
+updates:
+  - package-ecosystem: docker
+    directories:
+      - /engine
+      - /docker
+      - /examples/backend
+    schedule:
+      interval: weekly

@@ -107,9 +107,6 @@ SLACK = 256 * 1024  # what a streaming check may read past the cap
         ("/extract", {}, extract_api),
     ],
 )
-@pytest.mark.xfail(
-    strict=True, reason="API-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_an_upload_over_its_limit_is_refused_before_the_whole_body_is_read(
     open_app, monkeypatch, path, fields, module
 ) -> None:
@@ -131,9 +128,6 @@ async def test_an_upload_over_its_limit_is_refused_before_the_whole_body_is_read
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-1 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_40_mib_upload_is_refused_near_the_real_25_mb_limit(open_app) -> None:
     """The same with the shipped constant, so a fix that reads the limit at
     import time is still held to it: refused within a MiB of 25 MB."""
@@ -158,9 +152,6 @@ async def test_a_40_mib_upload_is_refused_near_the_real_25_mb_limit(open_app) ->
 # --- INFRA-2: unknown multipart fields are accepted silently -----------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_misspelled_upload_field_is_refused_not_ignored(client) -> None:
     """docs/backend-integration.md: "Unknown fields are rejected ... A
     misspelled field is a 422 that names it". On the multipart routes a
@@ -182,9 +173,6 @@ def test_a_misspelled_upload_field_is_refused_not_ignored(client) -> None:
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="API-6 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_misspelled_extract_field_is_refused_not_ignored(client) -> None:
     """A misspelled `provider_api_key` on /extract would bill an image read to
     the engine's own key without a word; for a document it is ignored too."""

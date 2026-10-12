@@ -15,9 +15,15 @@
 #     ENGINE_REGISTRY_URL (the demo shares the backend's database server)
 #   - stored originals move to a MinIO bucket, reached through the
 #     ENGINE_BLOB_S3_* settings
-# so nothing under the engine volume is written any more.
+# so only the workflow agent's paused turns (ENGINE_CHECKPOINT_DB) are still
+# written under the engine volume, which both replicas here share.
 
 services:
+  # No published port, on purpose: the server has advisories with no fixed
+  # version yet (PYSEC-2026-311 and others, in CI's audit) and checks no
+  # credential, so nothing outside this compose network reaches it; every
+  # service on it can. Set ENGINE_CHROMA_TOKEN when the server is put behind
+  # a proxy that checks one.
   chroma:
     image: chromadb/chroma:1.5.9
     restart: unless-stopped

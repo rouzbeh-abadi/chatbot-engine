@@ -821,3 +821,15 @@ def test_the_similarity_is_the_cosine_for_vectors_of_unit_length() -> None:
     assert _similarity(1.0) == 0.5, "cos 0.5 is a squared distance of 1"
     assert _similarity(2.0) == 0.0, "orthogonal"
     assert _similarity(4.0) == 0.0, "opposite, floored at zero"
+
+
+async def test_a_message_of_nothing_visible_is_searched_as_it_was_sent() -> None:
+    """The search reads the message without what a reader cannot see; one
+    made of nothing else would leave an empty query, which an embeddings
+    provider refuses, and the turn would fail."""
+    hidden = _request().model_copy(update={"message": "​⁠"})
+
+    assert await rewrite_queries(hidden) == ["​⁠"]
+    assert await rewrite_queries(
+        _request().model_copy(update={"message": "basic​ fare"})
+    ) == ["basic fare"]

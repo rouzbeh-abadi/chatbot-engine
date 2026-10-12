@@ -19,8 +19,9 @@ from fastapi import (
 )
 
 from chatbot_engine.api.dependencies import DocumentServiceDep
+from chatbot_engine.api.forms import only_fields
 from chatbot_engine.api.rate_limit import limit_ingest
-from chatbot_engine.errors import NotConfiguredError
+from chatbot_engine.errors import NotConfiguredError, OriginalChangedError
 from chatbot_engine.models.documents import DeleteResult, DocumentRecord, ReindexRequest
 from chatbot_engine.rag.splitter import ChunkingError, ChunkStrategy
 
@@ -36,7 +37,20 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
     status_code=status.HTTP_201_CREATED,
     # Indexing embeds every chunk, which is billed per token. Listing and
     # deleting call no provider, so neither is metered.
-    dependencies=[Depends(limit_ingest)],
+    dependencies=[
+        Depends(limit_ingest),
+        Depends(
+            only_fields(
+                "project_id",
+                "external_id",
+                "file",
+                "embedding_model",
+                "chunking_strategy",
+                "chunk_size",
+                "chunk_overlap",
+            )
+        ),
+    ],
 )
 async def upsert_document(
     service: DocumentServiceDep,
@@ -53,7 +67,8 @@ async def upsert_document(
     Idempotent: the same `external_id` replaces the previous version, and
     identical bytes skip the work entirely and answer `unchanged`.
     """
-    data = await file.read()
+    # One byte past the limit at most: enough to know it is too large.
+    data = await file.read(MAX_UPLOAD_BYTES + 1)
     if not data:
         raise HTTPException(status_code=400, detail="uploaded file is empty")
     if len(data) > MAX_UPLOAD_BYTES:
@@ -82,6 +97,10 @@ async def upsert_document(
     "/{doc_id}/reindex",
     responses={
         404: {"description": "No such document in the project."},
+        409: {
+            "description": "The stored original is not the version the record "
+            "describes; upload the document again."
+        },
         501: {"description": "No blob store, so the original was never kept."},
     },
     # Re-embeds every chunk, billed like an upload.
@@ -113,6 +132,8 @@ async def reindex_document(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ChunkingError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OriginalChangedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except NotConfiguredError:
         raise
 

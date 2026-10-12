@@ -62,7 +62,7 @@ async def resolve_memory_owner(
     x_user_id: Annotated[str | None, Header()] = None,
     x_client_id: Annotated[str | None, Header()] = None,
 ) -> str:
-    """Who a remembered note belongs to.
+    """Who a remembered note belongs to, or "" for nobody.
 
     Long-term memory has to follow a person across conversations, so it cannot
     be keyed on the thread: a new chat is a new thread, and keying on it would
@@ -72,6 +72,10 @@ async def resolve_memory_owner(
     answer matches `resolve_user_id`. Without one it is `X-Client-Id`, an id the
     example UI generates and keeps in `localStorage` so it survives a new chat,
     a reload, and a restart.
+
+    A caller with neither has no memory, rather than a shared `anonymous` one:
+    every such caller would read, and be prompted with, what the others said.
+    "" is what the memory routes and the recall treat as nobody.
 
     Two headers rather than one, on purpose. `X-User-Id` is reserved for the
     proxy: the bundled nginx clears it on every request so a browser can never
@@ -88,7 +92,7 @@ async def resolve_memory_owner(
     if settings.trust_user_header:
         return await resolve_user_id(settings, x_user_id)
 
-    return (x_client_id or "").strip()[:64] or ANONYMOUS_USER_ID
+    return (x_client_id or "").strip()[:64]
 
 
 MemoryOwnerDep = Annotated[str, Depends(resolve_memory_owner)]

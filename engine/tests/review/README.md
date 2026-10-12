@@ -9,6 +9,10 @@ a review of release 0.1.26.
   red (strict): drop the marker, and the test stays as a regression test.
 - A test with no marker checks something the review found sound, or is a
   control for a test beside it.
+- RETRIEVAL-3's two tests stay marked, with a reason that says so: the
+  behaviour they flag (a query's best keyword match kept whatever its
+  similarity, under `hybrid`) is kept on purpose and documented in
+  `docs/retrieval.md`. TURN-10's wait on a decision about provider routing.
 
 They run with the rest of the suite (`uv run pytest`), on the suite's own
 fixtures (`engine/tests/conftest.py`). Nothing calls a real model provider,

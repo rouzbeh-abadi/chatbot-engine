@@ -29,6 +29,14 @@ services:
       # Bound to the loopback interface: the TLS terminator in front of this is
       # expected to run on the same host. Publish it more widely only once
       # something else is doing TLS.
+      #
+      # The terminator must add the visitor's address to X-Forwarded-For
+      # (Caddy and Traefik do by default; nginx with
+      # $proxy_add_x_forwarded_for). nginx.conf believes that header from the
+      # private ranges a terminator connects from, so the backend's rate limits
+      # count each visitor rather than the terminator; narrow the ranges there
+      # to the address nginx sees it from, which through this port is
+      # Docker's bridge gateway, not 127.0.0.1.
       - "127.0.0.1:8080:80"
 
   postgres:
@@ -69,6 +77,9 @@ services:
       # frontend's nginx on the compose network. Publish port 8000 and this
       # becomes wrong -- narrow it to the proxy's address first.
       FORWARDED_ALLOW_IPS: "*"
+      # Sent by the engine to the tool server alone, which refuses a call
+      # without it. The same value as on mcp-tools below.
+      BACKEND_MCP_TOOLS_TOKEN: ${MCP_TOOLS_TOKEN:?set MCP_TOOLS_TOKEN}
     ports: !override []
 
   mcp-tools:
@@ -77,4 +88,7 @@ services:
       - no-new-privileges:true
     environment:
       BACKEND_DATABASE_URL: postgresql+psycopg://support_agent:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/support_agent
+      # The tools take the customer's id from the call, so only a caller with
+      # this token, the engine, may make one.
+      BACKEND_MCP_TOOLS_TOKEN: ${MCP_TOOLS_TOKEN:?set MCP_TOOLS_TOKEN}
     ports: !override []

@@ -18,6 +18,7 @@ from chatbot_engine.models.events import DoneEvent, ErrorEvent
 
 pytest.importorskip("langgraph_agent.pauses")
 from langgraph_agent.pauses import Pauses
+from langgraph_agent.workflow import thread_of
 
 
 def _stores(tmp_path) -> list[Pauses]:
@@ -84,11 +85,29 @@ async def test_a_resume_from_elsewhere_does_not_use_up_the_pause():
 @pytest.mark.parametrize("store", ["memory", "sqlite"])
 async def test_a_claim_is_given_once(store, tmp_path):
     pauses = dict(zip(["memory", "sqlite"], _stores(tmp_path), strict=True))[store]
-    thread = _asked(await _run(_request(PROJECT), pauses, Tools())).thread_id
+    pause_id = _asked(await _run(_request(PROJECT), pauses, Tools())).thread_id
+    thread, mark = thread_of(pause_id), pause_id.rsplit(".", 1)[1]
 
-    assert await pauses.claim(thread, "support", "other") is None
-    assert await pauses.claim(thread, "support", "s1") is not None
+    assert await pauses.claim(thread, "support", "other", mark) is None
+    assert await pauses.claim(thread, "support", "s1", mark) is not None
+    assert await pauses.claim(thread, "support", "s1", mark) is None
+
+
+@pytest.mark.parametrize("store", ["memory", "sqlite"])
+async def test_a_claim_takes_only_the_pause_its_id_names(store, tmp_path):
+    """The pause id carries the checkpoint the turn paused at, and the record
+    keeps it: an answer meant for an earlier question of the turn, however it
+    is timed against the resume before it, finds nothing to claim
+    (WORKFLOW-3)."""
+    pauses = dict(zip(["memory", "sqlite"], _stores(tmp_path), strict=True))[store]
+    pause_id = _asked(await _run(_request(PROJECT), pauses, Tools())).thread_id
+    thread, mark = thread_of(pause_id), pause_id.rsplit(".", 1)[1]
+
+    assert await pauses.claim(thread, "support", "s1", "0" * 32) is None
+    # Nor does an id given out before 0.1.31, which names no checkpoint.
     assert await pauses.claim(thread, "support", "s1") is None
+    claimed = await pauses.claim(thread, "support", "s1", mark)
+    assert claimed is not None and claimed.mark == mark
 
 
 async def test_a_turn_stopped_on_its_way_keeps_no_state():
@@ -121,5 +140,64 @@ async def test_a_turn_stopped_on_its_way_keeps_no_state():
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    assert forgotten == [thread]
-    assert await pauses.find(thread) is None
+    assert forgotten == [thread_of(thread)]
+    assert await pauses.find(thread_of(thread)) is None
+
+
+async def test_the_question_a_resume_answers_is_not_a_second_visit():
+    """`max_steps` counts the workflow's own steps in a request. A resumed
+    request starts by running the question it answers again, which was
+    counted when it was asked: with `max_steps: 1` the step after the
+    question still runs (WORKFLOW-9)."""
+    spec = {
+        "start": "name",
+        "max_steps": 1,
+        "nodes": [
+            {
+                "id": "name",
+                "type": "ask",
+                "prompt": "Name?",
+                "input": "text",
+                "understand": False,
+                "var": "name",
+            },
+            {
+                "id": "book",
+                "type": "tool",
+                "tool": "book",
+                "arguments": {"name": "{{vars.name}}"},
+                "var": "booked",
+            },
+        ],
+        "edges": [{"from": "name", "to": "book"}],
+    }
+    pauses, tools = Pauses.memory(), Tools()
+    asked = _asked(await _run(_request(spec), pauses, tools))
+    resumed = await _run(
+        _request(spec, "Ann", {"thread_id": asked.thread_id, "value": "Ann"}),
+        pauses,
+        tools,
+    )
+
+    assert tools.calls == [("book", {"name": "Ann"})]
+    assert resumed[-1].finish_reason == "stop"
+
+
+async def test_an_engine_before_0_1_31_can_still_record_a_pause_in_the_file(tmp_path):
+    """A rollback, or two versions on one file during a deploy: the older
+    engine writes its record with five values, so the checkpoint each pause
+    keeps since 0.1.31 lives in a table of its own, not a sixth column."""
+    import sqlite3
+
+    path = tmp_path / "checkpoints.sqlite3"
+    pauses = Pauses.sqlite(path, ttl_s=3600)
+    _asked(await _run(_request(PROJECT), pauses, Tools()))
+    await pauses.close()
+
+    older = sqlite3.connect(path)
+    older.execute(
+        "INSERT OR REPLACE INTO workflow_pauses VALUES (?, ?, ?, ?, ?)",
+        ("support:older", "support", "s1", "hash", 0.0),
+    )
+    older.commit()
+    older.close()

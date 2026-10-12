@@ -41,14 +41,14 @@
     {
       "id": "booking_details",
       "category": "lookup",
-      "question": "Tell me about booking AB12CD.",
-      "expected": "Uses the booking tool and reports the real details: passenger Daniel Miller, Berlin to Amsterdam, 2026-08-22, Flexible fare, flight SD204, confirmed."
+      "question": "Tell me about booking AB12CD, last name Miller.",
+      "expected": "Calls the booking tool with the reference AB12CD and the last name Miller. The tool does not run in an evaluation, so it says it cannot see the booking right now rather than inventing any of its details."
     },
     {
       "id": "unknown_booking",
       "category": "lookup",
-      "question": "What is the status of booking ZZ99ZZ?",
-      "expected": "Reports that no booking was found for that reference and asks the customer to check it. Does not invent a booking."
+      "question": "What is the status of booking ZZ99ZZ? My last name is Miller.",
+      "expected": "Calls the booking tool with the reference ZZ99ZZ and the last name Miller. The tool does not run in an evaluation, so it does not claim to have found the booking, and invents none of its details."
     },
     {
       "id": "surfboard",

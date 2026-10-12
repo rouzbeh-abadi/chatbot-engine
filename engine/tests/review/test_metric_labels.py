@@ -225,10 +225,6 @@ WORKFLOW = {
 
 
 @pytest.mark.parametrize("agent", ["loop", "workflow"])
-@pytest.mark.xfail(
-    strict=True,
-    reason="EVALTRACE-10 in docs/review-2026-10.md: fails until it is fixed",
-)
 def test_invented_tool_names_do_not_each_become_a_metric_series(
     engine: tuple[TestClient, FakeTools],
     provider: _Script,
@@ -266,10 +262,6 @@ def test_invented_tool_names_do_not_each_become_a_metric_series(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="EVALTRACE-11 in docs/review-2026-10.md: fails until it is fixed",
-)
 def test_a_tool_label_is_bounded_in_length_and_visitor_text_stays_out_of_metrics(
     engine: tuple[TestClient, FakeTools],
     provider: _Script,
@@ -297,10 +289,6 @@ async def _events(names: list[str]) -> AsyncIterator[Event]:
     yield DoneEvent()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="EVALTRACE-10 in docs/review-2026-10.md: fails until it is fixed",
-)
 async def test_memory_held_by_tool_metrics_does_not_grow_per_invented_name() -> None:
     """20,000 distinct 64-character names (what 500 turns of 40 invented calls
     yield) must not leave memory behind once the turns are over."""
@@ -325,10 +313,6 @@ async def test_memory_held_by_tool_metrics_does_not_grow_per_invented_name() -> 
     assert retained < 1_000_000, f"{retained / 1e6:.1f} MB kept for {n:,} names"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="EVALTRACE-10 in docs/review-2026-10.md: fails until it is fixed",
-)
 def test_switching_metrics_off_stops_the_tool_series_from_growing(
     monkeypatch: pytest.MonkeyPatch,
     provider: _Script,
@@ -380,10 +364,6 @@ def _labels() -> set[str]:
     }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="EVALTRACE-10 in docs/review-2026-10.md: fails until it is fixed",
-)
 async def test_an_unoffered_name_does_not_reach_a_permanent_label(
     project: dict[str, Any],
 ) -> None:

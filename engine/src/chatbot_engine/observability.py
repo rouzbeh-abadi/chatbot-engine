@@ -183,16 +183,32 @@ TOOL_CALLS = Counter(
     ["tool", "ok"],
 )
 
+#: The `tool` label of a call to a name the turn did not offer. Such a name
+#: is whatever the model wrote, which a visitor can steer: as a label of its
+#: own, each would be a series kept until the engine restarts, and its text
+#: served by `/metrics` (docs/review-2026-10.md, EVALTRACE-10, EVALTRACE-11).
+NOT_OFFERED = "not_offered"
+
+#: The longest `tool` label: OpenAI's own limit on a function's name.
+MAX_TOOL_LABEL = 64
+
+
+def tool_label(event: ToolCallFinishedEvent) -> str:
+    """The `tool` label a finished call is counted under."""
+    return event.tool[:MAX_TOOL_LABEL] if event.offered else NOT_OFFERED
+
 
 async def record_turn(
-    events: AsyncIterable[Event], *, caller: str, agent: str
+    events: AsyncIterable[Event], *, caller: str, agent: str, metrics: bool = True
 ) -> AsyncIterator[Event]:
     """Pass a turn's events through, then log and count what happened.
 
     Wraps the stream rather than the route, because the stream is where the
     facts are: the usage event carries the tokens, the tool events carry the
     calls, and the last event says how the turn ended. Runs in `finally` so a
-    turn the client abandoned is still recorded, as `cancelled`.
+    turn the client abandoned is still recorded, as `cancelled`. With
+    `metrics` off (`ENGINE_METRICS_ENABLED`), nothing reads the counters, so
+    the turn is only logged.
     """
     started = time.monotonic()
     usage: UsageEvent | None = None
@@ -206,7 +222,10 @@ async def record_turn(
                 usage = event
             elif isinstance(event, ToolCallFinishedEvent):
                 tools["ok" if event.ok else "failed"] += 1
-                TOOL_CALLS.labels(tool=event.tool, ok=str(event.ok).lower()).inc()
+                if metrics:
+                    TOOL_CALLS.labels(
+                        tool=tool_label(event), ok=str(event.ok).lower()
+                    ).inc()
             elif isinstance(event, ErrorEvent):
                 error = event.message
             elif isinstance(event, DoneEvent):
@@ -218,9 +237,10 @@ async def record_turn(
     finally:
         seconds = time.monotonic() - started
         model = (usage.model if usage else None) or "unknown"
-        TURNS.labels(caller=caller, agent=agent, outcome=outcome).inc()
-        TURN_SECONDS.labels(agent=agent).observe(seconds)
-        if usage:
+        if metrics:
+            TURNS.labels(caller=caller, agent=agent, outcome=outcome).inc()
+            TURN_SECONDS.labels(agent=agent).observe(seconds)
+        if metrics and usage:
             TOKENS.labels(caller=caller, model=model, direction="input").inc(
                 usage.input_tokens
             )

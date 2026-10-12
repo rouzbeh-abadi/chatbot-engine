@@ -34,6 +34,9 @@ function sessionUsage(messages: ChatMessage[]): SessionUsage {
   return { turns, tokens, cost: hasCost ? cost : null, model };
 }
 
+/** The most earlier turns a chat request carries (the backend's own bound). */
+const HISTORY_TURNS = 200;
+
 /** Stable enough for React keys within one session. */
 const nextId = (() => {
   let n = 0;
@@ -113,8 +116,11 @@ export default function App() {
 
   const send = useCallback(
     async (text: string) => {
+      // The newest turns only: the backend takes at most HISTORY_TURNS, and a
+      // model call keeps the newest anyway when the prompt runs out of room.
       const history = messages
         .filter((message) => !message.problem && message.text)
+        .slice(-HISTORY_TURNS)
         .map((message) => ({ role: message.role, content: message.text }));
 
       const question: ChatMessage = {
@@ -259,8 +265,8 @@ export default function App() {
           </div>
         </div>
         <p className="header__sub">
-          Ask about baggage, refunds, check-in, or a booking reference such as
-          <code>AB12CD</code>.
+          Ask about baggage, refunds, check-in, or a booking: a reference such as
+          <code>AB12CD</code> with the last name on it, <code>Miller</code>.
         </p>
       </header>
 
@@ -271,7 +277,7 @@ export default function App() {
               <p>Nothing asked yet. Try one of these:</p>
               <ul>
                 <li>What is the cabin baggage allowance?</li>
-                <li>Is my flight delayed? My booking is AB12CD.</li>
+                <li>Is my flight delayed? My booking is AB12CD, last name Miller.</li>
                 <li>Can I get a refund on a Basic fare?</li>
               </ul>
             </div>
