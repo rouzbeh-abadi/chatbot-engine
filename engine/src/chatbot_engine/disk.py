@@ -9,11 +9,14 @@ first, and refuses well before the disk is full.
 
 from __future__ import annotations
 
+import logging
 import shutil
 from pathlib import Path
 
 from chatbot_engine.errors import StorageFullError
 from chatbot_engine.settings import get_settings
+
+logger = logging.getLogger(__name__)
 
 
 def _local_paths() -> set[Path]:
@@ -35,6 +38,25 @@ def _existing(path: Path) -> Path:
     while not path.exists() and path != path.parent:
         path = path.parent
     return path
+
+
+def disk_low() -> bool:
+    """Whether a volume the engine writes to has less than twice the free
+    space `ensure_room` keeps: the warning before the refusals. Never with
+    the floor off (`ENGINE_MIN_FREE_MB=0`)."""
+    floor = get_settings().min_free_mb * 1024 * 1024
+    if floor == 0:
+        return False
+    try:
+        return any(
+            shutil.disk_usage(_existing(path)).free < 2 * floor
+            for path in _local_paths()
+        )
+    except OSError as exc:
+        # /health answers whenever the engine can answer at all: a volume
+        # that cannot be read just now is a warning in the log, not a 500.
+        logger.warning("disk: free space could not be read: %s", exc)
+        return False
 
 
 def ensure_room() -> None:

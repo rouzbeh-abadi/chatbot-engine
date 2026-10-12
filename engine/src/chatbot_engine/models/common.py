@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -43,6 +43,10 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "chatbot-engine"
     version: str
+    #: `low` once a volume the engine writes to has less than twice
+    #: `ENGINE_MIN_FREE_MB` free: time to make room, before uploads are
+    #: refused at the floor itself (since 0.1.32).
+    disk: Literal["ok", "low"] = "ok"
 
 
 class ReadinessResponse(BaseModel):

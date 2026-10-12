@@ -1,4 +1,4 @@
-"""Review: no model call carries OpenRouter provider routing (TURN-10).
+"""Review: every model call carries OpenRouter provider routing (TURN-10).
 
 ChatFrom's DPA and privacy policy promise that a visitor's message goes to the
 chosen model's own provider, "never to a provider you did not choose".
@@ -189,8 +189,9 @@ def _seed(client: TestClient) -> None:
         assert response.status_code == 201, response.text
 
 
-def _turn(client: TestClient) -> list[dict]:
-    """One ChatFrom-shaped turn with history (rewrite) and rerank on."""
+def _turn(client: TestClient, provider: dict | None = None) -> list[dict]:
+    """One ChatFrom-shaped turn with history (rewrite) and rerank on, with
+    `provider` as the request's routing when given."""
     _seed(client)
     response = client.post(
         "/chat",
@@ -204,6 +205,7 @@ def _turn(client: TestClient) -> list[dict]:
                 "rerank": True,
                 "min_score": 0.0,
                 "top_k": 2,
+                **({"provider": provider} if provider is not None else {}),
             },
             "message": "and is the Basic one refundable?",
             "history": [
@@ -249,9 +251,6 @@ def test_the_turn_makes_all_three_calls(
 
 
 @pytest.mark.parametrize("kind", ["answer", "rewrite", "rerank"])
-@pytest.mark.xfail(
-    strict=True, reason="TURN-10 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_every_turn_call_is_kept_with_the_models_maker(
     client: TestClient, upstream: _Recorder, kind: str
 ) -> None:
@@ -267,9 +266,6 @@ def test_every_turn_call_is_kept_with_the_models_maker(
         )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-10 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_image_read_is_kept_with_the_models_maker(
     client: TestClient, upstream: _Recorder
 ) -> None:
@@ -283,9 +279,6 @@ def test_an_image_read_is_kept_with_the_models_maker(
     )
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-10 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_embedding_is_kept_with_the_models_maker(upstream: _Recorder) -> None:
     """The embedder the engine builds for indexing and search.
 
@@ -305,18 +298,14 @@ def test_an_embedding_is_kept_with_the_models_maker(upstream: _Recorder) -> None
     )
 
 
-# --- no way for the app to ask for it ------------------------------------------
+# --- what the app may ask for ------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True, reason="TURN-10 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_the_app_can_send_a_routing_preference(
     client: TestClient, upstream: _Recorder
 ) -> None:
-    """CORRECT behaviour: the caller can pin the host for a chatbot. Any field
-    would do; OpenRouter's own name, `provider`, is used here. Today the
-    request model forbids unknown fields, so it is a 422."""
+    """CORRECT behaviour: the caller can pin the host for a chatbot, with
+    OpenRouter's own object, `provider`."""
     response = client.post(
         "/chat",
         json={
@@ -331,6 +320,70 @@ def test_the_app_can_send_a_routing_preference(
         },
     )
     assert response.status_code == 200, response.text[:300]
+
+
+def test_the_hosts_a_request_names_serve_the_chatbots_model_only(
+    client: TestClient, upstream: _Recorder
+) -> None:
+    """Hosts named for an anthropic/* chatbot do not serve the utility model's
+    rewrite and rerank, which keep to their own maker rather than fail."""
+    _turn(client, provider={"only": ["anthropic"], "allow_fallbacks": False})
+    for body in upstream.chat():
+        maker = "anthropic" if body["model"].startswith("anthropic/") else "openai"
+        assert body["provider"]["only"] == [maker], (_kind(body), body["provider"])
+
+
+def test_a_request_that_names_no_host_keeps_each_call_with_its_maker(
+    client: TestClient, upstream: _Recorder
+) -> None:
+    _turn(client, provider={"data_collection": "deny"})
+    for body in upstream.chat():
+        assert _routing_keeps_to_maker(body), (_kind(body), body.get("provider"))
+        assert body["provider"]["data_collection"] == "deny"
+
+
+def test_open_weight_models_are_not_kept_to_their_author() -> None:
+    """No OpenAI host serves gpt-oss: kept to `openai`, it would find none."""
+    from chatbot_engine.agent.routing import routing_for
+
+    assert routing_for("openai/gpt-oss-120b") is None
+    assert routing_for("google/gemma-3-27b-it") is None
+    assert routing_for("openai/gpt-5-mini") == {
+        "only": ["openai"],
+        "allow_fallbacks": False,
+    }
+
+
+async def test_ragas_calls_follow_the_requests_routing() -> None:
+    """The judge's calls in a RAG evaluation, on another model than the
+    chatbot's, keep what of the request's routing holds for any model."""
+    import httpx
+
+    from chatbot_engine.agent.routing import RoutedTransport
+    from chatbot_engine.models.chat import ProviderRouting
+
+    seen: list[dict] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={})
+
+    routed = RoutedTransport(
+        httpx.MockTransport(answer),
+        requested=ProviderRouting(only=["anthropic"], data_collection="deny"),
+        model="anthropic/claude-haiku-4.5",
+    )
+    async with httpx.AsyncClient(transport=routed, base_url="http://h/v1") as http:
+        await http.post(
+            "/chat/completions", json={"model": "anthropic/claude-haiku-4.5"}
+        )
+        await http.post("/chat/completions", json={"model": "openai/gpt-4.1-mini"})
+    assert seen[0]["provider"] == {"only": ["anthropic"], "data_collection": "deny"}
+    assert seen[1]["provider"] == {
+        "only": ["openai"],
+        "allow_fallbacks": False,
+        "data_collection": "deny",
+    }
 
 
 # --- added in verification ---------------------------------------------------

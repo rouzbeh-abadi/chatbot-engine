@@ -53,7 +53,7 @@ docker run -d --init -p 127.0.0.1:8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-.
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.31
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.32
 ```
 
 ```bash
@@ -61,7 +61,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.31"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.32", "disk": "ok"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -173,7 +173,7 @@ request carries the whole assistant definition:
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank`, `retrieval_candidates` and `min_score` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out, after the model answered once more with its tools off; `provider_api_key` is the caller's own OpenRouter key, billed for every model call in the request instead of the engine's, and it satisfies the engine's key requirement on its own; `unavailable_message` is what the visitor is told when a tool the turn needs is unavailable or fails (see Failures, below), and what a turn past `ENGINE_TURN_DEADLINE_S` ends with |
+| `project` | yes | The assistant: prompt, model, retrieval settings, tools. `agent` selects the agent (see [agents.md](agents.md)); `embedding_model` and the chunking fields describe its knowledge base; `retrieval`, `rerank`, `retrieval_candidates` and `min_score` configure how chunks are found (see [retrieval.md](retrieval.md)); `workflow` describes the turn as a graph of steps for `agent: workflow` (see the Workflows section of agents.md); `tracing` names the assistant's own trace destination (below); `max_output_tokens` caps one reply (the small calls around the answer, rewrite, rerank and condition, ignore it), and the `done` event says `length` when it did; `max_tool_iterations` caps the tool rounds, and `done` says `tool_limit` when they ran out, after the model answered once more with its tools off; `provider_api_key` is the caller's own OpenRouter key, billed for every model call in the request instead of the engine's, and it satisfies the engine's key requirement on its own; `provider` (since 0.1.32) is OpenRouter's own routing object (`only`, `order`, `ignore`, `allow_fallbacks`, `data_collection`): the hosts it names (`only`, `order`) serve the chatbot's own model, a call on another model (the utility model's rewrite and rerank, a judge) keeps the rest and goes to its own maker, what names no host is added to the maker's own hosts, and the embeddings follow `ENGINE_PROVIDER_ROUTING` only; without it each call is kept with its model's maker (see Which host serves a model, in DEPLOYMENT.md); `unavailable_message` is what the visitor is told when a tool the turn needs is unavailable or fails (see Failures, below), and what a turn past `ENGINE_TURN_DEADLINE_S` ends with |
 | `message` | yes | The user's message. Must not be empty |
 | `session_id` | no | The conversation id. Forwarded to the tool server as `X-Session-Id` |
 | `user_id` | no | Opaque. Forwarded to the tool server as `X-User-Id` so it can scope reads and writes |
@@ -528,7 +528,10 @@ chunks the failed update had embedded, and so cost; the original of the
 version that failed is not kept. Only a document with no version answering
 (no `indexed` version, or on an engine that does not embed, no stored one)
 is `failed`, and then `chunk_count` says how many chunks were embedded, and
-billed, before it failed, none of which is kept. Uploads and re-indexes of
+billed, before it failed, none of which is kept. Since 0.1.32 the failed
+request's own answer says so too, whichever its status (the `409` of an
+upload a delete cancelled included): `embedded_chunks` beside `detail`, present when any was embedded, for a caller that bills
+what indexing spends. Uploads and re-indexes of
 one document take turns, and one sent while another runs decides what to
 keep once its turn comes; a delete cancels the ones still waiting too
 (within one engine process: see Scaling out in DEPLOYMENT.md for

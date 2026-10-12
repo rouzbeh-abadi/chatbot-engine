@@ -128,9 +128,13 @@ async def test_a_delete_also_cancels_an_upload_waiting_its_turn(
     await asyncio.sleep(0.2)
     await service.delete(project_id="support", doc_id=DOC)
     held.release.set()
+    spent = []
     for upload in (v2, v3):
-        with pytest.raises(DocumentDeletedError):
+        with pytest.raises(DocumentDeletedError) as deleted:
             await upload
+        spent.append(getattr(deleted.value, "embedded_chunks", 0))
+    # v2 had embedded its chunk, and is billed for it; v3 never began.
+    assert spent == [1, 0]
 
     assert await registry.get(project_id="support", doc_id=DOC) is None
     assert _texts() == []

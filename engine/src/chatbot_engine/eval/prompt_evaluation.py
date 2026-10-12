@@ -25,6 +25,7 @@ from pydantic import ValidationError
 from chatbot_engine.agent.client import build_chat_model
 from chatbot_engine.agent.judge_chain import create_judge_chain
 from chatbot_engine.agent.router import DEADLINE_PASSED
+from chatbot_engine.agent.routing import elsewhere
 from chatbot_engine.api.streaming import describe
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.evals import (
@@ -226,15 +227,19 @@ def judge_config(
     The project's model, or `judge_model` when one is given, at temperature
     0, so one run grades like the next, and without the project's answer
     cap, which is sized for answers, not for grading a whole run; on the
-    same key. Every case is still graded in the one call.
+    same key. Every case is still graded in the one call. On another model,
+    the hosts the request named for its own model are not kept
+    (`routing.elsewhere`).
     """
-    return project.model_copy(
-        update={
-            "model": judge_model or project.model,
-            "temperature": 0.0,
-            "max_output_tokens": None,
-        }
-    )
+    model = judge_model or project.model
+    update: dict[str, Any] = {
+        "model": model,
+        "temperature": 0.0,
+        "max_output_tokens": None,
+    }
+    if model != project.model:
+        update["provider"] = elsewhere(project.provider)
+    return project.model_copy(update=update)
 
 
 async def judge_answers(

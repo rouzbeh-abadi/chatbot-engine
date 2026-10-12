@@ -303,9 +303,15 @@ def build_chat_model(
     must finish within a caller's patience.
     """
     settings = settings or get_settings()
+    model = config.model or settings.chat_model
+    # Kept with the model's maker unless told otherwise (TURN-10). Imported
+    # here: routing reads the request models this module's callers build.
+    from chatbot_engine.agent.routing import routing_for
+
+    routing = routing_for(model, config.provider)
 
     return BilledChatOpenAI(
-        model=config.model or settings.chat_model,
+        model=model,
         temperature=config.temperature,
         max_tokens=config.max_output_tokens,
         api_key=settings.require_provider_key(config.provider_api_key),
@@ -315,6 +321,7 @@ def build_chat_model(
         if max_retries is None
         else max_retries,
         timeout=settings.provider_timeout_s if timeout_s is None else timeout_s,
+        extra_body={"provider": routing} if routing else None,
     )
 
 

@@ -93,6 +93,34 @@ class McpServerConfig(BaseModel):
         return headers
 
 
+class ProviderRouting(BaseModel):
+    """Which hosts OpenRouter may serve this assistant's models from, as
+    OpenRouter's own `provider` object takes it. The hosts it names (`only`,
+    `order`) serve the assistant's own model; a call on another model (the
+    utility model, a judge) keeps the rest and goes to that model's maker.
+    What names no host is added to the maker's own hosts. Unset, or for the
+    embeddings, the engine's `ENGINE_PROVIDER_ROUTING` decides."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Only these hosts (OpenRouter's provider slugs, such as `anthropic`).
+    only: list[Annotated[str, Field(min_length=1, max_length=64)]] | None = Field(
+        default=None, max_length=20
+    )
+    #: These hosts first, in this order.
+    order: list[Annotated[str, Field(min_length=1, max_length=64)]] | None = Field(
+        default=None, max_length=20
+    )
+    #: Never these hosts.
+    ignore: list[Annotated[str, Field(min_length=1, max_length=64)]] | None = Field(
+        default=None, max_length=20
+    )
+    #: Whether another host may serve the call when those named fail.
+    allow_fallbacks: bool | None = None
+    #: `deny`: only hosts that do not keep the data they are sent.
+    data_collection: Literal["allow", "deny"] | None = None
+
+
 class AssistantConfig(BaseModel):
     """Everything that makes one assistant different from another."""
 
@@ -168,6 +196,8 @@ class AssistantConfig(BaseModel):
     #: query time stays on the engine's key, since the collection is keyed by
     #: the embedding model, not by who paid. Never logged or traced.
     provider_api_key: str | None = Field(default=None, repr=False, min_length=1)
+    #: Which hosts OpenRouter may serve the turn's calls from (since 0.1.32).
+    provider: ProviderRouting | None = None
 
 
 class ResumeInput(BaseModel):

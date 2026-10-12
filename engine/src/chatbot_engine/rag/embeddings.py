@@ -38,11 +38,19 @@ def get_embeddings(model: str | None = None) -> OpenAIEmbeddings:
 
 
 def build_embeddings(settings: Settings, model: str | None = None) -> OpenAIEmbeddings:
-    """The embedder for `model` under `settings`. Uncached; see `get_embeddings`."""
+    """The embedder for `model` under `settings`. Uncached; see `get_embeddings`.
+
+    Kept with the model's maker, as every chat call is (TURN-10).
+    """
+    from chatbot_engine.agent.routing import routing_for
+
+    resolved = resolve_embedding_model(model)
+    routing = routing_for(resolved)
     return OpenAIEmbeddings(
-        model=resolve_embedding_model(model),
+        model=resolved,
         api_key=settings.require_openrouter_key(),
         base_url=settings.openrouter_base_url,
         max_retries=settings.provider_max_retries,
         timeout=settings.provider_timeout_s,
+        model_kwargs={"extra_body": {"provider": routing}} if routing else {},
     )

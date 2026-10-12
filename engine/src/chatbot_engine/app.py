@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 import openai
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 
 from chatbot_engine import __version__, tracing
 from chatbot_engine.agent.registry import UnknownAgentError
@@ -49,6 +49,14 @@ from chatbot_engine.rag.vector_store import move_everything
 from chatbot_engine.settings import get_settings
 
 logger = logging.getLogger(__name__)
+
+
+def _failed(detail: str, exc: BaseException) -> dict[str, object]:
+    """A refusal's body, with `embedded_chunks` when an index failed after
+    it had embedded that many chunks: billed by the provider, though none of
+    them is kept (docs/review-2026-10.md, INGEST-19)."""
+    embedded = getattr(exc, "embedded_chunks", 0)
+    return {"detail": detail, **({"embedded_chunks": embedded} if embedded else {})}
 
 
 class InsecureConfiguration(RuntimeError):
@@ -143,7 +151,7 @@ def create_app() -> FastAPI:
     @app.exception_handler(DocumentRejectedError)
     async def document_rejected(_: Request, exc: DocumentRejectedError) -> JSONResponse:
         """422: the document was readable but had nothing to index."""
-        return JSONResponse(status_code=422, content={"detail": str(exc)})
+        return JSONResponse(status_code=422, content=_failed(str(exc), exc))
 
     @app.exception_handler(UnsupportedDocumentTypeError)
     async def unsupported_document_type(
@@ -155,17 +163,28 @@ def create_app() -> FastAPI:
     @app.exception_handler(DocumentDeletedError)
     async def document_deleted(_: Request, exc: DocumentDeletedError) -> JSONResponse:
         """409: deleted while it was being indexed; nothing of it is kept."""
-        return JSONResponse(status_code=409, content={"detail": str(exc)})
+        return JSONResponse(status_code=409, content=_failed(str(exc), exc))
 
     @app.exception_handler(StorageFullError)
     async def storage_full(_: Request, exc: StorageFullError) -> JSONResponse:
         """503: the volume is below its free-space floor; retry after room is made."""
-        return JSONResponse(status_code=503, content={"detail": str(exc)})
+        return JSONResponse(status_code=503, content=_failed(str(exc), exc))
 
     @app.exception_handler(EngineError)
     async def engine_error(_: Request, exc: EngineError) -> JSONResponse:
         """500: any deliberate engine error that is not one of the above."""
-        return JSONResponse(status_code=500, content={"detail": str(exc)})
+        return JSONResponse(status_code=500, content=_failed(str(exc), exc))
+
+    @app.exception_handler(Exception)
+    async def unexpected(_: Request, exc: Exception) -> Response:
+        """500, as Starlette answers it; as JSON only for an index that failed
+        after it had embedded, so its caller hears what that cost."""
+        if getattr(exc, "embedded_chunks", 0):
+            return JSONResponse(
+                status_code=500,
+                content=_failed("the document could not be indexed", exc),
+            )
+        return PlainTextResponse("Internal Server Error", status_code=500)
 
     @app.exception_handler(openai.APIError)
     async def provider_error(_: Request, exc: openai.APIError) -> JSONResponse:
@@ -177,7 +196,7 @@ def create_app() -> FastAPI:
         failure after its stream has started arrives as an `error` event.
         """
         logger.warning("provider call failed: %s", provider_reason(exc))
-        return JSONResponse(status_code=502, content={"detail": provider_reason(exc)})
+        return JSONResponse(status_code=502, content=_failed(provider_reason(exc), exc))
 
     # A JSON body over the cap is refused before it is read. Added first, so
     # it runs inside the request id's middleware and a 413 carries the id.

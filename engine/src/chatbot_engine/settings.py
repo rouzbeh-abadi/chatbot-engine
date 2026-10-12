@@ -152,6 +152,14 @@ class Settings(BaseSettings):
     #: Seconds to wait for a provider before giving up on one attempt.
     provider_timeout_s: float = 60.0
 
+    #: Which hosts OpenRouter may serve a model from. `maker` (the default):
+    #: only the model's own maker, with no fallback to another host, for a
+    #: maker that serves its models there (`chatbot_engine.agent.routing`);
+    #: a model whose maker does not goes by OpenRouter's defaults. `any`:
+    #: OpenRouter's defaults for every model, every host that serves it. A
+    #: request's own `project.provider` wins over either.
+    provider_routing: Literal["maker", "any"] = "maker"
+
     #: The longest one chat turn may take, retrieval, model calls, retries
     #: and tool calls together. Past it the turn stops where it is and ends
     #: with the assistant's `unavailable_message`, so a provider that keeps

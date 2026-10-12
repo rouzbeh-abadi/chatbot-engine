@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from chatbot_engine import __version__
 from chatbot_engine.agent.registry import available_agents
 from chatbot_engine.api.dependencies import SettingsDep
+from chatbot_engine.disk import disk_low
 from chatbot_engine.models.common import HealthResponse, ReadinessResponse
 from chatbot_engine.rag.vector_store import vector_store_reachable
 
@@ -15,8 +16,9 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 async def health() -> HealthResponse:
-    """Is the process up. Always ok if it can answer at all."""
-    return HealthResponse(version=__version__)
+    """Is the process up, always ok if it can answer at all; and whether its
+    volume is running low (`disk`), for a monitor to warn on."""
+    return HealthResponse(version=__version__, disk="low" if disk_low() else "ok")
 
 
 @router.get("/health/ready")

@@ -79,3 +79,41 @@ def test_readiness_is_false_when_the_vector_store_does_not_answer(
     assert body["vector_store"] is False
     assert body["ready"] is False
     assert body["model_provider"] is True
+
+
+def test_health_says_when_the_volume_runs_low(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Low once less than twice the free-space floor is left, before uploads
+    are refused at the floor itself, so a monitor can warn in time."""
+    from collections import namedtuple
+
+    from chatbot_engine import disk
+
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setenv("ENGINE_MIN_FREE_MB", "512")
+    reset_dependency_cache()
+    assert client.get("/health").json()["disk"] == "ok"
+
+    monkeypatch.setattr(
+        disk.shutil, "disk_usage", lambda path: usage(10**10, 0, 700 * 1024 * 1024)
+    )
+    assert client.get("/health").json()["disk"] == "low"
+
+    monkeypatch.setenv("ENGINE_MIN_FREE_MB", "0")
+    reset_dependency_cache()
+    assert client.get("/health").json()["disk"] == "ok"
+
+
+def test_health_answers_when_the_free_space_cannot_be_read(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from chatbot_engine import disk
+
+    def unreadable(path):
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(disk.shutil, "disk_usage", unreadable)
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["disk"] == "ok"

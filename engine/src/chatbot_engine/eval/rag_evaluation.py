@@ -29,6 +29,7 @@ from collections import Counter
 from collections.abc import Mapping
 from typing import Any
 
+import httpx
 from openai import AsyncOpenAI
 
 from chatbot_engine.agent.client import stream_completion
@@ -37,6 +38,7 @@ from chatbot_engine.agent.retriever import (
     rewrite_queries,
     to_context,
 )
+from chatbot_engine.agent.routing import RoutedTransport
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.evals import (
     RagCaseResult,
@@ -135,11 +137,15 @@ def _by_category(results: list[RagCaseResult]) -> list[RagCategorySummary]:
     return summaries
 
 
-def _build_metrics(provider_api_key: str | None = None) -> tuple:
+def _build_metrics(
+    provider_api_key: str | None = None, http_client: httpx.AsyncClient | None = None
+) -> tuple:
     """The four RAGAS metrics, wired to the judge model over OpenRouter.
 
     `provider_api_key` is the caller's own key when the request carries one,
     so the judge calls and the relevancy embeddings are billed to them.
+    `http_client` carries their calls, kept with each model's maker; without
+    one, a client of its own does.
 
     Collections metrics take a ragas-native LLM built from an OpenAI client, so
     we point one at OpenRouter rather than reusing the LangChain chat model.
@@ -169,6 +175,9 @@ def _build_metrics(provider_api_key: str | None = None) -> tuple:
         base_url=settings.openrouter_base_url,
         timeout=settings.provider_timeout_s,
         max_retries=settings.provider_max_retries,
+        # RAGAS builds its own calls, so each is kept with its model's maker
+        # on the way out, as every other call the engine makes is (TURN-10).
+        http_client=http_client or httpx.AsyncClient(transport=RoutedTransport()),
     )
     llm = llm_factory(settings.rag_judge_model, provider="openai", client=client)
     embeddings = embedding_factory(
@@ -255,10 +264,20 @@ async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
 
 
 async def _evaluate(request: RagEvalRequest) -> tuple[RagReport, dict[str, int]]:
-    """The report, and how many cases each metric could not be scored for."""
-    faithfulness, answer_relevancy, precision, recall = _build_metrics(
-        request.project.provider_api_key
-    )
+    """The report, and how many cases each metric could not be scored for.
+    The judge's calls follow the request's routing, as its answers do, and
+    their connections are closed once the run ends."""
+    project = request.project
+    routed = RoutedTransport(requested=project.provider, model=project.model)
+    async with httpx.AsyncClient(transport=routed) as http:
+        metrics = _build_metrics(project.provider_api_key, http)
+        return await _scored(request, metrics)
+
+
+async def _scored(
+    request: RagEvalRequest, metrics: tuple
+) -> tuple[RagReport, dict[str, int]]:
+    faithfulness, answer_relevancy, precision, recall = metrics
 
     results: list[RagCaseResult] = []
     unscored: Counter[str] = Counter()

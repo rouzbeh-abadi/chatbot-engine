@@ -87,6 +87,9 @@ def _written_at(checkpoint_id: object) -> float | None:
     return (ticks - _GREGORIAN_TO_UNIX) / 1e7
 
 
+#: How often a store is tried when its file is locked as it is opened.
+_OPEN_TRIES = 4
+
 #: `PRAGMA auto_vacuum`'s value for INCREMENTAL.
 _INCREMENTAL = 2
 #: How large the write-ahead log is left after a checkpoint.
@@ -179,13 +182,31 @@ class Pauses:
     async def saver(self) -> BaseCheckpointSaver:
         async with self._lock:
             if self._saver is None:
-                self._saver = await self._open_saver(self)
+                self._saver = await self._opened()
             saver = self._saver
         # Every use of the store, a turn that never pauses included, forgets
         # what is past its time, so a question nobody answered does not wait
         # for another turn to pause before it goes (WORKFLOW-5).
         await self._prune_if_due()
         return saver
+
+    async def _opened(self) -> BaseCheckpointSaver:
+        """The store, opened. A new file another store is setting up at the
+        same moment (the chat and the judge each have one; replicas share
+        the volume) is locked for a moment: tried again shortly. A connection
+        that failed to open is closed, not left behind."""
+        for attempt in range(_OPEN_TRIES):
+            try:
+                return await self._open_saver(self)
+            except sqlite3.OperationalError as exc:
+                conn, self._conn = self._conn, None
+                if conn is not None:
+                    with contextlib.suppress(Exception):
+                        await conn.close()
+                if "locked" not in str(exc) or attempt == _OPEN_TRIES - 1:
+                    raise
+                await asyncio.sleep(0.2 * (attempt + 1))
+        raise AssertionError("unreachable")
 
     async def close(self) -> None:
         """Close the store's file; the next use opens it again. What the

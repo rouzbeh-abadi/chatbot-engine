@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.31
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.31
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.31
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.31
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.32
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.32
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.32
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.32
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -48,7 +48,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.31 && git push origin v0.1.31
+git tag v0.1.32 && git push origin v0.1.32
 ```
 
 The Release workflow runs the full test suite, publishes the four images, and
@@ -410,6 +410,26 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   above, whatever the level.
 - **Streaming.** Chat is server-sent events. A proxy in front must not buffer
   `/api/chat`; the bundled nginx config shows the three settings involved.
+- **Which host serves a model.** OpenRouter serves a model from every host
+  that offers it, and falls back to another when one fails: a Claude model
+  from Amazon Bedrock or Google Vertex, a GPT model from Azure. Since 0.1.32
+  every call the engine makes (the answer, the rewrite, the rerank, an image
+  read, embeddings, the judge and RAGAS) names its model's maker as the only
+  host, with no fallback: `anthropic`, `openai`, Google's own two
+  (`google-ai-studio`, `google-vertex`), `mistral` and `xai`. A maker that
+  serves none of its models on OpenRouter (DeepSeek's V4 models had only
+  other companies' hosts in October 2026) is not pinned: those calls go by
+  OpenRouter's defaults unless a request's `project.provider` names hosts.
+  Nor are a listed maker's open-weight models (`openai/gpt-oss-*`,
+  `google/gemma-*`, Mistral's 7B and Mixtral), which other companies serve
+  and the maker may not. `ENGINE_PROVIDER_ROUTING=any` turns the pinning off.
+  A maker's own outage then fails a call rather than moving it to another
+  company. A request's `project.provider` is followed for its chatbot's model;
+  what it asks without naming hosts (`data_collection: "deny"`, say) is added
+  to the maker's pinning, and the calls on another model (the utility model,
+  a judge) keep only that part. What a host may keep of the calls it serves
+  is set on the OpenRouter account (its privacy settings), or per request
+  with `data_collection`.
 - **Provider retries and timeouts.** A model stream that fails before its
   first token (rate limit, provider 5xx, dropped connection, an error the
   provider sends inside the stream) is retried up to
@@ -489,7 +509,9 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   with 503 before anything is written: a full volume can freeze embedded
   Chroma for every tenant and leave its index unreadable after a restart.
   Zero turns the check off. Watch the volume all the same; the floor only
-  keeps indexing from filling it.
+  keeps indexing from filling it. Since 0.1.32 `GET /health` says
+  `"disk": "low"` once a volume has less than twice the floor free, for a
+  monitor to warn on while uploads still work.
 - **Keyword indexes.** `ENGINE_KEYWORD_INDEX_MB` (default 512) is the memory
   the keyword indexes of hybrid retrieval may hold together. Past it the one
   searched longest ago is dropped and built again when it is next needed.

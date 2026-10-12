@@ -658,8 +658,11 @@ class DocumentIngestPipeline:
             async with _committing(key):
                 if upload.cancelled:
                     await self._discard(record)
-                    raise DocumentDeletedError(
-                        f"{record.filename!r} was deleted while it was being indexed"
+                    raise _spent(
+                        DocumentDeletedError(
+                            f"{record.filename!r} was deleted while it was being indexed"
+                        ),
+                        embedded.chunks,
                     ) from exc
                 # Keep the failure in GET /documents, not only in a log line.
                 # The version kept goes on answering only if the new one did
@@ -681,6 +684,9 @@ class DocumentIngestPipeline:
                         }
                     )
                 )
+            # Said in the failed request's answer too, so its caller can bill
+            # what was spent (`embedded_chunks` in app.py).
+            _spent(exc, embedded.chunks)
             raise
 
         vectors = self._vectors is not None
@@ -689,9 +695,12 @@ class DocumentIngestPipeline:
                 # Deleted while it was being indexed: what it wrote goes too,
                 # and no record says it is there.
                 await self._discard(record)
-                raise DocumentDeletedError(
-                    f"{record.filename!r} was deleted while it was being indexed, "
-                    "so nothing of it is kept"
+                raise _spent(
+                    DocumentDeletedError(
+                        f"{record.filename!r} was deleted while it was being indexed, "
+                        "so nothing of it is kept"
+                    ),
+                    embedded.chunks,
                 )
             saved = await self._registry.upsert(
                 record.model_copy(
@@ -779,3 +788,12 @@ def _update_failed(exc: Exception, embedded: int) -> str:
     with what the failed update had embedded, and so cost (INGEST-19)."""
     spent = f" ({embedded:,} chunks were embedded before it failed)" if embedded else ""
     return f"the last update was not indexed{spent}, so this version stays: {exc}"
+
+
+def _spent(exc: BaseException, embedded: int) -> BaseException:
+    """`exc`, carrying how many chunks were embedded, and so billed by the
+    provider, before the index stopped: `embedded_chunks` in the failed
+    request's answer (app.py), whichever way it stopped."""
+    with contextlib.suppress(AttributeError):
+        setattr(exc, "embedded_chunks", embedded)  # noqa: B010
+    return exc

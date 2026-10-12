@@ -63,6 +63,25 @@ class McpServerConfig(BaseModel):
     headers: dict[str, str] = Field(default_factory=dict, repr=False)
 
 
+class ProviderRouting(BaseModel):
+    """Which hosts OpenRouter may serve the assistant's models from, as
+    OpenRouter's `provider` object takes it (engine 0.1.32)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    only: list[Annotated[str, Field(min_length=1, max_length=64)]] | None = Field(
+        default=None, max_length=20
+    )
+    order: list[Annotated[str, Field(min_length=1, max_length=64)]] | None = Field(
+        default=None, max_length=20
+    )
+    ignore: list[Annotated[str, Field(min_length=1, max_length=64)]] | None = Field(
+        default=None, max_length=20
+    )
+    allow_fallbacks: bool | None = None
+    data_collection: Literal["allow", "deny"] | None = None
+
+
 class AssistantConfig(BaseModel):
     """The full assistant definition, loaded from `projects/*.yaml`.
 
@@ -109,6 +128,9 @@ class AssistantConfig(BaseModel):
     #: The caller's own OpenRouter key for this request; every model call is
     #: billed to it instead of the engine's. Never logged.
     provider_api_key: str | None = Field(default=None, repr=False, min_length=1)
+    #: Which hosts OpenRouter may serve the turn's calls from; unset, the
+    #: engine keeps each call with its model's maker.
+    provider: ProviderRouting | None = None
     #: The turn as a graph of steps, run by the engine's `workflow` agent.
     workflow: WorkflowSpec | None = None
 

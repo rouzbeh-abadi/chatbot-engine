@@ -32,6 +32,7 @@ turn's reported usage; `retrieve` is the same without the bookkeeping.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -43,6 +44,7 @@ from chatbot_engine.agent.client import (
     empty_totals,
     transcript,
 )
+from chatbot_engine.agent.routing import elsewhere
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.events import SourceRef
 from chatbot_engine.rag import sparse
@@ -104,16 +106,18 @@ def utility_config(project: AssistantConfig) -> AssistantConfig:
     output for the same input. The assistant's
     `max_output_tokens` is for the answer the customer reads; a tight cap
     there must not truncate a rerank list, so it is lifted here. The rewrite
-    sets its own (`REWRITE_MAX_TOKENS`).
+    sets its own (`REWRITE_MAX_TOKENS`). On another model, the hosts the
+    request named for its own model are not kept (`routing.elsewhere`).
     """
-    settings = get_settings()
-    return project.model_copy(
-        update={
-            "model": settings.utility_model or project.model,
-            "temperature": 0.0,
-            "max_output_tokens": None,
-        }
-    )
+    model = get_settings().utility_model or project.model
+    update: dict[str, Any] = {
+        "model": model,
+        "temperature": 0.0,
+        "max_output_tokens": None,
+    }
+    if model != project.model:
+        update["provider"] = elsewhere(project.provider)
+    return project.model_copy(update=update)
 
 
 async def rewrite_queries(

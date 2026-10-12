@@ -594,6 +594,8 @@ def test_an_index_that_fails_after_an_embedded_batch_says_what_was_embedded(
     slice_size = get_settings().index_batch_size
     assert len(batches) == 2 and len(batches[0]["input"]) == slice_size
     assert first.status_code == 502
+    # The failed request's own answer says what it spent, for its caller to bill.
+    assert first.json()["embedded_chunks"] == slice_size
 
     provider.steps = [embedded, refused]
     again = upload()
