@@ -107,15 +107,18 @@ def utility_config(project: AssistantConfig) -> AssistantConfig:
     `max_output_tokens` is for the answer the customer reads; a tight cap
     there must not truncate a rerank list, so it is lifted here. The rewrite
     sets its own (`REWRITE_MAX_TOKENS`). On another model, the hosts the
-    request named for its own model are not kept (`routing.elsewhere`).
+    request named for its own model are not kept (`routing.elsewhere`); the
+    request's own model is the one it resolves to, `ENGINE_CHAT_MODEL` when
+    it names none, so a utility model that is that same model keeps them.
     """
-    model = get_settings().utility_model or project.model
+    settings = get_settings()
+    model = settings.utility_model or project.model
     update: dict[str, Any] = {
         "model": model,
         "temperature": 0.0,
         "max_output_tokens": None,
     }
-    if model != project.model:
+    if (model or settings.chat_model) != (project.model or settings.chat_model):
         update["provider"] = elsewhere(project.provider)
     return project.model_copy(update=update)
 

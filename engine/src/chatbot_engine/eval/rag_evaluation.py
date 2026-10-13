@@ -32,13 +32,18 @@ from typing import Any
 import httpx
 from openai import AsyncOpenAI
 
-from chatbot_engine.agent.client import stream_completion
+from chatbot_engine.agent.client import (
+    error_text,
+    stream_completion,
+    without_paths,
+)
 from chatbot_engine.agent.retriever import (
     retrieve_with_usage,
     rewrite_queries,
     to_context,
 )
 from chatbot_engine.agent.routing import RoutedTransport
+from chatbot_engine.api.streaming import describe
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest
 from chatbot_engine.models.evals import (
     RagCaseResult,
@@ -245,7 +250,9 @@ async def _score(
     try:
         result = await metric.ascore(**kwargs)
     except Exception as exc:
-        logger.warning("rag eval: no %s for case %s: %s", name, case, exc)
+        logger.warning(
+            "rag eval: no %s for case %s: %s", name, case, error_text(str(exc))
+        )
         unscored[name] += 1
         return None
 
@@ -266,9 +273,14 @@ async def evaluate_rag_dataset(request: RagEvalRequest) -> RagReport:
 async def _evaluate(request: RagEvalRequest) -> tuple[RagReport, dict[str, int]]:
     """The report, and how many cases each metric could not be scored for.
     The judge's calls follow the request's routing, as its answers do, and
-    their connections are closed once the run ends."""
+    their connections are closed once the run ends. The routing was sent for
+    the chatbot's model as it resolves (`ENGINE_CHAT_MODEL` when it names
+    none), so a judge on that same model keeps the hosts it names."""
     project = request.project
-    routed = RoutedTransport(requested=project.provider, model=project.model)
+    routed = RoutedTransport(
+        requested=project.provider,
+        model=project.model or get_settings().chat_model,
+    )
     async with httpx.AsyncClient(transport=routed) as http:
         metrics = _build_metrics(project.provider_api_key, http)
         return await _scored(request, metrics)
@@ -291,10 +303,23 @@ async def _scored(
                 answer, question, contexts = await _answer_and_contexts(
                     request.project, case
                 )
-        except TimeoutError:
-            logger.warning(
-                "rag eval: case %s was not answered within %.0fs", case.id, deadline
-            )
+        except Exception as exc:
+            # One case that could not be answered (a stalled or refusing
+            # provider, a search that failed) leaves that case unscored, as
+            # the judge leaves one ungraded, not the whole run discarded
+            # after the cases before it were answered and paid for.
+            if isinstance(exc, TimeoutError):
+                logger.warning(
+                    "rag eval: case %s was not answered within %.0fs",
+                    case.id,
+                    deadline,
+                )
+            else:
+                logger.warning(
+                    "rag eval: case %s could not be answered: %s",
+                    case.id,
+                    without_paths(describe(exc)),
+                )
             unscored.update(_METRICS)
             results.append(
                 RagCaseResult(

@@ -2,7 +2,9 @@
 
 Embedded Chroma: no server, just files under `ENGINE_CHROMA_DIR`. One client per
 collection per process, because several clients on one directory contend for
-the same SQLite file.
+the same SQLite file. And one process per directory: a second would keep its
+own copy of each index in memory and write it over the first's, so an engine
+refuses to start on a directory another one holds (`claim_chroma_dir`).
 
 One collection per embedding model and project. Vectors from two models are
 not comparable, so chunks embedded with one must never be searched with
@@ -17,10 +19,12 @@ collection lives, and keeps a dropped collection's files on disk
 (docs/review-2026-10.md, DISK-1). So a project's collection is dropped when
 its last chunk goes, rebuilt from its live chunks once its deleted ones
 outnumber them (`tidy`), and the files a dropped collection leaves behind are
-removed (`_sweep_orphans`). Until 0.1.30 every project of a model shared one
-collection; each project's chunks are moved into a collection of their own
-the first time the project is used, and the rest in the background
-(`ensure_moved`, `move_everything`).
+removed (`_sweep_orphans`). Against a Chroma server none of that is done: the
+gate that keeps a rebuild or a drop from racing the project's writes is one
+process's own, and other replicas write past it. Until 0.1.30 every project
+of a model shared one collection; each project's chunks are moved into a
+collection of their own the first time the project is used, and the rest in
+the background (`ensure_moved`, `move_everything`).
 """
 
 from __future__ import annotations
@@ -29,12 +33,13 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import os
 import re
 import shutil
 import sqlite3
 import threading
 import uuid
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -47,9 +52,17 @@ from langchain_chroma import Chroma
 from langchain_core.documents import Document
 
 from chatbot_engine.disk import ensure_room
+from chatbot_engine.errors import DocumentDeletedError
 from chatbot_engine.rag import sparse
 from chatbot_engine.rag.embeddings import get_embeddings, resolve_embedding_model
-from chatbot_engine.rag.workers import Gate, KeyedGates, KeyedLocks, run_indexing
+from chatbot_engine.rag.workers import (
+    Gate,
+    KeyedGates,
+    KeyedLocks,
+    in_thread,
+    run_indexing,
+    run_indexing_shared,
+)
 from chatbot_engine.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -57,6 +70,10 @@ logger = logging.getLogger(__name__)
 
 class EmptyVectorStoreError(RuntimeError):
     """The store holds no documents, so retrieval cannot return anything."""
+
+
+class ChromaDirInUseError(RuntimeError):
+    """Another process holds the embedded Chroma directory."""
 
 
 # One chromadb client per process, and one `Chroma` wrapper per collection.
@@ -105,6 +122,67 @@ def _auth_headers(token: str | None, header: str) -> dict[str, str] | None:
     if header.lower() == "authorization":
         return {"Authorization": f"Bearer {token}"}
     return {header: token}
+
+
+#: The file in the embedded Chroma directory an engine process holds locked.
+_LOCK = ".engine.lock"
+
+#: The directories this process holds, with the lock's file descriptor.
+_claimed: dict[Path, int] = {}
+
+
+def claim_chroma_dir() -> None:
+    """Hold `ENGINE_CHROMA_DIR` for this process, or refuse to start:
+    `ChromaDirInUseError` when another process holds it.
+
+    Embedded Chroma keeps each collection's index in the memory of the
+    process that opened it, and writes it back from there, so a second
+    process on the same directory (another engine on the same volume, or
+    uvicorn's `WEB_CONCURRENCY` above 1) would write its own over the
+    first's: chunks lost, or deleted ones brought back. The lock is the
+    system's (`flock`), let go when the process ends however it ends, so a
+    crash leaves nothing to clean up. Nothing is held against a Chroma
+    server, nor where the file system cannot lock (logged). A command that
+    only reads the directory (`make search`) does not take it.
+    """
+    settings = get_settings()
+    if settings.chroma_url:
+        return
+    root = Path(settings.chroma_dir).resolve()
+    if root in _claimed:
+        return
+    # Here rather than at the top: the module still imports where there is
+    # no fcntl, for a command that only reads.
+    import fcntl
+
+    root.mkdir(parents=True, exist_ok=True)
+    held = os.open(root / _LOCK, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        os.close(held)
+        raise ChromaDirInUseError(
+            f"another engine process holds {root}: embedded Chroma belongs to "
+            "one process, so run one engine on it (with WEB_CONCURRENCY=1), or "
+            "set ENGINE_CHROMA_URL for several to share a Chroma server"
+        ) from exc
+    except OSError as exc:
+        os.close(held)
+        logger.warning(
+            "could not lock %s, so a second engine on it would not be refused: %s",
+            root,
+            exc,
+        )
+        return
+    _claimed[root] = held
+
+
+def release_chroma_dir() -> None:
+    """Let go of what `claim_chroma_dir` holds. At shutdown, and for tests."""
+    while _claimed:
+        _, held = _claimed.popitem()
+        with contextlib.suppress(OSError):
+            os.close(held)
 
 
 def vector_store_reachable() -> bool:
@@ -275,6 +353,7 @@ def reset_vector_store() -> None:
         _client = None
     _moved.clear()
     _shared_left = None
+    release_chroma_dir()
 
 
 def _engine_collections(client: chromadb.ClientAPI) -> list[str]:
@@ -295,9 +374,35 @@ def _shared_collections(client: chromadb.ClientAPI) -> list[str]:
 
 
 def _project_collections(client: chromadb.ClientAPI, project_id: str) -> list[str]:
-    """A project's collections, one per embedding model it was indexed with."""
+    """A project's collections, one per embedding model it was indexed with.
+
+    A rebuild's copy whose collection is gone (the engine stopped between
+    dropping the old one and giving the copy its name) is given the name
+    first, as a search would give it (`_recover`): left under the copy's
+    name, it would be missed by a delete or a purge, and the next search
+    would take it back with every chunk they removed.
+    """
     suffix = f"{_PROJECT}{_project_key(project_id)}"
-    return [name for name in _engine_collections(client) if name.endswith(suffix)]
+    names = set(_engine_collections(client))
+    for copy in [name for name in names if name.endswith(f"{suffix}{_REBUILDING}")]:
+        name = copy.removesuffix(_REBUILDING)
+        if name not in names and _recover(client, name):
+            names.add(name)
+    return sorted(name for name in names if name.endswith(suffix))
+
+
+def _collections_of(client: chromadb.ClientAPI, project_id: str) -> list[str]:
+    """Every collection that may hold a project's chunks: its own, and,
+    until they have all moved out, the ones every project shared until 0.1.30.
+
+    A delete reaches a project's chunks where they are, rather than moving
+    them first: a move needs room for a copy of them, and a delete is how
+    room is made on a volume that has too little.
+    """
+    own = _project_collections(client, project_id)
+    if project_id in _moved or _shared_left is False:
+        return own
+    return [*own, *_shared_collections(client)]
 
 
 def _recover(client: chromadb.ClientAPI, name: str) -> bool:
@@ -310,8 +415,23 @@ def _recover(client: chromadb.ClientAPI, name: str) -> bool:
         rebuilt = client.get_collection(f"{name}{_REBUILDING}", embedding_function=None)
     except NotFoundError:
         return False
-    rebuilt.modify(name=name)
-    logger.warning("finished rebuilding %s, cut short before", name)
+    try:
+        rebuilt.modify(name=name)
+    except Exception:
+        # Two searches of the project found it at once, and the other one
+        # finished it: it is under its name now, or this was another failure.
+        if not _exists(client, name):
+            raise
+    else:
+        logger.warning("finished rebuilding %s, cut short before", name)
+    return True
+
+
+def _exists(client: chromadb.ClientAPI, name: str) -> bool:
+    try:
+        client.get_collection(name, embedding_function=None)
+    except NotFoundError:
+        return False
     return True
 
 
@@ -369,8 +489,8 @@ def load_vector_store(
 
 # --- one project's collections: moving, tidying, dropping ---------------------
 
-#: Per project: searches and writes share it; a move, a rebuild or a drop of
-#: its collections has it alone.
+#: Per project: searches and writes share it; a move, the end of a rebuild or
+#: a drop of its collections has it alone.
 _gates = KeyedGates()
 
 #: Projects whose chunks this process knows are in collections of their own.
@@ -399,7 +519,10 @@ async def ensure_moved(project_id: str) -> None:
     async with gate(project_id).alone():
         if project_id in _moved:
             return
-        left = await asyncio.to_thread(_move_project, project_id)
+        # To the end, even for a caller that stops waiting: let go before the
+        # move is done, the gate would let a delete in between its copy of a
+        # page and its write of it, and the page would bring the delete back.
+        left = await in_thread(_move_project, project_id)
         if not left:
             _shared_left = False
         _moved.add(project_id)
@@ -437,7 +560,9 @@ def _move_out_of(client: chromadb.ClientAPI, shared_name: str, project_id: str) 
         )
         if not got["ids"]:
             break
-        ensure_room()
+        ensure_room(
+            "the project's chunks were not moved into a collection of their own"
+        )
         own = client.get_or_create_collection(target, embedding_function=None)
         own.upsert(
             ids=got["ids"],
@@ -539,72 +664,212 @@ def _next_unmoved() -> str | None:
     return None
 
 
+#: The projects a tidy is under way for in this process, and the ones asked
+#: to be tidied again meanwhile.
+_tidying: set[str] = set()
+_tidy_again: set[str] = set()
+
+
 async def tidy(project_id: str) -> None:
     """Give a project's room back: drop each of its collections that holds
     nothing, and rebuild one whose deleted chunks have come to outnumber its
     live ones (`REBUILD_AFTER`). Best effort: a failure is logged, and the
-    next delete tries again."""
+    next delete tries again.
+
+    What there is to do is found sharing the project's gate, so the common
+    case, nothing, holds up no search; the gate is had alone only to drop a
+    collection, or for the end of a rebuild (`_rebuild`). One tidy of a
+    project at a time: one asked for while another runs leaves it to look
+    again once it is done, and waits for nothing.
+
+    Never against a Chroma server (`ENGINE_CHROMA_URL`): the gate is this
+    process's alone, so another replica's writes and deletes would race a
+    rebuild or a drop, which would lose live chunks or bring deleted ones
+    back; and a server keeps a dropped collection's files, so a rebuild would
+    only add a copy to its disk.
+    """
+    if get_settings().chroma_url:
+        return
+    if project_id in _tidying:
+        _tidy_again.add(project_id)
+        return
+    _tidying.add(project_id)
     try:
-        async with gate(project_id).alone():
-            await asyncio.to_thread(_tidy, project_id)
-    except Exception:
-        logger.exception("tidying a project's collections failed")
+        while True:
+            _tidy_again.discard(project_id)
+            try:
+                await _tidy(project_id)
+            except Exception:
+                logger.exception("tidying a project's collections failed")
+                return
+            if project_id not in _tidy_again:
+                return
+    finally:
+        _tidying.discard(project_id)
+        _tidy_again.discard(project_id)
 
 
-def _tidy(project_id: str) -> None:
+async def _tidy(project_id: str) -> None:
+    project = gate(project_id)
+    async with project.shared():
+        empty, crowded = await in_thread(_to_tidy, project_id)
+    if not empty and not crowded:
+        return
+    try:
+        if empty:
+            async with project.alone():
+                await in_thread(_drop_empty, empty)
+        for name in crowded:
+            await _rebuild(project_id, name)
+    finally:
+        sparse.invalidate(project_id)
+        await asyncio.to_thread(_sweep_orphans)
+
+
+def _to_tidy(project_id: str) -> tuple[list[str], list[str]]:
+    """The project's collections that hold nothing, and the ones whose
+    deleted chunks have come to outnumber their live ones. Blocks."""
     client = _chroma_client()
-    dropped = False
+    empty: list[str] = []
+    crowded: list[str] = []
     for name in _project_collections(client, project_id):
         collection = client.get_collection(name)
         live = collection.count()
+        deleted = int((collection.metadata or {}).get(_DELETED, 0))
+        if live == 0:
+            empty.append(name)
+        elif deleted > max(live, REBUILD_AFTER):
+            crowded.append(name)
+    return empty, crowded
+
+
+def _drop_empty(names: list[str]) -> None:
+    """Drop the collections of `names` that still hold nothing. Blocks; has
+    the project's gate alone."""
+    client = _chroma_client()
+    for name in names:
+        try:
+            live = client.get_collection(name).count()
+        except NotFoundError:
+            continue
         if live == 0:
             _drop(client, name)
-            dropped = True
-            continue
-        deleted = int((collection.metadata or {}).get(_DELETED, 0))
-        if deleted > max(live, REBUILD_AFTER):
-            _rebuild(client, name)
-            dropped = True
-    if dropped:
-        sparse.invalidate(project_id)
-        _sweep_orphans()
 
 
-def _rebuild(client: chromadb.ClientAPI, name: str) -> None:
+async def _rebuild(project_id: str, name: str) -> None:
     """Copy a collection's live chunks into a new one, which then takes its
-    place and name; the old one, and the room its deleted chunks held, go."""
-    with contextlib.suppress(NotFoundError):
-        client.delete_collection(f"{name}{_REBUILDING}")  # a rebuild cut short
-    old = client.get_collection(name)
-    new = client.create_collection(f"{name}{_REBUILDING}", embedding_function=None)
-    offset = 0
+    place and name; the old one, and the room its deleted chunks held, go.
+
+    The copy is made a slice at a time, each sharing the project's gate, so
+    the project's searches and writes go on meanwhile. Only the end has the
+    gate alone: what was written and deleted during the copy is caught up,
+    and the copy takes the old one's name (`_swap`).
+    """
+    project = gate(project_id)
+    old_id = await run_indexing_shared(project, _start_copy, name)
     try:
-        while True:
-            ensure_room()
-            got = old.get(
-                include=["embeddings", "documents", "metadatas"],
-                limit=_COPY_BATCH,
-                offset=offset,
-            )
-            if not got["ids"]:
-                break
-            new.add(
-                ids=got["ids"],
-                embeddings=got["embeddings"],
-                documents=got["documents"],
-                metadatas=got["metadatas"],
-            )
-            offset += len(got["ids"])
+        offset = 0
+        while copied := await run_indexing_shared(project, _copy_slice, name, offset):
+            offset += copied
+        async with project.alone():
+            await in_thread(_swap, name, old_id)
     except BaseException:
         # Not finished: the old one stays, and the part-copy goes, or it
         # would be taken later for a rebuild to finish.
         with contextlib.suppress(Exception):
-            client.delete_collection(f"{name}{_REBUILDING}")
+            await in_thread(_drop_copy, name)
         raise
+
+
+def _start_copy(name: str) -> str:
+    """Make the collection a rebuild of `name` copies into, dropping one a
+    rebuild cut short left; the id of the collection copied. Blocks."""
+    client = _chroma_client()
+    with contextlib.suppress(NotFoundError):
+        client.delete_collection(f"{name}{_REBUILDING}")
+    old = client.get_collection(name)
+    client.create_collection(f"{name}{_REBUILDING}", embedding_function=None)
+    return str(old.id)
+
+
+def _copy_slice(name: str, offset: int) -> int:
+    """Copy one slice of a collection's chunks into its rebuild's copy; how
+    many. Blocks; shares the project's gate."""
+    ensure_room("the project's collection was not rebuilt")
+    client = _chroma_client()
+    got = client.get_collection(name).get(
+        include=["embeddings", "documents", "metadatas"],
+        limit=_COPY_BATCH,
+        offset=offset,
+    )
+    if got["ids"]:
+        # Upserted: a slice read again, once a delete meanwhile has shifted
+        # the ones after it, writes nothing twice.
+        client.get_collection(f"{name}{_REBUILDING}").upsert(
+            ids=got["ids"],
+            embeddings=got["embeddings"],
+            documents=got["documents"],
+            metadatas=got["metadatas"],
+        )
+    return len(got["ids"])
+
+
+def _swap(name: str, old_id: str) -> None:
+    """Catch a rebuild's copy up with what was written to and deleted from
+    the collection while it was made, then drop the collection and give the
+    copy its name. Blocks; has the project's gate alone.
+
+    The copy read the collection a slice at a time while the project's
+    writes and deletes went on, so it can lack a chunk written meanwhile, or
+    one a delete moved past its slice, and hold one deleted meanwhile. Both
+    are put right by id here, with nothing else writing.
+    """
+    client = _chroma_client()
+    old = client.get_collection(name)
+    if str(old.id) != old_id:
+        raise RuntimeError(f"{name} was dropped and made again while it was rebuilt")
+    copy = client.get_collection(f"{name}{_REBUILDING}")
+    held = set(old.get(include=[])["ids"])
+    copied = set(copy.get(include=[])["ids"])
+    missing = sorted(held - copied)
+    for start in range(0, len(missing), _COPY_BATCH):
+        ensure_room("the project's collection was not rebuilt")
+        got = old.get(
+            ids=missing[start : start + _COPY_BATCH],
+            include=["embeddings", "documents", "metadatas"],
+        )
+        copy.upsert(
+            ids=got["ids"],
+            embeddings=got["embeddings"],
+            documents=got["documents"],
+            metadatas=got["metadatas"],
+        )
+    extra = sorted(copied - held)
+    for start in range(0, len(extra), _COPY_BATCH):
+        copy.delete(ids=extra[start : start + _COPY_BATCH])
+    if not held:
+        # Its last chunk went during the copy: there is nothing to keep.
+        _drop(client, name)
+        return
     client.delete_collection(name)
-    new.modify(name=name)
+    copy.modify(name=name)
     _forget(name)
-    logger.info("rebuilt %s from its %d live chunks", name, offset)
+    if extra:
+        # Deleted from the copy, so their room is in its index now.
+        _count_deleted(name, len(extra))
+    logger.info("rebuilt %s from its %d live chunks", name, len(held))
+
+
+def _drop_copy(name: str) -> None:
+    """Drop the copy an unfinished rebuild of `name` made, while `name` is
+    there to keep. Once `name` is gone (the rebuild stopped between dropping
+    it and renaming the copy), the copy is all there is, and takes the name
+    when the project is next used (`_recover`). Blocks."""
+    client = _chroma_client()
+    if not _exists(client, name):
+        return
+    with contextlib.suppress(NotFoundError):
+        client.delete_collection(f"{name}{_REBUILDING}")
 
 
 def _count_deleted(name: str, removed: int) -> None:
@@ -700,6 +965,66 @@ def _write(
     )
 
 
+def _write_slice(
+    embedding_model: str | None,
+    project_id: str,
+    chunks: list[Document],
+    ids: list[str],
+    vectors: np.ndarray,
+) -> None:
+    """Write one embedded slice into the project's collection for its model,
+    made if it is not there. Blocks; shares the project's gate."""
+    _write(open_vector_store(embedding_model, project_id), chunks, ids, vectors)
+
+
+def _delete_chunks(embedding_model: str | None, project_id: str, ids: list[str]) -> int:
+    """Remove chunks by id from the project's collection for a model; how
+    many were there. Counted as deleted, so the room they took is given back
+    like a delete's (`tidy`). Blocks; shares the project's gate."""
+    store = find_vector_store(embedding_model, project_id)
+    if store is None:
+        return 0
+    found = store._collection.get(ids=ids, include=[])["ids"]
+    if not found:
+        return 0
+    store._collection.delete(ids=found)
+    if not get_settings().chroma_url:
+        _count_deleted(store._collection.name, len(found))
+    return len(found)
+
+
+def _remove_chunks(
+    project_id: str, doc_id: str, own: str | None, keeping: Collection[str]
+) -> int:
+    """Remove one document's chunks from every collection that may hold
+    them, except `keeping` in the collection named `own`; how many went.
+    Blocks; shares the project's gate."""
+    client = _chroma_client()
+    kept = set(keeping)
+    counting = not get_settings().chroma_url
+    removed = 0
+    for name in _collections_of(client, project_id):
+        try:
+            collection = client.get_collection(name, embedding_function=None)
+            found = collection.get(where=_owned_by(doc_id, project_id), include=[])
+        except NotFoundError:
+            # A shared collection the move of another project emptied and
+            # dropped meanwhile.
+            continue
+        stale = [
+            chunk_id for chunk_id in found["ids"] if name != own or chunk_id not in kept
+        ]
+        if not stale:
+            continue
+        collection.delete(ids=stale)
+        if counting and _PROJECT in name:
+            # A project's own collection is rebuilt from its count (`tidy`);
+            # a shared one goes whole once the move has emptied it.
+            _count_deleted(name, len(stale))
+        removed += len(stale)
+    return removed
+
+
 class EmbeddedChunks:
     """What a write has done so far: how many chunks it had embedded, paid
     for whether or not the write then lands (docs/review-2026-10.md,
@@ -733,6 +1058,7 @@ class ChromaChunkStore:
         project_id: str,
         chunks: list[Document],
         embedded: EmbeddedChunks | None = None,
+        cancelled: Callable[[], bool] | None = None,
     ) -> None:
         """Replace everything stored for one document with `chunks`.
 
@@ -749,11 +1075,15 @@ class ChromaChunkStore:
         step that fails (a rate limit, a provider outage, a bad key); a
         failure part-way removes what of the new version landed, so the
         version already indexed goes on answering, whole. The room the old
-        version took is given back after (`tidy`).
+        version took is given back after (`tidy`), and so is the room of what
+        a failure took back.
 
         `embedded`, when given, counts the chunks as each slice is embedded,
         which the provider bills whether or not the slice then lands, and
-        says when every slice has landed.
+        says when every slice has landed. `cancelled`, when given, is asked
+        before each slice is embedded: once the upload is cancelled (its
+        document deleted), nothing more is embedded, or paid for, and what
+        landed goes again.
         """
         await ensure_moved(project_id)
         version = uuid.uuid4().hex[:12]
@@ -768,25 +1098,35 @@ class ChromaChunkStore:
             counting = _EMBEDDING.set(embedded)
             try:
                 for start in range(0, len(chunks), size):
+                    if cancelled is not None and cancelled():
+                        raise DocumentDeletedError(
+                            "the document was deleted while it was being indexed"
+                        )
                     tried = start + size
                     await self._add(project_id, chunks[start:tried], ids[start:tried])
-            except BaseException:
+            except BaseException as exc:
                 if tried:
                     with contextlib.suppress(Exception):
                         await self._delete_ids(project_id, ids[:tried])
+                    # What was taken back must not go on answering keyword
+                    # searches that indexed it while it was there.
+                    sparse.invalidate(project_id)
+                    if isinstance(exc, Exception):
+                        # Its room goes back too, and a project's first
+                        # document leaves no empty collection behind.
+                        await tidy(project_id)
                 raise
             finally:
                 _EMBEDDING.reset(counting)
             if embedded is not None:
                 embedded.landed = True
 
-            async with gate(project_id).shared():
-                replaced = await self._remove(
-                    doc_id=doc_id,
-                    project_id=project_id,
-                    own=collection_name(self._embedding_model, project_id),
-                    keeping=ids,
-                )
+            replaced = await self._remove(
+                doc_id=doc_id,
+                project_id=project_id,
+                own=collection_name(self._embedding_model, project_id),
+                keeping=ids,
+            )
         if replaced or not chunks:
             await tidy(project_id)
 
@@ -795,9 +1135,11 @@ class ChromaChunkStore:
     ) -> None:
         """Embed one slice of chunks, then write it, on indexing's own threads.
 
-        Only the write is behind the project's gate: embedding takes as long as
-        the provider does, and a rebuild or drop of the collection, and every
-        search waiting behind one, must not wait for it.
+        Only the write is behind the project's gate, and only once a thread
+        is free for it (`run_indexing_shared`): embedding takes as long as
+        the provider does, a free thread as long as other documents' indexing
+        does, and a rebuild or drop of the collection, and every search
+        waiting behind one, must wait for neither.
         """
         texts = [chunk.page_content for chunk in chunks]
         vectors = await run_indexing(_embed, self._embedding_model, texts)
@@ -805,37 +1147,49 @@ class ChromaChunkStore:
         embedding = _EMBEDDING.get()
         if embedding is not None:
             embedding.chunks += len(texts)
-        async with gate(project_id).shared():
-            store = await asyncio.to_thread(
-                open_vector_store, self._embedding_model, project_id
-            )
-            await run_indexing(_write, store, chunks, ids, vectors)
+        await run_indexing_shared(
+            gate(project_id),
+            _write_slice,
+            self._embedding_model,
+            project_id,
+            chunks,
+            ids,
+            vectors,
+        )
 
-    async def _delete_ids(self, project_id: str, ids: list[str]) -> None:
-        """Remove chunks by id from the project's collection for this model."""
-        async with gate(project_id).shared():
-            store = await asyncio.to_thread(
-                find_vector_store, self._embedding_model, project_id
-            )
-            if store is not None:
-                await run_indexing(store._collection.delete, ids)
+    async def _delete_ids(self, project_id: str, ids: list[str]) -> int:
+        """Remove chunks by id from the project's collection for this model,
+        and say how many were there."""
+        return await run_indexing_shared(
+            gate(project_id), _delete_chunks, self._embedding_model, project_id, ids
+        )
 
-    async def delete(self, *, doc_id: str, project_id: str) -> int:
+    async def delete(
+        self, *, doc_id: str, project_id: str, tidy_after: bool = True
+    ) -> int:
         """Remove every chunk of one project's document, and say how many;
-        the room they took is given back (`tidy`)."""
-        await ensure_moved(project_id)
-        async with gate(project_id).shared():
-            removed = await self._remove(doc_id=doc_id, project_id=project_id)
-        if removed:
+        the room they took is given back (`tidy`), unless `tidy_after` is
+        false: a purge, which drops the project's collections whole after.
+
+        Wherever they are: a project whose chunks have not all moved out of
+        the collection every project shared until 0.1.30 has them deleted
+        there, not moved first (`_collections_of`).
+        """
+        removed = await self._remove(doc_id=doc_id, project_id=project_id)
+        if removed and tidy_after:
             await tidy(project_id)
         return removed
 
     async def delete_project(self, *, project_id: str) -> int:
         """Remove every chunk of a project, under every embedding model, and
-        say how many: its collections are dropped, with their files."""
-        await ensure_moved(project_id)
+        say how many: its collections are dropped, with their files, and its
+        chunks still in a collection every project shared are deleted there,
+        with no move first."""
         async with gate(project_id).alone():
-            return await asyncio.to_thread(_drop_project, project_id)
+            removed = await in_thread(_drop_project, project_id)
+        # Nothing of it is left in a shared collection to move.
+        _moved.add(project_id)
+        return removed
 
     async def _remove(
         self,
@@ -852,44 +1206,51 @@ class ChromaChunkStore:
         written: a document may have been indexed under a different embedding
         model than the one now writing or deleting it, and a sweep that
         missed it would leave chunks that still answer queries with nothing
-        left to name them.
+        left to name them. On one of indexing's threads, behind the
+        project's gate once the thread is free: listing the collections is a
+        call into Chroma, and on a full disk one can hang holding its lock
+        (DISK-3).
         """
-        kept = set(keeping)
-        removed = 0
-
-        # In a thread: listing the collections is a call into Chroma, and on a
-        # full disk one can hang holding its lock (DISK-3).
-        client = _chroma_client()
-        for name in await asyncio.to_thread(_project_collections, client, project_id):
-            collection = await asyncio.to_thread(
-                client.get_collection, name, embedding_function=None
-            )
-            found = await asyncio.to_thread(
-                collection.get, where=_owned_by(doc_id, project_id), include=[]
-            )
-            stale = [
-                chunk_id
-                for chunk_id in found["ids"]
-                if name != own or chunk_id not in kept
-            ]
-            if stale:
-                await run_indexing(collection.delete, stale)
-                await asyncio.to_thread(_count_deleted, name, len(stale))
-                removed += len(stale)
-
-        return removed
+        return await run_indexing_shared(
+            gate(project_id), _remove_chunks, project_id, doc_id, own, keeping
+        )
 
 
 def _drop_project(project_id: str) -> int:
-    """Drop every collection of a project, and the files they leave; how many
-    chunks they held. Blocks."""
+    """Drop every collection of a project, and the files they leave, and
+    delete its chunks from the shared collections it has not moved out of;
+    how many chunks went. Blocks; has the project's gate alone."""
     client = _chroma_client()
     removed = 0
     for name in _project_collections(client, project_id):
         removed += client.get_collection(name).count()
         _drop(client, name)
+    if project_id not in _moved and _shared_left is not False:
+        removed += _delete_from_shared(client, project_id)
     sparse.invalidate(project_id)
     _sweep_orphans()
+    return removed
+
+
+def _delete_from_shared(client: chromadb.ClientAPI, project_id: str) -> int:
+    """Delete a project's chunks from the collections every project shared
+    until 0.1.30, where they wait to be moved; how many. One left empty is
+    dropped, as the move drops it."""
+    removed = 0
+    for shared_name in _shared_collections(client):
+        try:
+            shared = client.get_collection(shared_name)
+            ids = shared.get(where={"project_id": project_id}, include=[])["ids"]
+            for start in range(0, len(ids), _COPY_BATCH):
+                shared.delete(ids=ids[start : start + _COPY_BATCH])
+            left = shared.count()
+        except NotFoundError:
+            continue
+        removed += len(ids)
+        if ids and not left:
+            with contextlib.suppress(NotFoundError):
+                client.delete_collection(shared_name)
+            _forget(shared_name)
     return removed
 
 

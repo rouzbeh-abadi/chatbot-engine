@@ -79,6 +79,24 @@ class S3BlobStore(BlobStore):
         bucket, key = self._parse(uri)
         await asyncio.to_thread(self._client.delete_object, Bucket=bucket, Key=key)
 
+    async def keys(self) -> list[str]:
+        """The keys of every object directly under `prefix`, without it."""
+        start = f"{self._prefix}/" if self._prefix else ""
+
+        def listed() -> list[str]:
+            found: list[str] = []
+            pages = self._client.get_paginator("list_objects_v2").paginate(
+                Bucket=self._bucket, Prefix=start
+            )
+            for page in pages:
+                for item in page.get("Contents", []):
+                    key = item["Key"].removeprefix(start)
+                    if key and "/" not in key:
+                        found.append(key)
+            return found
+
+        return await asyncio.to_thread(listed)
+
     def ensure_bucket(self) -> None:
         """Create the bucket when it does not exist. For a fresh MinIO in the
         scale overlay; a real deployment provisions its bucket itself."""

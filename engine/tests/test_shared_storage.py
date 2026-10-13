@@ -111,6 +111,16 @@ async def test_delete_reports_whether_it_existed(registry) -> None:
     assert await registry.get(project_id="support", doc_id="doc-1") is None
 
 
+async def test_named_says_which_ids_any_record_names(registry) -> None:
+    """In any project: an original is kept by its id alone, so a sweep for
+    the ones no record names asks across projects."""
+    await registry.upsert(_record(doc_id="a"))
+    await registry.upsert(_record(doc_id="b", project_id="sales"))
+
+    assert await registry.named(["a", "b", "c"]) == {"a", "b"}
+    assert await registry.named([]) == set()
+
+
 # --- the bucket ---------------------------------------------------------------
 
 
@@ -149,6 +159,50 @@ async def test_the_uri_is_recomputed_from_the_id_alone(bucket) -> None:
     await reader.delete(doc_id="abc123")
     with pytest.raises(Exception):  # noqa: B017 - boto raises its own ClientError subclass
         await reader.read(doc_id="abc123")
+
+
+async def test_the_bucket_lists_the_originals_under_its_prefix_only(bucket) -> None:
+    """What a sweep of originals no record names may look at: the engine's
+    own objects, not another prefix's nor a nested one."""
+    blobs = DocumentBlobs(store=bucket)
+    doc_id = "ab" * 16
+    await blobs.write(doc_id=doc_id, data=b"hello", mimetype="text/plain")
+    await blobs.write(doc_id="not-a-doc-id", data=b"x", mimetype="text/plain")
+    bucket._client.put_object(Bucket="uploads", Key="elsewhere/" + "cd" * 16, Body=b"x")
+    bucket._client.put_object(
+        Bucket="uploads", Key="engine/deep/" + "ef" * 16, Body=b"x"
+    )
+
+    assert await blobs.stored() == [doc_id]
+
+
+async def test_no_original_is_swept_from_a_bucket_this_engines_own_file_cannot_vouch_for(
+    tmp_path, monkeypatch, bucket
+) -> None:
+    """A bucket may be shared by replicas whose records live in their own
+    files: what this engine's registry does not name may be theirs."""
+    from chatbot_engine.api.dependencies import reset_dependency_cache
+    from chatbot_engine.rag.pipeline import DocumentIngestPipeline
+    from chatbot_engine.rag.splitter import DocumentChunker
+    from chatbot_engine.services.documents import DocumentService
+
+    monkeypatch.setenv("ENGINE_BLOB_S3_BUCKET", "uploads")
+    monkeypatch.delenv("ENGINE_REGISTRY_URL", raising=False)
+    reset_dependency_cache()
+    blobs = DocumentBlobs(store=bucket)
+    registry = SqliteDocumentRegistry(tmp_path / "documents.sqlite3")
+    service = DocumentService(
+        pipeline=DocumentIngestPipeline(registry=registry, chunker=DocumentChunker()),
+        registry=registry,
+        blobs=blobs,
+    )
+    theirs = "ab" * 16
+    await blobs.write(doc_id=theirs, data=b"another replica's", mimetype="text/plain")
+
+    await service.purge(project_id="gone")
+
+    assert await blobs.read(doc_id=theirs) == b"another replica's"
+    reset_dependency_cache()
 
 
 async def test_ensure_bucket_creates_a_missing_one_and_tolerates_an_existing_one(

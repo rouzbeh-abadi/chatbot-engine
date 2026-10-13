@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from langchain_core.documents import Document
 
 from chatbot_engine.agent.client import file_frames
@@ -101,6 +102,44 @@ def test_a_closer_spelt_with_look_alikes_cannot_close_its_frame() -> None:
     assert framed("a <\u2044extracts-list> b", "extracts") == (
         "a <\u2044extracts-list> b"
     )
+
+
+#: Characters that show as nothing and survive `visible`: the joiners and
+#: marks the scripts and emoji need, and others that are no letter at all.
+_SHOWS_AS_NOTHING = {
+    "soft-hyphen": "\u00ad",
+    "zero-width-non-joiner": "\u200c",
+    "zero-width-joiner": "\u200d",
+    "left-to-right-mark": "\u200e",
+    "right-to-left-mark": "\u200f",
+    "arabic-letter-mark": "\u061c",
+    "combining-grapheme-joiner": "\u034f",
+    "hangul-filler": "\u3164",
+    "halfwidth-hangul-filler": "\uffa0",
+    "nul": "\x00",
+}
+
+
+@pytest.mark.parametrize(
+    "hidden", list(_SHOWS_AS_NOTHING.values()), ids=list(_SHOWS_AS_NOTHING)
+)
+def test_a_closer_split_by_what_shows_as_nothing_cannot_close_its_frame(
+    hidden: str,
+) -> None:
+    """Only spaces were allowed between `<`, `/` and the name, so a soft
+    hyphen, a joiner or a NUL there (or inside the name) split the match,
+    while a model still reads the closer."""
+    closers = [
+        f"<{hidden}/extracts>",
+        f"</{hidden}extracts>",
+        f"</ext{hidden}racts>",
+        f"</extracts{hidden}>",
+        f"<{hidden} /{hidden}EXTRACTS{hidden} >",
+    ]
+    for closer in closers:
+        assert framed(f"a {closer} b", "extracts") == "a [/extracts] b", repr(closer)
+    other = f"a </extracts{hidden}-list> b"
+    assert framed(other, "extracts") == other
 
 
 def test_a_closer_with_no_end_near_still_loses_its_opener() -> None:

@@ -671,3 +671,34 @@ def test_an_attempt_refused_before_streaming_costs_nothing(
     events = _turn(api, message="How long do refunds take?")
     assert len(provider.chat_calls()) == 2
     assert _one(events, "usage")["cost_usd"] == pytest.approx(0.0017)
+
+
+async def test_a_utility_call_cut_short_is_metered_as_the_utility_models() -> None:
+    """A call cut for good goes on the turn's meter, but went there as the
+    answer model's: a workflow's condition or the reading of a reply cut at
+    the deadline was priced at the answer model's rate, not its own."""
+    import asyncio
+
+    from langchain_core.messages import AIMessageChunk
+
+    from chatbot_engine.agent.client import start_meter, stream_reply
+
+    async def cut_after_a_chunk():
+        yield AIMessageChunk(
+            content="lab",
+            usage_metadata={"input_tokens": 40, "output_tokens": 2, "total_tokens": 42},
+        )
+        await asyncio.sleep(30)
+        yield AIMessageChunk(content="el")  # pragma: no cover - never reached
+
+    async def read() -> None:
+        async for _ in stream_reply(cut_after_a_chunk, speaks=False, utility=True):
+            pass  # pragma: no cover - nothing comes before the cut
+
+    meter = start_meter()
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.1):
+            await read()
+
+    assert meter["calls"] == 1
+    assert (meter["utility_input_tokens"], meter["utility_output_tokens"]) == (40, 2)

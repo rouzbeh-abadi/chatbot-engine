@@ -122,7 +122,7 @@ docker run -d --init --name engine -p 127.0.0.1:8100:8100 \
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.32
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.33
 ```
 
 The readiness endpoint reports whether a provider key is set, whether the
@@ -297,7 +297,7 @@ docker run -d --init --name engine -p 8100:8100 \
   -e ENGINE_LANGFUSE_PUBLIC_KEY=pk-lf-... \
   -e ENGINE_LANGFUSE_SECRET_KEY=sk-lf-... \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.32
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.33
 ```
 
 [DEPLOYMENT.md](DEPLOYMENT.md) covers the remaining topics, including rate
@@ -473,9 +473,14 @@ column and what a run costs.
   model whose vectors are of unit length, as OpenAI's are, and a `min_score`
   tuned for one embedding model does not carry over to another.
 - **Several instances.** Embedded Chroma belongs to one process, so several
-  engine instances need a Chroma server. Each instance keeps its own keyword
-  index, and a document uploaded through one is keyword-searchable on the
-  others within a minute.
+  engine instances (or uvicorn workers) need a Chroma server; a second
+  engine on the same Chroma directory refuses to start. Each instance keeps
+  its own keyword index, so a document uploaded through one is
+  keyword-searchable on the others within a minute, and one deleted through
+  one stays keyword-searchable on the others for up to a minute. Against a
+  server the engine does not rebuild or drop a project's collections as
+  their chunks are deleted, so the room deleted chunks took stays on the
+  server ([DEPLOYMENT.md](DEPLOYMENT.md#scaling-out)).
 - **Prompt injection.** Extracts, files and tool results reach the model as
   data, cleaned of hidden characters and unable to close their frame. That
   lowers the odds of a planted instruction working; it does not rule it out.

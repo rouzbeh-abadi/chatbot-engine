@@ -1148,3 +1148,49 @@ def test_a_checkpoint_id_tells_when_it_was_written():
     assert written is not None and abs(written - time.time()) < 5
     assert _written_at("not-an-id") is None
     assert _written_at("6f1c0000-0000-4000-8000-000000000001") is None
+
+
+async def test_a_forget_that_fails_after_the_turn_ended_is_logged_not_sent(caplog):
+    """A turn that can pause forgets its saved state once it has ended. When
+    that failed (a locked or full checkpoint file), the stream got an
+    `error` and a second `done` after the turn's own."""
+    import sqlite3
+
+    from chatbot_engine.agent.router import within_deadline
+    from chatbot_engine.api.streaming import to_ndjson
+
+    class Locked(Pauses):
+        async def forget(self, thread_id):
+            raise sqlite3.OperationalError("database is locked")
+
+    spec = {
+        "start": "route",
+        "nodes": [
+            {
+                "id": "route",
+                "type": "condition",
+                "question": "Which?",
+                "branches": {"say": "say", "ask": "ask"},
+            },
+            {"id": "say", "type": "reply", "text": "Hello."},
+            {"id": "ask", "type": "ask", "prompt": "Name?", "var": "name"},
+        ],
+        "edges": [],
+    }
+    request = _request(spec, "hi")
+    agent = WorkflowAgent(tools=Tools(), pauses=Locked(Pauses.memory()._open_saver, 60))
+    model = ScriptedModel(rounds=[[AIMessageChunk(content="say")]], seen=[])
+    with (
+        patch("langgraph_agent.workflow.build_chat_model", return_value=model),
+        patch("langgraph_agent.workflow.retrieve_with_usage", new=_no_retrieval),
+        caplog.at_level("WARNING"),
+    ):
+        lines = [
+            json.loads(line)
+            async for line in to_ndjson(
+                within_deadline(agent.run(request), request, 30)
+            )
+        ]
+
+    assert [line["type"] for line in lines] == ["token", "usage", "done"]
+    assert "could not be forgotten yet: database is locked" in caplog.text

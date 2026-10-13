@@ -168,13 +168,14 @@ class SparseIndex:
 #: built from the old one.
 _indexes: OrderedDict[tuple[str, str], SparseIndex] = OrderedDict()
 #: The builds under way, so a search that finds an index cold while it is
-#: being built waits for it instead of building a copy of its own.
+#: being built waits for it instead of building a copy of its own. A build is
+#: kept only while it is still the one listed for its project: `invalidate`
+#: takes a project's builds off this list, so one that began before an
+#: ingest or delete in the project (and may hold the chunks from before it)
+#: answers the searches that asked for it and is not kept, while a change to
+#: another project leaves it be.
 _building: dict[tuple[str, str], Future[SparseIndex]] = {}
 _lock = threading.Lock()
-#: Counts the calls to `invalidate`. A build that began before one may hold
-#: the chunks from before the change, so it answers the searches that asked
-#: for it and is not kept.
-_generation = 0
 
 
 def sparse_index(store: Chroma, project_id: str) -> SparseIndex | None:
@@ -196,7 +197,6 @@ def sparse_index(store: Chroma, project_id: str) -> SparseIndex | None:
         building = pending is None
         if pending is None:
             pending = _building[key] = Future()
-        generation = _generation
 
     if not building:
         index = pending.result()
@@ -215,9 +215,9 @@ def sparse_index(store: Chroma, project_id: str) -> SparseIndex | None:
 
     try:
         with _lock:
+            # Still listed: nothing changed in the project since it began.
             if _building.get(key) is pending:
                 del _building[key]
-            if generation == _generation:
                 _keep(key, index, now)
     finally:
         # Whatever keeping it did, the searches waiting for it get it.
@@ -249,12 +249,10 @@ def _keep(key: tuple[str, str], index: SparseIndex, now: float) -> None:
 def invalidate(project_id: str | None = None) -> None:
     """Drop cached indexes, for one project or all. Called after an ingest or
     delete in this process, so the next search sees the change at once. A
-    build under way is let finish for the searches waiting on it; the next
-    search starts another."""
-    global _generation
-
+    build under way for the project is let finish for the searches waiting
+    on it, and is not kept; the next search starts another. Another
+    project's build is kept as it is."""
     with _lock:
-        _generation += 1
         for cache in (_indexes, _building):
             for key in list(cache):
                 if project_id is None or key[1] == project_id:

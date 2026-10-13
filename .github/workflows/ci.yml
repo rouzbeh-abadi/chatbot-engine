@@ -87,6 +87,38 @@ jobs:
       - name: Run the engine and backend tests
         run: uv run pytest -q
 
+  root:
+    name: Tests that need root
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+        with:
+          enable-cache: true
+
+      - run: uv sync --all-packages --all-extras --locked
+
+      # The full-volume tests mount a small tmpfs, and the PID 1 test runs the
+      # engine in a PID namespace of its own (`unshare`): both need root, and
+      # skip without it, as they do in the job above. The runner has
+      # passwordless sudo. The venv's own Python rather than `uv run`, so
+      # nothing in uv's cache becomes root's and trips the cache step after,
+      # and no bytecode or pytest cache is written as root either. A skip
+      # fails the job: a test that needs root and skipped here ran nowhere.
+      - name: Run the tests that need root
+        shell: bash
+        run: |
+          sudo -E env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest \
+            -q -rs -p no:cacheprovider \
+            engine/tests/review/test_disk.py \
+            "engine/tests/review/test_index_crashes.py::test_the_engine_as_pid_1_exits_on_sigterm_with_nothing_in_flight" \
+            | tee "$RUNNER_TEMP/root-tests.log"
+          if grep -q "^SKIPPED" "$RUNNER_TEMP/root-tests.log"; then
+            echo "a test that needs root was skipped, so it ran nowhere"
+            exit 1
+          fi
+
   audit:
     name: Dependency audit
     # `inputs` is empty on a push or pull request, so only the release's

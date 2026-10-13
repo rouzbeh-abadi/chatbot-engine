@@ -4,7 +4,8 @@ Embedded Chroma does not fail cleanly on a full disk: a write can hang inside
 it holding the interpreter, so every route stops, and a write cut short can
 leave the index every tenant shares unreadable after a restart
 (docs/review-2026-10.md, DISK-3 and DISK-4). So indexing checks the room
-first, and refuses well before the disk is full.
+first, and refuses well before the disk is full. With the floor at zero
+there is no such check, and a full volume can freeze the engine again.
 """
 
 from __future__ import annotations
@@ -59,10 +60,16 @@ def disk_low() -> bool:
         return False
 
 
-def ensure_room() -> None:
+def ensure_room(refused: str = "the document was not indexed") -> None:
     """Raise `StorageFullError` when a volume the engine writes to has less
     free space than `ENGINE_MIN_FREE_MB`. A cheap call (one `statvfs` per
-    directory), made before every write of an upload."""
+    directory), made before every write of an upload, a move or a rebuild.
+
+    `refused` is what the refusal stops, in the message's words: an upload
+    is not the only thing that writes, and a message about one would send
+    whoever reads it after the wrong thing. Deletes and purges never ask:
+    they are how room is made.
+    """
     floor = get_settings().min_free_mb * 1024 * 1024
     if floor == 0:
         return
@@ -72,5 +79,5 @@ def ensure_room() -> None:
             raise StorageFullError(
                 f"the engine's volume has {free // (1024 * 1024)} MB free, under "
                 f"the {floor // (1024 * 1024)} MB it keeps (ENGINE_MIN_FREE_MB), "
-                "so the upload was not indexed -- make room, then try again"
+                f"so {refused} -- make room, then try again"
             )

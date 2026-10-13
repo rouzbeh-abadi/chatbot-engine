@@ -128,7 +128,10 @@ class Settings(BaseSettings):
 
     #: How many threads read, embed and write documents for the index, apart
     #: from the pool every chat's retrieval runs on. More uploads than this
-    #: at once wait their turn; chats never wait for them.
+    #: at once wait their turn, and chats do not wait for them: a write takes
+    #: its project's gate only once it has a thread. A project's own chats
+    #: wait only while one of its collections is replaced or dropped (the end
+    #: of a rebuild, a purge), and while it moves once, at 0.1.30.
     index_concurrency: int = Field(default=2, ge=1)
 
     # --- the model provider -------------------------------------------------
@@ -207,8 +210,10 @@ class Settings(BaseSettings):
 
     #: A Chroma server to use instead of the embedded one, as
     #: `http://host:8000`. Embedded Chroma is a set of files owned by one
-    #: process, so two engine replicas cannot share it; a server can be shared
-    #: by any number. Unset, the engine runs embedded.
+    #: process, so two engine processes cannot share it (nor can uvicorn's
+    #: workers, `WEB_CONCURRENCY` above 1), and a second one on the same
+    #: directory is refused at startup; a server can be shared by any number.
+    #: Unset, the engine runs embedded.
     chroma_url: str | None = None
 
     #: The credential for a Chroma server that requires one. Sent on every
@@ -218,8 +223,10 @@ class Settings(BaseSettings):
     chroma_token: str | None = None
     chroma_token_header: str = "Authorization"
 
-    #: One collection for every project. Chunks carry `project_id` in their
-    #: metadata, so scoping a query is a filter, not a second collection.
+    #: The base name of the engine's collections: one per embedding model and
+    #: project (`documents--<model>--p-<project hash>`) since 0.1.30, so a
+    #: search reads only its project's vectors and a project's knowledge is
+    #: dropped whole. Chunks still carry `project_id` in their metadata.
     chroma_collection: str = "documents"
 
     #: Document metadata. As durable as the vectors, or a restart leaves chunks
@@ -292,7 +299,8 @@ class Settings(BaseSettings):
     #: engine writes to. Below it, an upload is refused (503) before anything
     #: is written: a full volume can freeze embedded Chroma for every tenant
     #: and leave its index unreadable after a restart. Zero turns the check
-    #: off.
+    #: off, and so lets that freeze back in: with embedded Chroma, an engine
+    #: under `ENGINE_ENV=production` refuses to start with it.
     min_free_mb: int = Field(default=512, ge=0)
 
     #: How long a paused turn waits for its answer before it is forgotten.
@@ -315,8 +323,28 @@ class Settings(BaseSettings):
     #: answers with a whole database table would be paid for again each
     #: round; past this the result is cut, with a line saying how much was
     #: left out. A workflow's Tool Call step keeps the whole result in its
-    #: variable, and the variable is cut the same way in a step's prompt.
+    #: variable (up to `workflow_var_chars`), and the variable is cut the
+    #: same way in a step's prompt.
     tool_result_chars: int = Field(default=20_000, ge=1_000)
+
+    #: The most characters one workflow variable may hold. A Tool Call step
+    #: keeps more of a result than a model reads, so a list of options or a
+    #: JSON object a template names a field of stays whole; past this it is
+    #: cut, with a line saying how much was left out, and is neither any
+    #: more. A Chat Model step that keeps its reply in a variable is held to
+    #: it too. A turn keeps its variables until it ends, through a pause too.
+    workflow_var_chars: int = Field(default=100_000, ge=1_000)
+
+    #: The most characters of tool results one turn keeps, over all its
+    #: calls: what a model reads of each, and what a workflow's variables
+    #: keep of them. A turn keeps its results until it ends, so a workflow
+    #: whose tool steps loop would otherwise hold every answer it was given,
+    #: and write it all to disk at a pause. Past it a call is answered as not
+    #: run, without running (a workflow's Tool Call step then fails, and its
+    #: `on_error` applies). The loop and graph agents keep only what their
+    #: prompt holds (`prompt_chars`), so with the defaults this binds on
+    #: workflows only.
+    turn_tool_result_chars: int = Field(default=1_000_000, ge=10_000)
 
     #: The most tool calls one model reply may have run. A reply asking for
     #: more has the rest answered as not run, so the model asks again in its
@@ -468,6 +496,15 @@ class Settings(BaseSettings):
                 "credits and read anything indexed. The engine has no notion "
                 "of end users -- it must only ever be reachable by your "
                 "application backend."
+            )
+
+        if self.min_free_mb == 0 and not self.chroma_url:
+            problems.append(
+                "ENGINE_MIN_FREE_MB=0 turns the free-space floor off, so an "
+                "upload can fill the volume, and a full volume freezes "
+                "embedded Chroma for every tenant until a restart and can "
+                "leave its index unreadable. Keep a floor (the default is 512 "
+                "MB; a few times the largest upload at least)."
             )
 
         return problems

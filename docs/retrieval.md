@@ -57,10 +57,12 @@ contained "to".
 The BM25 index is built from the chunks already in the vector store, per
 project, so there is one source of truth and nothing extra to persist. It is
 kept for 60 seconds and then built again, and dropped immediately when the
-process that holds it ingests or deletes a document. Within those 60 seconds a
-keyword search reads nothing from the vector store. With several engine
-replicas, a document ingested through one replica is keyword-searchable on the
-others within a minute.
+process that holds it ingests or deletes a document, or an update fails and
+what it had written is taken back. Within those 60 seconds a keyword search
+reads nothing from the vector store. With several engine replicas, a document
+ingested through one replica is keyword-searchable on the others within a
+minute, and a document deleted through one stays keyword-searchable on the
+others for up to a minute.
 
 Building the index reads every chunk the project has, and a search scores
 every one of them, so both run in a worker thread rather than on the event

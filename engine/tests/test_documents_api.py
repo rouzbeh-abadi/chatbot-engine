@@ -5,6 +5,7 @@ What the route rejects on its own, then the round trip through a real pipeline.
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 MARKDOWN = b"# Baggage\n\nOne cabin bag up to 8 kg, plus one personal item.\n"
@@ -381,3 +382,184 @@ def test_forgetting_a_session_answers_how_many_paused_turns_went(
         "session_id": "s-1",
         "paused_turns": 0,
     }
+
+
+# --- a delete that stops part-way -----------------------------------------------
+
+
+def test_a_delete_that_stops_part_way_leaves_a_record_that_says_so(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chunks are gone, then removing the stored file fails (an object
+    store that does not answer). The record must not go on saying
+    `indexed`: an upload of the same file would answer `unchanged` and the
+    document would stay unsearchable. It says `failed`, an upload indexes
+    the document again, and a second delete finishes the first."""
+    from chatbot_engine.documents.blobs import DocumentBlobs
+    from chatbot_engine.rag.vector_store import count_chunks, find_vector_store
+
+    def held() -> int:
+        store = find_vector_store(None, "support")
+        return count_chunks(store) if store is not None else 0
+
+    record = _upload(client).json()
+    real_delete = DocumentBlobs.delete
+
+    async def unanswered(self, *, doc_id):
+        raise OSError("the object store did not answer")
+
+    monkeypatch.setattr(DocumentBlobs, "delete", unanswered)
+    with pytest.raises(OSError):
+        client.delete(
+            f"/documents/{record['doc_id']}", params={"project_id": "support"}
+        )
+    monkeypatch.setattr(DocumentBlobs, "delete", real_delete)
+
+    (listed,) = client.get("/documents", params={"project_id": "support"}).json()
+    assert listed["status"] == "failed" and "did not finish" in listed["error"]
+    assert held() == 0
+
+    again = _upload(client).json()
+    assert again["status"] == "indexed" and held() == again["chunk_count"] > 0
+
+    deleted = client.delete(
+        f"/documents/{record['doc_id']}", params={"project_id": "support"}
+    )
+    assert deleted.json()["deleted"] is True
+    assert client.get("/documents", params={"project_id": "support"}).json() == []
+
+
+# --- what goes wrong on the way, answered as such ------------------------------
+
+
+def test_an_unexpected_failure_still_carries_the_request_id(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one answer a caller most needs to quote: the catch-all 500 runs
+    outside the request id's middleware, and must still carry the id."""
+    from chatbot_engine.documents.blobs import DocumentBlobs
+
+    record = _upload(client).json()
+
+    async def unanswered(self, *, doc_id):
+        raise OSError("the object store did not answer")
+
+    monkeypatch.setattr(DocumentBlobs, "delete", unanswered)
+    quiet = TestClient(client.app, raise_server_exceptions=False)
+
+    sent = quiet.delete(
+        f"/documents/{record['doc_id']}",
+        params={"project_id": "support"},
+        headers={"X-Request-Id": "a" * 32},
+    )
+    made = quiet.delete(
+        f"/documents/{record['doc_id']}", params={"project_id": "support"}
+    )
+
+    assert (sent.status_code, sent.headers.get("x-request-id")) == (500, "a" * 32)
+    assert made.status_code == 500 and len(made.headers.get("x-request-id", "")) == 32
+
+
+def test_a_lookup_error_from_inside_a_store_is_a_500_not_a_missing_document(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only the engine's own word for a missing document is a 404: a
+    `KeyError` from an object store's client is a failure, not an answer."""
+    from chatbot_engine.documents.blobs import DocumentBlobs
+
+    record = _upload(client).json()
+
+    async def no_body(self, *, doc_id):
+        raise KeyError("Body")  # an S3 answer without its body
+
+    monkeypatch.setattr(DocumentBlobs, "read", no_body)
+    quiet = TestClient(client.app, raise_server_exceptions=False)
+    answer = quiet.post(
+        f"/documents/{record['doc_id']}/reindex", params={"project_id": "support"}
+    )
+
+    assert answer.status_code == 500
+    missing = client.post("/documents/nope/reindex", params={"project_id": "support"})
+    assert missing.status_code == 404
+
+
+def test_a_query_parameter_a_route_does_not_take_is_refused(client: TestClient) -> None:
+    """Dropped quietly, `?chunk_size=200` re-chunked at the defaults with a
+    200; every documents and projects route names the one it does not take."""
+    record = _upload(client).json()
+    doc = record["doc_id"]
+
+    answers = {
+        "reindex": client.post(
+            f"/documents/{doc}/reindex?project_id=support&chunk_size=200&chunk_overlap=0"
+        ),
+        "list": client.get("/documents?project_id=support&limit=5"),
+        "delete": client.delete(f"/documents/{doc}?project_id=support&force=1"),
+        "upload": client.put(
+            "/documents?chunk_size=200",
+            data={"project_id": "support", "external_id": "other.md"},
+            files={"file": ("other.md", MARKDOWN, "text/markdown")},
+        ),
+        "purge": client.delete("/projects/support?keep_documents=1"),
+        "forget": client.delete("/projects/support/sessions/s-1?all=1"),
+    }
+
+    assert {name: a.status_code for name, a in answers.items()} == dict.fromkeys(
+        answers, 422
+    )
+    assert [e["loc"] for e in answers["reindex"].json()["detail"]] == [
+        ["query", "chunk_overlap"],
+        ["query", "chunk_size"],
+    ]
+    listed = client.get("/documents", params={"project_id": "support"}).json()
+    assert [d["chunk_size"] for d in listed] == [record["chunk_size"]], "untouched"
+
+
+# --- a purge ------------------------------------------------------------------
+
+
+def test_a_purge_rebuilds_no_collection_it_is_about_to_drop(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from chatbot_engine.rag import vector_store as vs
+
+    monkeypatch.setattr(vs, "REBUILD_AFTER", 1)
+    for n in range(6):
+        body = MARKDOWN + b"More about bags. " * 40 + str(n).encode()
+        assert _upload(client, body, external_id=f"doc{n}.md").status_code == 201
+    rebuilds = 0
+    real = vs._rebuild
+
+    async def counting(project_id: str, name: str) -> None:
+        nonlocal rebuilds
+        rebuilds += 1
+        await real(project_id, name)
+
+    monkeypatch.setattr(vs, "_rebuild", counting)
+    body = client.delete("/projects/support").json()
+
+    assert body["knowledge"]["documents"] == 6
+    assert rebuilds == 0
+    assert vs.find_vector_store(None, "support") is None
+
+
+def test_a_purge_removes_stored_originals_no_record_names(client: TestClient) -> None:
+    """Left by engines before 0.1.28, which stored a first upload's original
+    before its record and could stop in between (INGEST-16). Which project
+    such a file was for cannot be told, so a purge takes every one; an
+    original a record names stays, and a file that is not an original is
+    not the engine's to touch."""
+    from chatbot_engine.settings import get_settings
+
+    blobs = get_settings().blob_dir
+    kept = _upload(client, project_id="kept").json()
+    orphan = blobs / ("ab" * 16)
+    orphan.write_bytes(b"a file a pre-0.1.28 engine stored and never recorded")
+    foreign = blobs / "README.txt"
+    foreign.write_text("not an original")
+
+    assert client.delete("/projects/gone").status_code == 200
+
+    assert not orphan.exists()
+    assert foreign.exists()
+    assert (blobs / kept["doc_id"]).exists()

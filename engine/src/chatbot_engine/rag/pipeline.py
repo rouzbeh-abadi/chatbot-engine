@@ -49,6 +49,7 @@ from chatbot_engine.documents.extractor import (
 from chatbot_engine.documents.models import ExtractedDocument
 from chatbot_engine.errors import (
     DocumentDeletedError,
+    DocumentNotFoundError,
     DocumentRejectedError,
     NotConfiguredError,
     OriginalChangedError,
@@ -439,7 +440,8 @@ class DocumentIngestPipeline:
 
         Raises:
             NotConfiguredError: No blob store, so the original was never kept.
-            LookupError: No such document in the registry.
+            DocumentNotFoundError: No such document in the registry (a
+                `LookupError`).
             ChunkingError: The settings cannot work together.
             OriginalChangedError: The stored original is not the version the
                 record describes.
@@ -466,7 +468,9 @@ class DocumentIngestPipeline:
             # `doc_id` alone, so only the project's own record may lead to it.
             record = await self._registry.get(project_id=project_id, doc_id=doc_id)
             if record is None:
-                raise LookupError(f"no document {doc_id!r} in project {project_id!r}")
+                raise DocumentNotFoundError(
+                    f"no document {doc_id!r} in project {project_id!r}"
+                )
             self._still_wanted(upload, project_id, record.filename)
             try:
                 data = await self._blobs.read(doc_id=doc_id)
@@ -570,7 +574,7 @@ class DocumentIngestPipeline:
         """
         assert self._blobs is not None
         try:
-            ensure_room()
+            ensure_room("its original was not stored")
             await self._blobs.write(
                 doc_id=record.doc_id, data=data, mimetype=record.mimetype
             )
@@ -650,11 +654,18 @@ class DocumentIngestPipeline:
                     project_id=record.project_id,
                     chunks=chunks,
                     embedded=embedded,
+                    # A delete meanwhile stops it between slices: nothing
+                    # more is embedded, and billed, for a document deleted.
+                    cancelled=lambda: upload.cancelled,
                 )
                 # The keyword index is built from the collection; this process
                 # must not keep searching the version from before this write.
                 sparse.invalidate(record.project_id)
         except Exception as exc:
+            if self._vectors is not None:
+                # Whatever of the write landed, or was taken back, the keyword
+                # index must be built again from what the collection holds.
+                sparse.invalidate(record.project_id)
             async with _committing(key):
                 if upload.cancelled:
                     await self._discard(record)

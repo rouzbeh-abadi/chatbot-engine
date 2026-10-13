@@ -8,8 +8,13 @@ caller's identifiers reach the server as headers, never as tool arguments.
 
 from __future__ import annotations
 
+import asyncio
+import json
+import threading
+import time
 from collections.abc import Callable
 from contextlib import asynccontextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -415,6 +420,98 @@ def test_an_address_in_a_log_line_keeps_its_host_only() -> None:
     assert without_paths("http://user:pw@host:8200/mcp?key=1") == "http://host:8200/…"
     assert without_paths("http://down") == "http://down"
     assert without_paths("no address here") == "no address here"
+
+
+def test_a_long_run_of_scheme_characters_is_read_in_linear_time() -> None:
+    """A scheme was matched from every letter of a run such as "a.a.a.", and
+    read the rest of the run each time with no `://` to end it: a tool
+    server's error message of 80,000 such characters held the event loop for
+    seconds, for every tenant."""
+    from chatbot_engine.agent.client import _URL
+
+    text = "a." * 40_000
+    started = time.perf_counter()
+    assert _URL.sub("", text) == text
+    took = time.perf_counter() - started
+
+    assert took < 0.5, f"{took:.2f}s for {len(text):,} characters"
+
+
+def test_an_errors_text_is_cut_before_it_is_read_for_addresses() -> None:
+    from chatbot_engine.agent.client import ERROR_TEXT_CHARS, without_paths
+
+    line = without_paths(f"failed on {TOKENED}: " + "a." * 2_000_000)
+
+    assert len(line) <= ERROR_TEXT_CHARS + 2
+    assert line.startswith("failed on https://chatfrom.example/… a.a.")
+    assert "tok_SECRET123" not in line
+
+
+class _Erring(BaseHTTPRequestHandler):
+    """A tool server that answers every request with a JSON-RPC error whose
+    message is 80,000 characters of "a.", well under the answer's byte cap."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *args) -> None:
+        pass
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        body = json.loads(self.rfile.read(length) or b"{}")
+        reply = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "error": {"code": -32603, "message": "a." * 40_000},
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(reply)))
+        self.end_headers()
+        self.wfile.write(reply)
+
+
+async def test_a_tool_servers_long_error_does_not_stall_the_event_loop(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Erring)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    config = CONFIG.model_copy(
+        update={
+            "mcp_servers": [
+                McpServerConfig(
+                    name="erring",
+                    url=f"http://127.0.0.1:{server.server_port}/mcp",
+                    allowed_tools=["x"],
+                )
+            ]
+        }
+    )
+    gaps: list[float] = []
+
+    async def ticker() -> None:
+        last = time.monotonic()
+        while True:
+            await asyncio.sleep(0.01)
+            now = time.monotonic()
+            gaps.append(now - last)
+            last = now
+
+    tick = asyncio.create_task(ticker())
+    try:
+        with caplog.at_level("WARNING"):
+            tools = await McpToolProvider(timeout_s=10).list_tools(config)
+        await asyncio.sleep(0.05)
+    finally:
+        tick.cancel()
+        server.shutdown()
+
+    logged = [r.getMessage() for r in caplog.records if "'erring'" in r.getMessage()]
+    assert tools == []
+    assert logged and all(len(line) < 3_000 for line in logged), logged
+    assert max(gaps) < 0.5, f"the event loop stalled {max(gaps):.2f}s"
 
 
 # --- MCP-3: an answer is bounded in bytes, gzip included ------------------------

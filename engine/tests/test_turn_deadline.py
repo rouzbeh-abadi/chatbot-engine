@@ -278,3 +278,51 @@ async def test_every_streamed_workflow_call_builds_no_retrying_client():
     assert "".join(e.text for e in events if isinstance(e, TokenEvent)) == "On time."
     assert len(built.call_args_list) == 2
     assert _built_without_retries(built)
+
+
+async def test_nothing_follows_the_turns_done_when_the_deadline_passes_after_it(
+    monkeypatch,
+):
+    """An agent may still have work after its `done` (a workflow forgets its
+    saved state). The deadline passing then added the unavailable message
+    and a second `done` after the first."""
+    _deadline(monkeypatch, "0.1")
+
+    class TidiesUp:
+        def __init__(self) -> None:
+            self.stopped = False
+
+        def run(self, request):
+            async def events():
+                yield TokenEvent(text="Answer.")
+                yield DoneEvent(finish_reason="stop")
+                try:
+                    await asyncio.sleep(30)  # a slow forget on a busy file
+                    yield TokenEvent(text="never said")
+                finally:
+                    self.stopped = True
+
+            return events()
+
+    agent = TidiesUp()
+    events = await _route(agent)
+
+    assert [type(e).__name__ for e in events] == ["TokenEvent", "DoneEvent"]
+    assert events[0].text == "Answer."
+    assert agent.stopped, "the work after the done is stopped at the deadline"
+
+
+async def test_an_event_an_agent_yields_after_its_done_is_dropped(monkeypatch):
+    _deadline(monkeypatch, "30")
+
+    class Chatty:
+        def run(self, request):
+            async def events():
+                yield DoneEvent(finish_reason="stop")
+                yield TokenEvent(text="after the end")
+
+            return events()
+
+    events = await _route(Chatty())
+
+    assert [type(e).__name__ for e in events] == ["DoneEvent"]

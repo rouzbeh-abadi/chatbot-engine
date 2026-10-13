@@ -80,7 +80,9 @@ Two bounds on reading documents for `POST /extract` are not rate limits, and
 zero is not "off" for them (the engine refuses to start): `ENGINE_EXTRACT_TIMEOUT_S`
 (20) is how long one reading may take before it is refused, and
 `ENGINE_EXTRACT_CONCURRENCY` (2) how many may run at once, past which a reading
-waits up to 5 seconds and is then refused with `503` and `Retry-After`.
+waits up to 5 seconds and is then refused with `503` and `Retry-After`. Each
+caller (the API key, and the form's `project_id` when sent) reads one at a
+time and may have at most half the line.
 `ENGINE_EXTRACT_PARSE_MB` (4) is how much page content a PDF is parsed for.
 
 Knowledge documents have the same kind of bounds when they are indexed:
@@ -90,8 +92,10 @@ the volume has less than `ENGINE_MIN_FREE_MB` (512) free. A
 turn ends at `ENGINE_TURN_DEADLINE_S` (120) with the assistant's
 `unavailable_message`; a request body over `ENGINE_MAX_BODY_BYTES` is a `413`;
 a tool server's answer may be at most `ENGINE_MCP_MAX_RESPONSE_BYTES`, a
-model reads at most `ENGINE_TOOL_RESULT_CHARS` of one tool result, and a
-prompt holds at most `ENGINE_PROMPT_CHARS`, the oldest history going first.
+model reads at most `ENGINE_TOOL_RESULT_CHARS` of one tool result, a workflow
+variable holds at most `ENGINE_WORKFLOW_VAR_CHARS`, a turn keeps at most
+`ENGINE_TURN_TOOL_RESULT_CHARS` of tool results in all, and a prompt holds at
+most `ENGINE_PROMPT_CHARS`, the oldest history going first.
 
 Set `ENGINE_ENV=production` and the engine refuses to start without a key at
 all, rather than serving openly; it then serves no `/docs`, `/redoc` or

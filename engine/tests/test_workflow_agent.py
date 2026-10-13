@@ -607,3 +607,187 @@ async def test_a_handoff_step_passes_the_reason_and_the_transcript_to_its_tool()
     assert [e.tool for e in started] == ["hand_off_to_human"]
     assert finished[0].ok and finished[0].call_id == "wf-h"
     assert isinstance(events[-1], DoneEvent)
+
+
+class _Pinging(FakeTools):
+    """Two tools that answer with megabytes each time, as a tool server may
+    (up to `ENGINE_MCP_MAX_RESPONSE_BYTES`)."""
+
+    async def list_tools(self, config):
+        return [
+            {
+                "server": "s",
+                "name": name,
+                "description": "d",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+            for name in ("ping", "pong")
+        ]
+
+    async def call_tool(self, *, name, **kwargs):
+        self.calls.append(name)
+        # A fresh string for each call, as from the network.
+        return f"{len(self.calls):08d}" + "x" * 3_999_992
+
+
+async def test_a_tool_loop_keeps_no_more_of_its_results_than_a_turn_may():
+    """Each visit of a Tool Call step kept its whole answer twice (in its
+    variable, and as its message's artifact), and the turn kept every
+    visit's: a loop of two steps, with no model call at all, held hundreds
+    of megabytes at `max_steps` 100, all written to disk at a pause. The
+    message now holds what a model reads, the variable is capped, and past
+    `ENGINE_TURN_TOOL_RESULT_CHARS` a call is not run."""
+    import tracemalloc
+
+    spec = {
+        "start": "a",
+        "max_steps": 40,
+        "nodes": [
+            {"id": "a", "type": "tool", "tool": "ping", "var": "r1"},
+            {"id": "b", "type": "tool", "tool": "pong", "var": "r2"},
+        ],
+        "edges": [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}],
+    }
+    request = _request(spec).model_copy(
+        update={
+            "project": _request(spec).project.model_copy(
+                update={
+                    "mcp_servers": [
+                        McpServerConfig(
+                            name="s", url="http://s", allowed_tools=["ping", "pong"]
+                        )
+                    ]
+                }
+            )
+        }
+    )
+    tools = _Pinging()
+    tracemalloc.start()
+    try:
+        events = await _run(spec, ScriptedModel(rounds=[], seen=[]), tools, request)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    finished = [e for e in events if isinstance(e, ToolCallFinishedEvent)]
+    assert peak < 50_000_000, f"one turn held {peak / 1e6:.0f} MB"
+    assert len(tools.calls) < 20, "the turn stopped at what it may keep"
+    assert (
+        finished[-1].error == "not run: the turn has kept all the tool results it may"
+    )
+    assert _text(events) == DEFAULT_UNAVAILABLE_MESSAGE
+
+
+async def test_a_variable_holds_no_more_than_a_variable_may(monkeypatch):
+    from chatbot_engine.settings import get_settings
+
+    monkeypatch.setenv("ENGINE_WORKFLOW_VAR_CHARS", "1000")
+    get_settings.cache_clear()
+
+    class Long(FakeTools):
+        async def call_tool(self, *, name, **kwargs):
+            return "r" * 5_000
+
+    spec = {
+        "start": "look",
+        "nodes": [
+            {"id": "look", "type": "tool", "tool": "get_booking_status", "var": "s"},
+            {"id": "say", "type": "reply", "text": "{{vars.s}}"},
+        ],
+        "edges": [{"from": "look", "to": "say"}],
+    }
+    try:
+        events = await _run(spec, ScriptedModel(rounds=[], seen=[]), Long())
+    finally:
+        get_settings.cache_clear()
+
+    said = _text(events)
+    assert said.startswith("r" * 1_000 + "\n\n[")
+    assert "4,000 more characters were left out" in said
+
+
+async def test_a_tool_step_visited_again_gives_its_call_a_new_id():
+    """A loop back through a Tool Call step put `wf-<step>` in one prompt
+    twice, call and result alike, which some providers refuse."""
+    from langchain_core.messages import AIMessage, ToolMessage
+
+    spec = {
+        "start": "look",
+        "nodes": [
+            {"id": "look", "type": "tool", "tool": "get_booking_status", "var": "s"},
+            {
+                "id": "again",
+                "type": "condition",
+                "question": "Look again?",
+                "branches": {"again": "look", "done": "answer"},
+            },
+            {"id": "answer", "type": "model"},
+        ],
+        "edges": [{"from": "look", "to": "again"}],
+    }
+    model = ScriptedModel(
+        rounds=[
+            [AIMessageChunk(content="again")],
+            [AIMessageChunk(content="done")],
+            [AIMessageChunk(content="Delayed.")],
+        ],
+        seen=[],
+    )
+
+    events = await _run(spec, model)
+
+    started = [e.call_id for e in events if isinstance(e, ToolCallStartedEvent)]
+    assert started == ["wf-look", "wf2-look"]
+    answered = model.seen[-1]
+    calls = [
+        c["id"] for m in answered if isinstance(m, AIMessage) for c in m.tool_calls
+    ]
+    results = [m.tool_call_id for m in answered if isinstance(m, ToolMessage)]
+    assert calls == results == ["wf-look", "wf2-look"]
+    assert _text(events) == "Delayed."
+
+
+async def test_a_condition_whose_stream_breaks_after_its_first_chunk_is_retried():
+    """Nobody is shown a condition's label, yet a break after its first
+    chunk failed the turn, unretried, as for an answer already shown."""
+    import httpx
+    from langchain_core.language_models import BaseChatModel
+    from langchain_core.outputs import ChatGenerationChunk
+
+    class Flaky(BaseChatModel):
+        calls: int = 0
+
+        @property
+        def _llm_type(self) -> str:
+            return "flaky"
+
+        def _generate(self, *args, **kwargs):  # pragma: no cover - streamed only
+            raise NotImplementedError
+
+        async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+            self.calls += 1
+            yield ChatGenerationChunk(message=AIMessageChunk(content="do"))
+            if self.calls == 1:
+                raise httpx.ReadError("connection reset")
+            yield ChatGenerationChunk(message=AIMessageChunk(content="ne"))
+
+    spec = {
+        "start": "route",
+        "nodes": [
+            {
+                "id": "route",
+                "type": "condition",
+                "question": "Done?",
+                "branches": {"again": "more", "done": "bye"},
+            },
+            {"id": "more", "type": "reply", "text": "More."},
+            {"id": "bye", "type": "reply", "text": "Bye."},
+        ],
+    }
+    model = Flaky()
+
+    events = await _run(spec, model)
+
+    assert model.calls == 2
+    assert _text(events) == "Bye."
+    assert isinstance(events[-1], DoneEvent) and events[-1].finish_reason == "stop"

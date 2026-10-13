@@ -3,6 +3,10 @@
 The caller sends raw bytes over multipart. Extraction and chunking are the
 engine's job, so a caller that pre-extracted the text would be throwing away page
 numbers and layout before the engine ever saw them.
+
+Every route refuses a query parameter it does not take, as the upload refuses
+a form field (`only_params`, `only_fields`): a misspelled or misplaced setting
+is a 422 that names it, never one quietly left out.
 """
 
 from __future__ import annotations
@@ -19,9 +23,13 @@ from fastapi import (
 )
 
 from chatbot_engine.api.dependencies import DocumentServiceDep
-from chatbot_engine.api.forms import only_fields
+from chatbot_engine.api.forms import only_fields, only_params
 from chatbot_engine.api.rate_limit import limit_ingest
-from chatbot_engine.errors import NotConfiguredError, OriginalChangedError
+from chatbot_engine.errors import (
+    DocumentNotFoundError,
+    NotConfiguredError,
+    OriginalChangedError,
+)
 from chatbot_engine.models.documents import DeleteResult, DocumentRecord, ReindexRequest
 from chatbot_engine.rag.splitter import ChunkingError, ChunkStrategy
 
@@ -50,6 +58,7 @@ MAX_UPLOAD_BYTES = 25 * 1024 * 1024
                 "chunk_overlap",
             )
         ),
+        Depends(only_params()),
     ],
 )
 async def upsert_document(
@@ -103,8 +112,9 @@ async def upsert_document(
         },
         501: {"description": "No blob store, so the original was never kept."},
     },
-    # Re-embeds every chunk, billed like an upload.
-    dependencies=[Depends(limit_ingest)],
+    # Re-embeds every chunk, billed like an upload. The settings go in the
+    # body; one sent in the query instead is refused, not left out.
+    dependencies=[Depends(limit_ingest), Depends(only_params("project_id"))],
 )
 async def reindex_document(
     doc_id: str,
@@ -128,7 +138,7 @@ async def reindex_document(
             chunk_size=body.chunk_size,
             chunk_overlap=body.chunk_overlap,
         )
-    except LookupError as exc:
+    except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ChunkingError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -138,7 +148,7 @@ async def reindex_document(
         raise
 
 
-@router.get("")
+@router.get("", dependencies=[Depends(only_params("project_id"))])
 async def list_documents(
     service: DocumentServiceDep,
     project_id: str = Query(...),
@@ -147,7 +157,7 @@ async def list_documents(
     return list(await service.list(project_id=project_id))
 
 
-@router.delete("/{doc_id}")
+@router.delete("/{doc_id}", dependencies=[Depends(only_params("project_id"))])
 async def delete_document(
     doc_id: str,
     service: DocumentServiceDep,
@@ -156,9 +166,12 @@ async def delete_document(
     """Remove a document.
 
     Removes the chunks, the stored file and the registry row together: a partial
-    delete would leave orphaned vectors that still surface in retrieval. Only
-    a document `project_id` has: another project's, whatever its id, is not
-    found, and the answer is `deleted: false` with nothing touched.
+    delete would leave orphaned vectors that still surface in retrieval. One
+    that stops part-way (a store that does not answer) is a 500 that leaves
+    the record `failed`: still listed, to be deleted again, and indexed again
+    by an upload of the same file. Only a document `project_id` has: another
+    project's, whatever its id, is not found, and the answer is
+    `deleted: false` with nothing touched.
     """
     deleted = await service.delete(project_id=project_id, doc_id=doc_id)
     return DeleteResult(doc_id=doc_id, deleted=deleted)

@@ -12,16 +12,40 @@ from pydantic import BaseModel, ConfigDict, model_validator
 _HALF = re.compile("[\ud800-\udfff]")
 
 
+def _whole_string(value: Any) -> Any:
+    """`value` with its halves replaced, when it is a string."""
+    return _HALF.sub("\ufffd", value) if isinstance(value, str) else value
+
+
 def whole(value: Any) -> Any:
     """`value` with every half of a character, in every string it holds, as
-    the replacement character U+FFFD."""
-    if isinstance(value, str):
-        return _HALF.sub("\ufffd", value)
-    if isinstance(value, dict):
-        return {whole(key): whole(item) for key, item in value.items()}
-    if isinstance(value, list):
-        return [whole(item) for item in value]
-    return value
+    the replacement character U+FFFD.
+
+    Walked with a list of its own rather than by recursion: a body nested
+    past Python's recursion limit (`[[[\u2026]]]` a few thousand deep fits in any
+    request) would otherwise fail here with a RecursionError, a 500, where
+    it should be refused for what it is (a 422).
+    """
+    if not isinstance(value, dict | list):
+        return _whole_string(value)
+    top: dict[Any, Any] | list[Any] = {} if isinstance(value, dict) else []
+    # Each container still to copy, with the copy it is copied into.
+    pending: list[tuple[Any, dict[Any, Any] | list[Any]]] = [(value, top)]
+    while pending:
+        source, copy = pending.pop()
+        items = source.items() if isinstance(source, dict) else enumerate(source)
+        for key, item in items:
+            if isinstance(item, dict | list):
+                inner: dict[Any, Any] | list[Any] = {} if isinstance(item, dict) else []
+                pending.append((item, inner))
+                item = inner
+            else:
+                item = _whole_string(item)
+            if isinstance(copy, dict):
+                copy[_whole_string(key)] = item
+            else:
+                copy.append(item)
+    return top
 
 
 class Incoming(BaseModel):

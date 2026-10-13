@@ -458,16 +458,60 @@ async def test_a_reading_waits_its_turn_and_a_full_line_is_refused_at_once() -> 
 
     slot = asyncio.Semaphore(1)
     await slot.acquire()
-    waiting = asyncio.create_task(extract_module._take(slot, 1))
+    got: list[bool] = []
+
+    async def first_in_line() -> None:
+        async with extract_module._reading(("a", ""), slot, 1):
+            got.append(slot.locked())
+
+    waiting = asyncio.create_task(first_in_line())
     await asyncio.sleep(0)
 
     with pytest.raises(HTTPException) as full:
-        await extract_module._take(slot, 1)
+        async with extract_module._reading(("b", ""), slot, 1):
+            pass
     slot.release()
     await waiting
 
     assert full.value.status_code == 503
-    assert slot.locked(), "the one in line got the slot"
+    assert got == [True], "the one in line got the slot"
+    assert extract_module._callers == {}, "a caller with nothing left is forgotten"
+
+
+async def test_a_caller_reads_one_file_at_a_time_and_waits_in_its_share_of_the_line(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """One caller's second file waits for its first, though a slot is free,
+    and past half the line its files are refused; another caller's file is
+    read at once in the free slot (INGEST-12)."""
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(extract_module, "SLOT_WAIT_S", 2.0)
+    slot = asyncio.Semaphore(2)
+    room = 4
+    release = asyncio.Event()
+    order: list[str] = []
+
+    async def read(who: tuple[str, str], name: str) -> None:
+        async with extract_module._reading(who, slot, room):
+            order.append(name)
+            await release.wait()
+
+    a = ("key", "bot-a")
+    first = asyncio.create_task(read(a, "a1"))
+    await asyncio.sleep(0)
+    in_line = [asyncio.create_task(read(a, f"a{i}")) for i in (2, 3)]
+    await asyncio.sleep(0)
+    with pytest.raises(HTTPException) as refused:
+        await read(a, "a4")
+    other = asyncio.create_task(read(("key", "bot-b"), "b1"))
+    await asyncio.sleep(0.05)
+
+    assert refused.value.status_code == 503
+    assert order == ["a1", "b1"], "a's second file waits, b's is read at once"
+    release.set()
+    await asyncio.gather(first, *in_line, other)
+    assert order == ["a1", "b1", "a2", "a3"]
 
 
 def test_a_pdf_page_that_shows_no_text_is_not_parsed(

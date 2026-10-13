@@ -17,6 +17,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import operator
 import re
 import time
 import uuid
@@ -38,16 +39,19 @@ from chatbot_engine.agent.client import (
     CUT_CALL_RESULT,
     TOOL_LIMIT_RESULT,
     FinishReason,
+    ResultsKept,
     add_totals,
     asks_for_tools,
     build_chat_model,
     clipped_result,
     discover_tools,
+    error_text,
     file_frames,
     finish_reason_of,
     price_usage,
     prompt_messages,
     prompt_size,
+    results_room,
     run_tool_calls,
     stream_reply,
     transcript,
@@ -216,6 +220,9 @@ class _State(TypedDict, total=False):
     ask_error: Annotated[dict[str, str], _merge]
     #: What to say to a visitor who declined, as the reading of their reply put it.
     declined_reply: str
+    #: What the turn keeps of its tool results, in characters, through its
+    #: pauses too: held to `ENGINE_TURN_TOOL_RESULT_CHARS` (`ResultsKept`).
+    kept: Annotated[int, operator.add]
 
 
 logger = logging.getLogger(__name__)
@@ -564,9 +571,18 @@ class WorkflowAgent:
         finally:
             # A turn that is not waiting on a question keeps nothing: it
             # finished, failed, or was stopped (the caller went away, or the
-            # turn's deadline passed), and nothing will resume it.
+            # turn's deadline passed), and nothing will resume it. A forget
+            # that fails (a locked or full checkpoint file) comes after the
+            # turn's `done`, where nothing more may be said: it is logged,
+            # and the store's prune takes the state once it is an hour old.
             if saver is not None and not waiting:
-                await self.pauses.forget(thread_id)
+                try:
+                    await self.pauses.forget(thread_id)
+                except Exception as exc:
+                    logger.warning(
+                        "a finished turn's saved state could not be forgotten yet: %s",
+                        exc,
+                    )
 
     # --- nodes --------------------------------------------------------------
 
@@ -614,6 +630,20 @@ class WorkflowAgent:
             if discovered is None:
                 discovered = await discover_tools(self._tools, project)
             return discovered
+
+        # How many calls each step has made in this request.
+        calls_made: dict[str, int] = {}
+
+        def call_id_of(node_id: str) -> str:
+            """The id of a step's tool call: `wf-<step>` the first time, then
+            `wf2-<step>`, `wf3-<step>` and so on, so a step a loop visits
+            again never repeats an id in one prompt, which some providers
+            refuse. A prompt reads only what followed the last pause, and
+            the count starts again with each request. A step's id starts
+            with a letter, so the count never runs into it, and no two ids
+            are alike."""
+            made = calls_made[node_id] = calls_made.get(node_id, 0) + 1
+            return f"wf-{node_id}" if made == 1 else f"wf{made}-{node_id}"
 
         def value_of(key: str, state: _State, *, clip: bool = False) -> str:
             """What one placeholder stands for, with nothing invisible left in
@@ -674,17 +704,27 @@ class WorkflowAgent:
             arguments: dict[str, str],
             call_id: str,
             server_for: dict[str, str],
+            kept: ResultsKept | None = None,
         ) -> tuple[bool, str, ToolMessage]:
             """One tool call through the engine's runner: the same started and
             finished events, timing and failure handling as the model's own
             calls. Returns whether it worked, the result text (empty on failure)
-            and the message."""
+            and the message.
+
+            With `kept`, what the turn has kept of its tool results, the call
+            is held to what the turn may still keep, and the result comes
+            back as a variable keeps it (`ENGINE_WORKFLOW_VAR_CHARS`). Without
+            it (a hand-off, whose result nothing keeps), the call always runs."""
             ok, message = False, ToolMessage(content="", tool_call_id=call_id)
             async for item in run_tool_calls(
                 [{"name": tool, "args": arguments, "id": call_id}],
                 request,
                 self._tools,
                 server_for,
+                kept=kept,
+                artifact_chars=(
+                    get_settings().workflow_var_chars if kept is not None else None
+                ),
             ):
                 if isinstance(item, ToolMessage):
                     message = item  # arrives after the finished event
@@ -692,10 +732,12 @@ class WorkflowAgent:
                     if isinstance(item, ToolCallFinishedEvent):
                         ok = item.ok
                     await events.put(item)
-            # The whole result, from the message's artifact: its content is
-            # cut to what a model reads, and a variable may hold a list of
-            # options longer than that.
+            # The result as the variable keeps it, from the message's artifact:
+            # its content is cut to what a model reads, and a variable may
+            # hold a list of options longer than that. The message the turn
+            # keeps holds that content only, so the result is not kept twice.
             whole = message.artifact if isinstance(message.artifact, str) else None
+            message = ToolMessage(content=message.content, tool_call_id=call_id)
             return ok, ((whole or str(message.content)) if ok else ""), message
 
         async def not_offered(
@@ -745,29 +787,38 @@ class WorkflowAgent:
                 # is told, so it says it cannot help with that now.
                 note = unavailable_note(project, tools) if node.tools else ""
                 instructions, data = instructed(node.prompt, state)
-                messages = prompt_messages(
-                    request,
-                    state.get("context", ""),
-                    extra_system="\n\n".join(p for p in (instructions, note) if p),
-                    data=data,
-                    prior=state.get("messages", [])[state.get("since", 0) :],
-                )
+                context = state.get("context", "")
+                system = "\n\n".join(p for p in (instructions, note) if p)
+                earlier = state.get("messages", [])[state.get("since", 0) :]
                 new: list[BaseMessage] = []
                 usage: dict[str, int] = {}
                 text = ""
                 finish: FinishReason = "stop"
+                kept = ResultsKept(state.get("kept", 0))
 
                 async def call(runnable: Any) -> AIMessageChunk | None:
                     """One streamed call on the step so far; its text is
-                    spoken unless the step keeps the reply in a variable."""
+                    spoken unless the step keeps the reply in a variable.
+                    The prompt is made afresh for each call, with the step's
+                    replies and results after the conversation, so the
+                    oldest history gives way to them, as in the loop agent."""
+                    sent = prompt_messages(
+                        request,
+                        context,
+                        extra_system=system,
+                        data=data,
+                        prior=[*earlier, *new],
+                    )
                     reply: AIMessageChunk | None = None
                     async for item in stream_reply(
-                        lambda: runnable.astream(messages + new),
-                        prompt_chars=prompt_size(messages + new),
+                        lambda: runnable.astream(sent),
+                        prompt_chars=prompt_size(sent),
+                        # A reply kept in a variable is shown to nobody, so a
+                        # break part-way through it can still be retried.
+                        speaks=node.var is None,
                     ):
                         if isinstance(item, str):
-                            if node.var is None:
-                                await events.put(TokenEvent(text=item))
+                            await events.put(TokenEvent(text=item))
                         else:
                             reply = item
                     return reply
@@ -813,8 +864,17 @@ class WorkflowAgent:
                         self._tools,
                         server_for,
                         invalid=reply.invalid_tool_calls,
-                        # What the step's prompt has left (MCP-6).
-                        room=get_settings().prompt_chars - prompt_size(messages + new),
+                        # What the step's next prompt has left once the
+                        # history gives way, as in the loop agent (MCP-6),
+                        # and no more than the turn may keep.
+                        room=results_room(
+                            request,
+                            context,
+                            extra_system=system,
+                            data=data,
+                            prior=[*earlier, *new],
+                        ),
+                        kept=kept,
                     ):
                         if isinstance(item, ToolMessage):
                             new.append(item)
@@ -825,9 +885,14 @@ class WorkflowAgent:
                     "messages": new,
                     "usage": usage,
                     "model_name": model.model_name,
+                    "kept": kept.kept - state.get("kept", 0),
                 }
                 if node.var is not None:
-                    out["vars"] = {node.var: text}
+                    out["vars"] = {
+                        node.var: clipped_result(
+                            text, get_settings().workflow_var_chars
+                        )
+                    }
                 else:
                     out["finish_reason"] = finish
                 return out
@@ -852,13 +917,17 @@ class WorkflowAgent:
                     ),
                 ]
                 # Streamed like every other call, so a streaming-only model
-                # (the test double included) is enough.
+                # (the test double included) is enough. Nobody is shown its
+                # label, so a break part-way through is retried too, and a
+                # cut call is the utility model's spend.
                 reply: AIMessageChunk | None = None
                 async for item in stream_reply(
                     lambda: model.astream(
                         prompt, config=run_config(request, name=f"condition:{node.id}")
                     ),
                     prompt_chars=prompt_size(prompt),
+                    speaks=False,
+                    utility=True,
                 ):
                     if not isinstance(item, str):
                         reply = item
@@ -902,7 +971,11 @@ class WorkflowAgent:
                     for k, v in node.arguments.items()
                     if (rendered := render(v, state)) != ""
                 }
-                call_id = f"wf-{node.id}"
+                call_id = call_id_of(node.id)
+                # What the turn has kept of its tool results: this call is
+                # held to what it may still keep, its message and variable
+                # both counted.
+                kept = ResultsKept(state.get("kept", 0))
                 if server is None:
                     # Not offered right now: reported like a failed call, so
                     # the log shows it, and handled like one.
@@ -910,7 +983,7 @@ class WorkflowAgent:
                     message = await not_offered(node.tool, arguments, call_id)
                 else:
                     ok, result, message = await call_one(
-                        node.tool, arguments, call_id, {node.tool: server}
+                        node.tool, arguments, call_id, {node.tool: server}, kept
                     )
                 # The call as well as its result, so a model step later in the
                 # turn reads a tool result that answers a call, as providers require.
@@ -918,6 +991,7 @@ class WorkflowAgent:
                     content="",
                     tool_calls=[{"name": node.tool, "args": arguments, "id": call_id}],
                 )
+                added = kept.kept - state.get("kept", 0)
                 if not ok and node.on_error == "stop":
                     # The visitor hears that this cannot be done now, and the
                     # steps that assumed the call worked do not run.
@@ -928,8 +1002,13 @@ class WorkflowAgent:
                         "messages": [call, message, AIMessageChunk(content=text)],
                         "halted": True,
                         "finish_reason": "stop",
+                        "kept": added,
                     }
-                return {"vars": {node.var: result}, "messages": [call, message]}
+                return {
+                    "vars": {node.var: result},
+                    "messages": [call, message],
+                    "kept": added,
+                }
 
             return step
 
@@ -950,7 +1029,7 @@ class WorkflowAgent:
                     server = next(
                         (t["server"] for t in tools if t["name"] == node.tool), None
                     )
-                    call_id = f"wf-{node.id}"
+                    call_id = call_id_of(node.id)
                     # The reason and the whole conversation, with the start of
                     # each file the person sent, so a ticket tool or a
                     # hand-off email has all of it.
@@ -1058,11 +1137,15 @@ class WorkflowAgent:
                 ),
             ]
             reply: AIMessageChunk | None = None
+            # The reading is shown to nobody, so a break part-way through it
+            # is retried too, and a cut one is the utility model's spend.
             async for item in stream_reply(
                 lambda: model.astream(
                     prompt, config=run_config(request, name=f"ask:{node.id}")
                 ),
                 prompt_chars=prompt_size(prompt),
+                speaks=False,
+                utility=True,
             ):
                 if not isinstance(item, str):
                     reply = item
@@ -1145,7 +1228,7 @@ class WorkflowAgent:
                         "reading the reply to %r failed (%d in a row): %s",
                         node.id,
                         failed,
-                        exc,
+                        error_text(str(exc)),
                     )
                     if failed < 2:
                         return retry(

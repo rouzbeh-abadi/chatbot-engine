@@ -97,42 +97,79 @@ def _fresh_slots() -> None:
 # --- added in verification ---------------------------------------------------
 
 
+#: How long each of the burst's files holds its reading here. Under the parse
+#: budget the worst a PDF can do is a page of drawing operators a few
+#: megabytes long, read to its end in about 2.7 s; the reader is slowed to
+#: stand for it, so the test does not hang on this box's speed.
+_HELD_S = 1.5
+
+
+@pytest.mark.parametrize(
+    "burst,other",
+    [
+        # Two API keys: two callers.
+        (("secret-a", None), ("secret-b", None)),
+        # One key serving two chatbots, each named by the form's project.
+        (("secret-a", "bot-1"), ("secret-a", "bot-2")),
+    ],
+    ids=["two-keys", "two-projects-one-key"],
+)
 def test_one_callers_crafted_files_do_not_lock_out_another_caller(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    burst: tuple[str, str | None],
+    other: tuple[str, str | None],
 ) -> None:
-    deadline = 3.0
+    """With the parse budget, a crafted PDF is read in seconds, not to the
+    deadline; but one caller sending a burst of them still took both slots
+    and the whole line behind them, and another caller's two-word text file
+    was refused with 503. Each caller now reads one file at a time and has
+    half the line at most: the rest of the burst is refused, and the other
+    caller's file is read at once in the slot left free."""
     monkeypatch.setenv("ENGINE_API_KEYS", "tenant_a:secret-a,tenant_b:secret-b")
-    monkeypatch.setenv("ENGINE_EXTRACT_TIMEOUT_S", str(deadline))
     monkeypatch.setenv("ENGINE_EXTRACT_CONCURRENCY", "2")
     reset_dependency_cache()
     extract_module._slots.clear()
+    real = extract_module.read_bounded
 
-    def attack() -> int:
+    def slowly(data, mimetype, **kwargs):
+        if mimetype == "application/pdf":
+            time.sleep(_HELD_S)
+        return real(data, mimetype, **kwargs)
+
+    monkeypatch.setattr(extract_module, "read_bounded", slowly)
+
+    def send(who: tuple[str, str | None], name: str, data: bytes, kind: str):
+        key, project = who
         return client.post(
             "/extract",
-            headers={"X-API-Key": "secret-a"},
-            files={"file": ("a.pdf", _SLOW_PDF, "application/pdf")},
-        ).status_code
-
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        fillers = [pool.submit(attack) for _ in range(2)]
-        slot = extract_module._reading_slot(2)
-        until = time.perf_counter() + deadline
-        while not slot.locked() and time.perf_counter() < until:
-            time.sleep(0.02)
-        assert slot.locked(), "harness: the crafted reads did not take both slots"
-
-        other = client.post(
-            "/extract",
-            headers={"X-API-Key": "secret-b"},
-            files={"file": ("b.txt", b"order 4521", "text/plain")},
+            headers={"X-API-Key": key},
+            data={"project_id": project} if project else None,
+            files={"file": (name, data, kind)},
         )
-        attack_codes = [f.result() for f in fillers]
 
-    # Harness sanity: the attacker's reads ran to the deadline and were refused.
-    assert attack_codes == [422, 422], attack_codes
-    # CORRECT behaviour: a different caller's two-word text file is read.
-    assert other.status_code == 200, (other.status_code, other.text)
+    def attack(_: int) -> int:
+        return send(burst, "a.pdf", _SLOW_PDF, "application/pdf").status_code
+
+    sender = ("tenant_a", burst[1] or "")
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        files = [pool.submit(attack, i) for i in range(6)]
+        # Until the burst holds what it may: one reading and two in line.
+        until = time.perf_counter() + 5
+        while time.perf_counter() < until:
+            held = extract_module._callers.get(sender)
+            if held is not None and held.turn.locked() and held.waiting == 2:
+                break
+            time.sleep(0.02)
+        assert held is not None and held.waiting == 2, "harness: the burst is held"
+
+        answer = send(other, "b.txt", b"order 4521", "text/plain")
+        codes = sorted(f.result() for f in files)
+
+    # The other caller's file is read, at once.
+    assert answer.status_code == 200, (answer.status_code, answer.text)
+    # The burst got one reading and its share of the line; the rest went.
+    assert codes.count(503) == 3, codes
 
 
 def test_a_small_pdf_with_no_text_does_not_hold_a_slot_for_the_whole_deadline() -> None:

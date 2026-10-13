@@ -22,6 +22,8 @@ from chatbot_engine.agent.client import (
     REWRITE_TURN_CHARS,
     REWRITE_TURNS,
     TOO_MANY_CALLS_RESULT,
+    TURN_FULL_RESULT,
+    ResultsKept,
     clipped_result,
     extracts_within,
     prompt_messages,
@@ -61,30 +63,78 @@ def test_a_long_result_is_cut_and_says_so():
     assert clipped_result("short", limit=1_000) == "short"
 
 
-async def test_the_model_reads_the_cut_result_and_the_message_keeps_the_whole(
+async def test_the_model_reads_the_cut_result_and_nothing_more_is_kept_unasked(
     monkeypatch,
 ):
+    """A turn keeps its results until it ends, so the message holds what the
+    model reads and no more; the whole result is kept only when asked for (a
+    workflow's variable), and then only up to what it is asked to keep."""
     _setting(monkeypatch, "ENGINE_TOOL_RESULT_CHARS", "1000")
 
     class Verbose(FakeTools):
         async def call_tool(self, *, name, **kwargs):
             return "r" * 30_000
 
-    request = ChatRequest(project=PROJECT, message="hi")
+    async def message_of(**asked) -> ToolMessage:
+        items = [
+            item
+            async for item in run_tool_calls(
+                [{"name": "get_booking_status", "args": {}, "id": "c1"}],
+                ChatRequest(project=PROJECT, message="hi"),
+                Verbose(),
+                {"get_booking_status": "s"},
+                **asked,
+            )
+        ]
+        return next(i for i in items if isinstance(i, ToolMessage))
+
+    message = await message_of()
+    assert len(str(message.content)) < 1_200
+    assert "29,000 more characters were left out" in str(message.content)
+    assert message.artifact is None
+
+    whole = await message_of(artifact_chars=10_000)
+    assert str(whole.artifact).startswith("r" * 10_000 + "\n\n[")
+    assert "20,000 more characters were left out" in str(whole.artifact)
+
+
+async def test_a_turn_keeps_no_more_of_its_results_than_it_may(monkeypatch):
+    """Past `ENGINE_TURN_TOOL_RESULT_CHARS` of results kept, whatever the
+    prompt's room, a result is cut to what is left and a call is answered
+    as not run without running."""
+    _setting(monkeypatch, "ENGINE_TOOL_RESULT_CHARS", "5000")
+    _setting(monkeypatch, "ENGINE_TURN_TOOL_RESULT_CHARS", "10000")
+
+    class Verbose(FakeTools):
+        async def call_tool(self, *, name, **kwargs):
+            self.calls.append(name)
+            return "r" * 5_000
+
+    tools = Verbose()
+    kept = ResultsKept()
+    calls = [
+        {"name": "get_booking_status", "args": {}, "id": f"c{i}"} for i in range(3)
+    ]
     items = [
         item
         async for item in run_tool_calls(
-            [{"name": "get_booking_status", "args": {}, "id": "c1"}],
-            request,
-            Verbose(),
+            calls,
+            ChatRequest(project=PROJECT, message="hi"),
+            tools,
             {"get_booking_status": "s"},
+            kept=kept,
         )
     ]
 
-    message = next(i for i in items if isinstance(i, ToolMessage))
-    assert len(str(message.content)) < 1_200
-    assert "29,000 more characters were left out" in str(message.content)
-    assert message.artifact == "r" * 30_000
+    results = [str(i.content) for i in items if isinstance(i, ToolMessage)]
+    assert len(tools.calls) == 2
+    assert results[-1] == TURN_FULL_RESULT
+    assert "more characters were left out" in results[1]
+    assert kept.kept == sum(len(r) for r in results) <= 10_000
+    finished = [i for i in items if isinstance(i, ToolCallFinishedEvent)]
+    assert (
+        finished[-1].error == "not run: the turn has kept all the tool results it may"
+    )
 
 
 async def test_one_reply_runs_at_most_the_calls_a_reply_may_make(monkeypatch):
@@ -228,6 +278,84 @@ async def test_a_variable_in_a_steps_prompt_is_cut_as_a_result_is(monkeypatch):
     assert "r" * 100 not in str(system.content)
     assert "29,000 more characters were left out" in str(turn.content)
     assert len(str(turn.content)) < 2_000
+
+
+@pytest.mark.parametrize("which", ["loop", "graph", "workflow"])
+async def test_the_history_gives_way_to_a_tool_result_whichever_agent_runs(
+    monkeypatch, which: str
+):
+    """A conversation as long as the budget: the loop agent made its prompt
+    afresh for each call, the oldest history giving way to the turn's
+    results, but the graph agent and a workflow's model step measured the
+    room for results on the prompt as sent, history filling it, so every
+    call in a long conversation was answered as not run (MCP-6)."""
+    pytest.importorskip("langgraph_agent.workflow")
+    from langchain_core.messages import AIMessageChunk
+
+    from chatbot_engine.agent.chat_agent import ChatAgent
+    from langgraph_agent.agent import LangGraphAgent
+    from langgraph_agent.workflow import WorkflowAgent
+
+    _setting(monkeypatch, "ENGINE_PROMPT_CHARS", "10000")
+    workflow = {"start": "answer", "nodes": [{"id": "answer", "type": "model"}]}
+    request = ChatRequest(
+        project=AssistantConfig.model_validate(
+            PROJECT.model_dump()
+            | {
+                "model": "openai/gpt-5-mini",
+                "mcp_servers": [
+                    {
+                        "name": "s",
+                        "url": "http://s",
+                        "allowed_tools": ["get_booking_status"],
+                    }
+                ],
+                "workflow": workflow if which == "workflow" else None,
+            }
+        ),
+        message="is my flight delayed?",
+        # 40 turns of 600 characters: 24,000, well past the 10,000 budget.
+        history=_history(40, size=600),
+    )
+    model = ScriptedModel(
+        rounds=[
+            [
+                AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": "get_booking_status",
+                            "args": "{}",
+                            "id": "c1",
+                            "index": 0,
+                        }
+                    ],
+                )
+            ],
+            [AIMessageChunk(content="Delayed.")],
+        ],
+        seen=[],
+    )
+    tools = FakeTools()
+    agent, module = {
+        "loop": (ChatAgent(tools=tools), "chatbot_engine.agent.client"),
+        "graph": (LangGraphAgent(tools=tools), "langgraph_agent.agent"),
+        "workflow": (WorkflowAgent(tools=tools), "langgraph_agent.workflow"),
+    }[which]
+    retrieval = (
+        "chatbot_engine.agent.chat_agent" if which == "loop" else module
+    ) + ".retrieve_with_usage"
+    with (
+        patch(f"{module}.build_chat_model", return_value=model),
+        patch(retrieval, new=_no_retrieval),
+    ):
+        events = [e async for e in agent.run(request)]
+
+    finished = [e for e in events if isinstance(e, ToolCallFinishedEvent)]
+    assert tools.calls == ["get_booking_status"], [e.error for e in finished]
+    answer = model.seen[-1]
+    assert sum(len(m.text) for m in answer) <= 10_000
+    assert answer[-1].text == '{"status": "delayed"}'
 
 
 # --- the prompt's budget ----------------------------------------------------

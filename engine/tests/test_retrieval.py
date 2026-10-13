@@ -393,6 +393,91 @@ def test_an_index_built_across_an_invalidation_is_not_kept(
     assert not sparse._indexes
 
 
+def test_a_change_to_another_project_keeps_a_build_under_way(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An upload or a delete in project a, landing while b's index is being
+    built, says nothing about b's chunks: b's build is kept, and b's next
+    search does not read every chunk of b again."""
+    sparse.invalidate()
+    store = open_vector_store(None, "b")
+    store.add_documents(
+        [Document(page_content="alpha beta", metadata={"project_id": "b"})]
+    )
+    build = sparse._build
+    builds: list[str] = []
+
+    def racing(store, project_id, now):
+        builds.append(project_id)
+        index = build(store, project_id, now)
+        sparse.invalidate("a")
+        return index
+
+    monkeypatch.setattr(sparse, "_build", racing)
+    sparse.sparse_index(store, "b")
+    sparse.sparse_index(store, "b")
+
+    assert builds == ["b"]
+
+
+async def test_a_failed_update_leaves_nothing_of_itself_in_the_keyword_index(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A search builds the index while an update is written, with the
+    update's first slice in it; the update then fails, and that slice is
+    taken back from the collection. The index must go with it, or keyword
+    search answers for up to a minute with text the record says was never
+    indexed."""
+    from chatbot_engine.api.dependencies import reset_dependency_cache
+    from chatbot_engine.rag import vector_store as vs
+    from chatbot_engine.rag.vector_store import find_vector_store
+
+    monkeypatch.setenv("ENGINE_INDEX_BATCH_SIZE", "1")
+    reset_dependency_cache()
+
+    def put(name: str, body: bytes):
+        return client.put(
+            "/documents",
+            data={
+                "project_id": "p",
+                "external_id": name,
+                "chunk_size": "100",
+                "chunk_overlap": "0",
+            },
+            files={"file": (name, body, "text/markdown")},
+        )
+
+    assert (
+        put("fares.md", b"# Fares\n\nThe basic fare is refundable.\n").status_code
+        == 201
+    )
+    real_embed = vs._embed
+    calls = 0
+    meanwhile: list[str] = []
+
+    def embed(model, texts):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            # A chat's search meanwhile, with the first slice in the index.
+            built = sparse.sparse_index(find_vector_store(None, "p"), "p")
+            meanwhile.extend(built.texts if built is not None else [])
+            raise RuntimeError("the provider refused the second slice")
+        return real_embed(model, texts)
+
+    monkeypatch.setattr(vs, "_embed", embed)
+    update = b"# Fares\n\nZanzibar promo code SPRINGSALE gives ten percent.\n\n" + (
+        b"More text here to make a second chunk of the document. " * 3
+    )
+    with pytest.raises(RuntimeError):
+        put("fares.md", update)
+    assert any("SPRINGSALE" in text for text in meanwhile), "precondition"
+
+    index = sparse.sparse_index(find_vector_store(None, "p"), "p")
+    assert index is not None
+    assert not any("SPRINGSALE" in text for text in index.texts)
+
+
 async def test_the_keyword_index_forgets_a_deleted_document(client: TestClient) -> None:
     _seed(client)
     fares = next(

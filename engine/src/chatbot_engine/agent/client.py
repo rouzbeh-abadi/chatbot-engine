@@ -686,27 +686,44 @@ def unavailable_message(project: AssistantConfig) -> str:
 
 
 #: A URL, as far as its host, then whatever follows it: a userinfo part is
-#: matched apart so it can be dropped too.
+#: matched apart so it can be dropped too. A scheme starts where no scheme
+#: character comes before it, and is at most 32 long: matched from every
+#: letter of a long run such as "a.a.a.", with no `://` after it, the
+#: pattern read the rest of the run each time, so a tool server's error
+#: message of a few hundred kilobytes held the event loop for seconds.
 _URL = re.compile(
-    r"(?P<scheme>\b[a-z][a-z0-9+.-]*://)(?:[^/\s'\"<>@]*@)?"
+    r"(?P<scheme>(?<![a-z0-9+.-])[a-z][a-z0-9+.-]{0,31}://)(?:[^/\s'\"<>@]*@)?"
     r"(?P<host>[^/?#\s'\"<>]+)(?P<rest>[^\s'\"<>]*)",
     re.IGNORECASE,
 )
 
+#: The most of an error's text a log line or a failed tool's event carries.
+#: A tool server's error message may run to megabytes (as much as its
+#: answer may, `ENGINE_MCP_MAX_RESPONSE_BYTES`); its start says what failed.
+ERROR_TEXT_CHARS = 2_000
+
+
+def error_text(text: str, limit: int = ERROR_TEXT_CHARS) -> str:
+    """An error's text cut to `limit` characters, with a mark where it was cut."""
+    return text if len(text) <= limit else f"{text[:limit]} …"
+
 
 def without_paths(text: str) -> str:
-    """`text` with every URL in it cut to its scheme and host, for a log line.
+    """`text` cut to `ERROR_TEXT_CHARS`, with every URL in it cut to its
+    scheme and host, for a log line.
 
     A tool server's address may carry a credential in its path or query, as
     the application's own `/api/mcp/<id>/<token>` does, and an error message
-    often quotes the address it failed on.
+    often quotes the address it failed on. The text is cut first, so neither
+    the pattern nor the log reads more of a long message than it keeps; a
+    URL the cut ends in is still cut to its host.
     """
 
     def host_only(match: re.Match[str]) -> str:
         cut = "/…" if match["rest"] or "@" in match[0] else ""
         return f"{match['scheme']}{match['host']}{cut}"
 
-    return _URL.sub(host_only, text)
+    return _URL.sub(host_only, error_text(text))
 
 
 async def discover_tools(
@@ -800,6 +817,59 @@ def prompt_size(messages: Sequence[BaseMessage]) -> int:
     return size
 
 
+def results_room(
+    request: ChatRequest,
+    context: str = "",
+    *,
+    extra_system: str = "",
+    data: str = "",
+    prior: Sequence[BaseMessage] = (),
+) -> int:
+    """What a turn's next tool results may take in its next model call: the
+    prompt's budget (`ENGINE_PROMPT_CHARS`) less that prompt without its
+    history, since the history gives way to them (`prompt_messages`).
+
+    Measured against the prompt as it is sent, the history filling the
+    budget, every call of a long conversation would have no room at all.
+    Every agent measures it here, so a long conversation runs tools alike
+    whichever agent runs the turn.
+    """
+    bare = prompt_messages(
+        request.model_copy(update={"history": []}),
+        context,
+        extra_system=extra_system,
+        data=data,
+        prior=prior,
+    )
+    return get_settings().prompt_chars - prompt_size(bare)
+
+
+class ResultsKept:
+    """What a turn keeps of its tool results, in characters, against
+    `ENGINE_TURN_TOOL_RESULT_CHARS`: the bound on them whichever agent runs
+    the turn, and however many rounds or steps it takes.
+
+    A turn keeps every result until it ends (a workflow's through a pause
+    too), so a workflow looping over its tool steps would otherwise hold
+    every answer it was given. `run_tool_calls` adds what each result is
+    kept as: what a model reads of it, and the whole of it when asked for.
+    `kept` starts from what the turn has already kept, for an agent that
+    counts it in its own state.
+    """
+
+    def __init__(self, kept: int = 0) -> None:
+        self.kept = kept
+
+    def left(self) -> int:
+        """What the turn's results may still take."""
+        return get_settings().turn_tool_result_chars - self.kept
+
+
+def results_kept(messages: Sequence[BaseMessage]) -> int:
+    """What the tool results among `messages` take, in characters."""
+    return sum(len(m.text) for m in messages if isinstance(m, ToolMessage))
+
+
 #: What the model reads for a call past `ENGINE_MAX_TOOL_CALLS_PER_REPLY` in
 #: one reply. Short: a reply can ask for many.
 TOO_MANY_CALLS_RESULT = (
@@ -808,6 +878,13 @@ TOO_MANY_CALLS_RESULT = (
 
 #: What the model reads for a call whose result would not fit in the prompt.
 NO_ROOM_RESULT = "Not run: the turn's results have filled the room the prompt has."
+
+#: What the model reads for a call made once the turn has kept as much of
+#: its tool results as one turn may (`ENGINE_TURN_TOOL_RESULT_CHARS`).
+TURN_FULL_RESULT = (
+    "Not run: this turn has kept all the tool results it may. Answer with what "
+    "you already have."
+)
 
 #: The least room a call is run for: below it, its result could not be read.
 MIN_RESULT_ROOM = 500
@@ -835,6 +912,8 @@ async def run_tool_calls(
     *,
     invalid: Sequence[InvalidToolCall] = (),
     room: int | None = None,
+    kept: ResultsKept | None = None,
+    artifact_chars: int | None = None,
 ) -> AsyncIterator[ToolCallStartedEvent | ToolCallFinishedEvent | ToolMessage]:
     """Run the tools the model asked for, narrating each as it goes.
 
@@ -842,8 +921,9 @@ async def run_tool_calls(
     finished event with the outcome and timing, and then yields the `ToolMessage`
     the caller appends to the conversation so the model can use the result.
     The message holds the result cut to `ENGINE_TOOL_RESULT_CHARS`
-    (`clipped_result`), and the whole of it as its `artifact`, which is
-    never sent to a model.
+    (`clipped_result`), and nothing more unless `artifact_chars` asks for
+    the whole of it: a turn keeps its results until it ends, and one kept
+    whole could be megabytes no model reads.
 
     A tool that raises does not end the turn: the failure is reported as
     `ok=false`, and its error text is fed back as the tool message, so the model
@@ -861,10 +941,18 @@ async def run_tool_calls(
             model can call the tool again, and the reply's every call has a
             result, as providers require.
         room: The characters every result of these calls may take together
-            in the next model call's prompt (`ENGINE_PROMPT_CHARS` less what
-            the prompt holds already); None for no bound. Each result is cut
-            to fit what is left, and a call there is no room for is answered
-            as not run (`NO_ROOM_RESULT`) without running.
+            in the next model call's prompt (`results_room`); None for no
+            bound. Each result is cut to fit what is left, and a call there
+            is no room for is answered as not run (`NO_ROOM_RESULT`)
+            without running.
+        kept: What the turn has kept of its tool results so far, added to
+            here (`ResultsKept`). A result is cut to what the turn may
+            still keep, and a call made once it may keep no more is
+            answered as not run (`TURN_FULL_RESULT`) without running.
+        artifact_chars: When given, each message also keeps the result as
+            its `artifact`, cut to this many characters: what a workflow's
+            Tool Call step keeps in its variable, whole where a model reads
+            it cut. Never sent to a model.
 
     Only the first `ENGINE_MAX_TOOL_CALLS_PER_REPLY` calls run; the rest are
     answered as not run (`TOO_MANY_CALLS_RESULT`).
@@ -883,6 +971,14 @@ async def run_tool_calls(
         len(INVALID_ARGUMENTS_TEXT.format(name=call.get("name") or ""))
         for call in invalid
     )
+
+    def keeping(message: ToolMessage) -> ToolMessage:
+        """`message`, counted as what the turn keeps of its results."""
+        if kept is not None:
+            artifact = message.artifact if isinstance(message.artifact, str) else ""
+            kept.kept += len(message.text) + len(artifact)
+        return message
+
     for index, call in enumerate(calls):
         name = call["name"]
         call_id = call["id"] or f"call-{index}"
@@ -892,7 +988,19 @@ async def run_tool_calls(
         if share < MIN_RESULT_ROOM:
             left -= len(NO_ROOM_RESULT)
             for item in _not_run(call, call_id, server_for, NO_ROOM_RESULT, "prompt"):
-                yield item
+                yield keeping(item) if isinstance(item, ToolMessage) else item
+            continue
+        # What the turn may still keep, the same way: room set aside for the
+        # lines of the calls after this one.
+        turn_left = (
+            float("inf")
+            if kept is None
+            else kept.left() - (len(calls) - index - 1) * len(TURN_FULL_RESULT)
+        )
+        if turn_left < MIN_RESULT_ROOM:
+            left -= len(TURN_FULL_RESULT)
+            for item in _not_run(call, call_id, server_for, TURN_FULL_RESULT, "turn"):
+                yield keeping(item) if isinstance(item, ToolMessage) else item
             continue
 
         yield ToolCallStartedEvent(
@@ -917,7 +1025,7 @@ async def run_tool_calls(
             ok, error = True, None
         except Exception as exc:
             result = failed_tool_text(name, exc, request.project)
-            ok, error = False, str(exc)
+            ok, error = False, error_text(str(exc))
 
         yield ToolCallFinishedEvent(
             call_id=call_id,
@@ -931,15 +1039,33 @@ async def run_tool_calls(
         # a result is a stranger's text too, and loses what a reader cannot see.
         text = visible(result)
         content = clipped_result(
-            text, int(min(settings.tool_result_chars, share - _CUT_NOTE_ROOM))
+            text,
+            int(
+                min(
+                    settings.tool_result_chars,
+                    share - _CUT_NOTE_ROOM,
+                    turn_left - _CUT_NOTE_ROOM,
+                )
+            ),
         )
         left -= len(content)
-        yield ToolMessage(content=content, artifact=text, tool_call_id=call["id"] or "")
+        artifact = None
+        if artifact_chars is not None:
+            # What the turn may still keep after the text a model reads.
+            room_after = turn_left - len(content) - _CUT_NOTE_ROOM
+            artifact = clipped_result(
+                text, int(max(0, min(artifact_chars, room_after)))
+            )
+        yield keeping(
+            ToolMessage(
+                content=content, artifact=artifact, tool_call_id=call["id"] or ""
+            )
+        )
 
     for index, call in enumerate(over, start=len(calls)):
         call_id = call["id"] or f"call-{index}"
         for item in _not_run(call, call_id, server_for, TOO_MANY_CALLS_RESULT, "reply"):
-            yield item
+            yield keeping(item) if isinstance(item, ToolMessage) else item
 
     for index, call in enumerate(invalid, start=len(calls) + len(over)):
         name = call.get("name") or ""
@@ -954,10 +1080,20 @@ async def run_tool_calls(
             duration_ms=0,
             error=INVALID_ARGUMENTS_ERROR,
         ).as_offered(name in server_for)
-        yield ToolMessage(
-            content=INVALID_ARGUMENTS_TEXT.format(name=name),
-            tool_call_id=call.get("id") or "",
+        yield keeping(
+            ToolMessage(
+                content=INVALID_ARGUMENTS_TEXT.format(name=name),
+                tool_call_id=call.get("id") or "",
+            )
         )
+
+
+#: What a failed tool event says for a call answered without running, by why.
+_NOT_RUN_ERRORS = {
+    "prompt": "not run: no room left in the prompt",
+    "reply": "not run: too many calls in one reply",
+    "turn": "not run: the turn has kept all the tool results it may",
+}
 
 
 def _not_run(
@@ -965,15 +1101,11 @@ def _not_run(
     call_id: str,
     server_for: Mapping[str, str],
     text: str,
-    why: Literal["prompt", "reply"],
+    why: Literal["prompt", "reply", "turn"],
 ) -> list[ToolCallStartedEvent | ToolCallFinishedEvent | ToolMessage]:
     """The events and the result of a call that is answered without running."""
     name = call["name"]
-    error = (
-        "not run: no room left in the prompt"
-        if why == "prompt"
-        else "not run: too many calls in one reply"
-    )
+    error = _NOT_RUN_ERRORS[why]
     return [
         ToolCallStartedEvent(
             call_id=call_id,
@@ -1089,18 +1221,8 @@ async def stream_completion(
     # every call with them as `prior`, so the oldest history gives way to
     # them and the whole stays within `ENGINE_PROMPT_CHARS` (MCP-6).
     turn: list[BaseMessage] = []
+    kept = ResultsKept()
     messages = prompt_messages(request, context, extra_system=note)
-
-    def results_room() -> int:
-        """What this turn's next results may take: the budget less the prompt
-        without its history, which gives way to them."""
-        bare = prompt_messages(
-            request.model_copy(update={"history": []}),
-            context,
-            extra_system=note,
-            prior=turn,
-        )
-        return get_settings().prompt_chars - prompt_size(bare)
 
     # Tokens accumulate across rounds: a turn with tool calls is several model
     # calls, and reporting only the last one would understate the total.
@@ -1148,7 +1270,8 @@ async def stream_completion(
             tools_provider,
             server_for,
             invalid=reply.invalid_tool_calls,
-            room=results_room(),
+            room=results_room(request, context, extra_system=note, prior=turn),
+            kept=kept,
         ):
             if isinstance(event, ToolMessage):
                 turn.append(event)
@@ -1205,6 +1328,8 @@ async def stream_reply(
     retries: int | None = None,
     backoff_s: float = RETRY_BACKOFF_S,
     prompt_chars: int | None = None,
+    speaks: bool = True,
+    utility: bool = False,
 ) -> AsyncIterator[str | AIMessageChunk]:
     """One model call, streamed: its text as it arrives, then the whole reply.
 
@@ -1212,16 +1337,20 @@ async def stream_reply(
     the stream has ended, the reply summed from all of its chunks, once, as
     an `AIMessageChunk`; nothing more when the model produced nothing at
     all. Only the whole reply has usable `tool_calls`: a fragment cannot know
-    whether the model was part-way through asking for a tool.
+    whether the model was part-way through asking for a tool. A call that
+    does not `speak` (a workflow's condition, the reading of a reply, a step
+    that keeps its reply in a variable) yields no text as it arrives, only
+    the whole reply: nobody is shown it.
 
     `open_stream` starts the call, and is invoked again on each retry: up to
     `retries` times (`ENGINE_PROVIDER_MAX_RETRIES` unless given), with a
     doubling delay, while the failure is one a retry can fix (`is_transient`)
     and no text has reached the caller. That covers a request that fails
-    outright and a stream that breaks before its first token. Each attempt
-    sums its reply afresh, so a tool call streamed before a break is never
-    counted twice. Once text has been yielded the failure is passed on: the
-    caller has shown text that a replay would duplicate.
+    outright and a stream that breaks before its first token, and a call
+    that does not speak whenever it breaks. Each attempt sums its reply
+    afresh, so a tool call streamed before a break is never counted twice.
+    Once text has been yielded the failure is passed on: the caller has
+    shown text that a replay would duplicate.
 
     This is the one layer that retries a streamed call; the model is built
     with `max_retries=0`, or the client's retries would multiply these.
@@ -1233,14 +1362,18 @@ async def stream_reply(
     prompt's length (`prompt_chars`, `PROMPT_CHARS`) to estimate a call the
     provider said nothing about. A call cut short for good (an error, the
     turn's deadline, a reader gone) goes on the turn's meter, with the
-    attempts before it, since the turn then reports the meter. An attempt
-    refused before anything came back cost nothing, and is not counted.
+    attempts before it, since the turn then reports the meter; as the
+    utility model's when `utility` says the call ran on it, as `add_usage`
+    counts a reply handed back. An attempt refused before anything came
+    back cost nothing, and is not counted.
     """
     attempts = get_settings().provider_max_retries if retries is None else retries
     failed: list[dict[str, Any]] = []
     failure = ""
     for attempt in range(attempts + 1):
         reply: AIMessageChunk | None = None
+        # Whether any of this attempt's text reached the caller: what a
+        # replay would repeat. A call that does not speak passes none on.
         emitted = False
         outcome: Literal["cut", "retry", "done"] = "cut"
         try:
@@ -1249,7 +1382,7 @@ async def stream_reply(
                 # annotation is the base message, so narrow here once.
                 piece = cast(AIMessageChunk, chunk)
                 reply = piece if reply is None else reply + piece
-                if piece.text:
+                if piece.text and speaks:
                     emitted = True
                     yield piece.text
             outcome = "done"
@@ -1263,13 +1396,15 @@ async def stream_reply(
                 _meter_spent(
                     [*failed, *([_spent(reply)] if reply is not None else [])],
                     prompt_chars,
+                    utility=utility,
                 )
         if outcome == "retry":
             if reply is not None:
                 failed.append(_spent(reply))
             delay = backoff_s * 2**attempt
             logger.warning(
-                "model call failed before its first token (%s); retry %d/%d in %.1fs",
+                "model call failed before any of its text was passed on (%s); "
+                "retry %d/%d in %.1fs",
                 failure,
                 attempt + 1,
                 attempts,
@@ -1278,7 +1413,7 @@ async def stream_reply(
             try:
                 await asyncio.sleep(delay)
             except BaseException:
-                _meter_spent(failed, prompt_chars)
+                _meter_spent(failed, prompt_chars, utility=utility)
                 raise
             continue
         if reply is not None:
@@ -1289,17 +1424,24 @@ async def stream_reply(
             }
             yield reply
         elif failed:
-            _meter_spent(failed, prompt_chars)
+            _meter_spent(failed, prompt_chars, utility=utility)
         return
 
 
-def _meter_spent(spent: Sequence[Mapping[str, Any]], prompt_chars: int | None) -> None:
-    """Put calls that will never be handed back on the turn's meter."""
+def _meter_spent(
+    spent: Sequence[Mapping[str, Any]],
+    prompt_chars: int | None,
+    *,
+    utility: bool = False,
+) -> None:
+    """Put calls that will never be handed back on the turn's meter; as the
+    utility model's with `utility`, so a cut condition or reading is priced
+    as what it ran on."""
     meter = _METER.get()
     if meter is None:
         return
     for call in spent:
-        _add_call(meter, call, prompt_chars)
+        _add_call(meter, call, prompt_chars, utility=utility)
 
 
 #: The reasons a reply can end that `price_usage` passes on to the `done` event.

@@ -112,9 +112,14 @@ async def within_deadline(
     `unavailable_message`, as a workflow's tool step says it when a call
     fails, and the turn ends: with a `usage` event for what it had spent when
     it had not reported that yet, then `done`.
+
+    `done` is the turn's last event. An agent may still have work after it
+    (a workflow forgets its saved state); what it yields then is dropped,
+    and a deadline that passes then only stops that work: the turn had
+    ended, and a caller reads nothing after its `done`.
     """
     deadline = asyncio.get_running_loop().time() + seconds
-    spoke = reported = False
+    spoke = reported = ended = False
     try:
         while True:
             timeout = asyncio.timeout_at(deadline)
@@ -128,10 +133,18 @@ async def within_deadline(
                     # The agent's own timeout, not the turn's: its failure.
                     raise
                 break
+            if ended:
+                logger.warning(
+                    "an agent's %s event after the turn's done was dropped",
+                    event.type,
+                )
+                continue
             if isinstance(event, TokenEvent) and event.text:
                 spoke = True
             elif isinstance(event, UsageEvent):
                 reported = True
+            elif isinstance(event, DoneEvent):
+                ended = True
             yield event
     finally:
         # Stopped at the deadline, the agent has already unwound; closed early
@@ -140,6 +153,13 @@ async def within_deadline(
         if close is not None:
             await close()
 
+    if ended:
+        logger.warning(
+            "turn passed its deadline of %.0fs after its done; what the agent "
+            "was still doing was stopped",
+            seconds,
+        )
+        return
     logger.warning(
         "turn passed its deadline of %.0fs and was stopped; it ends with the "
         "unavailable message",

@@ -99,14 +99,11 @@ def test_overlap_cannot_multiply_a_documents_chunks_without_bound(
         files={"file": ("returns.txt", text.encode(), "text/plain")},
     )
 
-    if response.status_code >= 400:
-        return  # refusing such settings is a correct answer too
-    record = response.json()
-    embedded_chars = record["chunk_count"] * 100
-    assert embedded_chars <= 2 * len(text), (
-        f"{len(text)} characters became {record['chunk_count']} chunks "
-        f"(~{embedded_chars // len(text)}x the document embedded)"
-    )
+    # Since INGEST-1's fix an overlap may be at most half the size, so the
+    # settings themselves are refused, before anything is read or embedded.
+    # A refusal for any other reason (a 500, a 503) is not that answer.
+    assert response.status_code == 422, response.text
+    assert "overlap" in response.json()["detail"]
 
 
 # --- INGEST-2: an upload's body is read whole before auth and the 25 MB cap -----

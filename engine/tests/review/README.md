@@ -3,21 +3,26 @@
 The tests behind [`docs/review-2026-10.md`](../../../docs/review-2026-10.md),
 a review of release 0.1.26.
 
-- A test marked `xfail(strict=True, reason="<ID> …")` confirms finding `<ID>`.
-  It asserts the behaviour the engine should have, so it fails today and
-  `pytest` counts it as expected. When a fix makes it pass, the suite turns
-  red (strict): drop the marker, and the test stays as a regression test.
-- A test with no marker checks something the review found sound, or is a
-  control for a test beside it.
+- A test named for finding `<ID>` asserts the behaviour the engine should
+  have. Each was written marked `xfail(strict=True, reason="<ID> …")`, so
+  it failed while the bug was there and `pytest` counted it as expected,
+  and the suite turned red the day a fix made it pass. Releases 0.1.27 to
+  0.1.33 fixed what they confirm and dropped the markers: they pass now, and
+  stay as regression tests, with the tests added for what later reviews of
+  those fixes found. A test still marked asserts something the engine does
+  not do; its reason says why.
 - RETRIEVAL-3's two tests stay marked, with a reason that says so: the
   behaviour they flag (a query's best keyword match kept whatever its
   similarity, under `hybrid`) is kept on purpose and documented in
   `docs/retrieval.md`.
+- A test named for no finding checks something the review found sound, or
+  is a control for a test beside it.
 
 They run with the rest of the suite (`uv run pytest`), on the suite's own
 fixtures (`engine/tests/conftest.py`). Nothing calls a real model provider,
 tool server or tracer: providers and servers are fakes on 127.0.0.1 or
-in-process transports.
+in-process transports. The Langfuse tests need the `tracing` extra and the
+RAGAS one the `eval` extra; they skip without them.
 
 | File | Findings |
 | --- | --- |
@@ -43,4 +48,5 @@ Some tests start a real `uvicorn` process and stop it with SIGTERM and
 SIGKILL, so the folder takes a few minutes. The test that runs the engine as
 PID 1 (`test_index_crashes.py`) needs root and `unshare`, and the full-volume
 tests in `test_disk.py` need root to mount a small tmpfs; they skip without
-it, as on GitHub's runners.
+it. CI runs them as root in a job of their own ("Tests that need root" in
+`.github/workflows/ci.yml`), which fails if any of them skips.

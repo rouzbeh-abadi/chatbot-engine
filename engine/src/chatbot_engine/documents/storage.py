@@ -101,3 +101,16 @@ class LocalBlobStore(BlobStore):
         path = Path(uri)
         path.unlink(missing_ok=True)
         _part(path).unlink(missing_ok=True)
+
+    async def keys(self) -> list[str]:
+        """The keys of every original stored; not a write's part-file
+        (`_part`), which is not one yet."""
+
+        def listed() -> list[str]:
+            return [
+                entry.name
+                for entry in self._root.iterdir()
+                if entry.is_file() and not entry.name.startswith(".")
+            ]
+
+        return await asyncio.to_thread(listed)

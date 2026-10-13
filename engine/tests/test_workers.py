@@ -8,6 +8,11 @@ anyone who arrives after it asked.
 from __future__ import annotations
 
 import asyncio
+import threading
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 
 from chatbot_engine.rag.workers import Gate, KeyedGates
 
@@ -119,3 +124,97 @@ def test_one_gate_per_key_while_it_is_used() -> None:
     gate = gates("p")
     assert gates("p") is gate
     assert gates("q") is not gate
+
+
+# --- the gate, taken once indexing has a thread ---------------------------------
+
+
+@pytest.fixture
+def one_index_thread(monkeypatch: pytest.MonkeyPatch) -> Iterator[ThreadPoolExecutor]:
+    """Indexing's pool, one thread wide, so a test can keep it busy."""
+    from chatbot_engine.rag import workers
+
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="index")
+    monkeypatch.setattr(workers, "_pool", pool)
+    yield pool
+    pool.shutdown(wait=True)
+
+
+async def test_a_write_waiting_for_a_thread_does_not_hold_its_gate(
+    one_index_thread: ThreadPoolExecutor,
+) -> None:
+    """Another project's document has indexing's only thread. A write queued
+    behind it must not hold its project's gate meanwhile: a rebuild waiting
+    for the gate, and every search behind the rebuild, would wait for the
+    other project's document."""
+    from chatbot_engine.rag.workers import run_indexing_shared
+
+    gate = Gate()
+    busy = threading.Event()
+    other_project = one_index_thread.submit(busy.wait, 10)
+    ran: list[str] = []
+    queued = asyncio.create_task(run_indexing_shared(gate, ran.append, "written"))
+    await asyncio.sleep(0.1)
+
+    async with asyncio.timeout(1):
+        async with gate.alone():
+            assert ran == [], "precondition: the write is still waiting for a thread"
+
+    busy.set()
+    await queued
+    other_project.result()
+    assert ran == ["written"]
+
+
+async def test_a_write_holds_its_gate_until_its_thread_is_done_even_when_cancelled(
+    one_index_thread: ThreadPoolExecutor,
+) -> None:
+    """The thread cannot be stopped, so a caller that stops waiting must not
+    let the gate go before the write has landed: a drop or a rebuild of the
+    collection would race it."""
+    from chatbot_engine.rag.workers import run_indexing_shared
+
+    gate = Gate()
+    writing, release = threading.Event(), threading.Event()
+
+    def write() -> None:
+        writing.set()
+        release.wait(10)
+
+    task = asyncio.create_task(run_indexing_shared(gate, write))
+    await asyncio.to_thread(writing.wait, 5)
+    task.cancel()
+    alone = asyncio.create_task(_alone(gate))
+    await asyncio.sleep(0.2)
+    assert not alone.done(), "the gate was let go while the write was running"
+
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    async with asyncio.timeout(1):
+        await alone
+
+
+async def test_a_write_cancelled_before_it_had_a_thread_never_runs(
+    one_index_thread: ThreadPoolExecutor,
+) -> None:
+    from chatbot_engine.rag.workers import run_indexing_shared
+
+    gate = Gate()
+    busy = threading.Event()
+    one_index_thread.submit(busy.wait, 10)
+    ran: list[str] = []
+    task = asyncio.create_task(run_indexing_shared(gate, ran.append, "written"))
+    await asyncio.sleep(0.05)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    busy.set()
+    await asyncio.to_thread(one_index_thread.submit(lambda: None).result, 5)
+    assert ran == []
+
+
+async def _alone(gate: Gate) -> None:
+    async with gate.alone():
+        pass

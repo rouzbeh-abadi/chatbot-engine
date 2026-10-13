@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.32
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.32
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.32
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.32
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.33
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.33
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.33
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.33
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -48,7 +48,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.32 && git push origin v0.1.32
+git tag v0.1.33 && git push origin v0.1.33
 ```
 
 The Release workflow runs the full test suite, publishes the four images, and
@@ -304,13 +304,37 @@ setting:
 Nothing above any of these seams changes. The published images include every
 driver, so each setting works without a rebuild.
 
+Embedded Chroma belongs to one process: it keeps each collection's index in
+that process's memory and writes it back from there, so a second engine on
+the same `ENGINE_CHROMA_DIR` (another container on the volume, or uvicorn's
+workers with `WEB_CONCURRENCY` above 1) would write its indexes over the
+first one's. Since 0.1.33 a second engine on a directory another one holds
+refuses to start, and says so; the lock (`.engine.lock` in that directory)
+goes with the process that held it, however it ends. Several processes need
+`ENGINE_CHROMA_URL`.
+
 What one process keeps in memory, and replicas therefore do not share: the
 turns a document's uploads and re-indexes take, a delete cancelling the
-uploads of its document under way, and a project's uploads refused for ten
-minutes after it is purged. Each holds within one replica. Across replicas,
-send a document's writes, and its delete, to one replica (by the project, at
-the load balancer), or let a caller send one at a time, as ChatFrom's
-knowledge pages do.
+uploads of its document under way, a project's uploads refused for ten
+minutes after it is purged, and the gate each project's searches, writes and
+deletes share, which replacing or dropping one of its collections has to
+itself. Each holds within one replica. Across replicas, send a document's
+writes, and its delete, to one replica (by the project, at the load
+balancer), or let a caller send one at a time, as ChatFrom's knowledge pages
+do. A deleted document also stays keyword-searchable on the other replicas
+for up to a minute, until each builds its keyword index again.
+
+Because that gate is one process's, since 0.1.33 the engine does not rebuild
+or drop a project's collections against a Chroma server as their chunks are
+deleted,
+as it does embedded (Operational notes): a rebuild racing another replica's
+writes and deletes would lose live chunks and bring deleted ones back, and a
+server keeps a dropped collection's files anyway, so every rebuild would add
+a copy to its disk. On a server the room deleted chunks took stays in the
+project's index, and a project whose last document goes keeps an empty
+collection until it is purged, which drops it. Give the server's volume room
+for everything ever indexed: the files the engine removes after a drop when
+Chroma is embedded are the server's own to remove.
 
 The workflow agent's paused turns stay in a file, `ENGINE_CHECKPOINT_DB`, on
 the engine's volume: replicas share them only when they share that volume,
@@ -364,18 +388,27 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   them and pass 2,000. The files a dropped collection leaves are then
   removed: every folder in `ENGINE_CHROMA_DIR` named like a segment that
   Chroma's own catalogue (`chroma.sqlite3`) no longer names. Keep that
-  directory for Chroma alone. A Chroma server (`ENGINE_CHROMA_URL`) keeps
-  its own files, and they are not touched. A rebuild holds the project's
-  searches for as long as it copies, seconds for most projects.
-  `chroma.sqlite3` keeps the size it once reached, but reuses the room
-  freed in it, so it no longer grows with what was deleted.
+  directory for Chroma alone (with the engine's `.engine.lock`). Since
+  0.1.33 a rebuild copies while the project's searches, uploads and deletes
+  go on, a
+  thousand chunks at a time, and holds them only at the end, while it
+  catches up with what changed during the copy and takes the old
+  collection's place; most updates and deletes have nothing to tidy and
+  hold no search at all. Against a Chroma server (`ENGINE_CHROMA_URL`)
+  nothing is rebuilt or dropped but by a purge, and the server's files are
+  not touched (Scaling out). `chroma.sqlite3` keeps the size it once
+  reached, but reuses the room freed in it, so it no longer grows with what
+  was deleted.
 - **The first start of 0.1.30 moves every project's chunks** out of the one
   collection per model that every project shared before, into its own: in
   the background, and a project used before its turn is moved first. The
-  shared collection is dropped once it is empty. The volume needs room for a
-  second copy of the largest project while it moves; with less than
-  `ENGINE_MIN_FREE_MB` free it stops, logs why, and goes on when the
-  project is next used.
+  shared collection is dropped once it is empty, and only then gives its
+  room back: until the last project has moved it keeps its full size, so
+  the volume needs room for a second copy of the whole store, not of the
+  largest project. With less than `ENGINE_MIN_FREE_MB` free the move stops,
+  logs why, and goes on when the project is next used. A project not moved
+  yet can still be searched where it is, and since 0.1.33 its documents
+  deleted and the project purged there: a delete needs no room.
 - **What a delete leaves in Chroma's files for a while.** Embedded Chroma
   keeps each write in a log inside `chroma.sqlite3` until the collection's
   index takes it in, about every 1,000 records. A deleted chunk's text and
@@ -407,7 +440,9 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   in the error is cut to its host, since a path may carry a credential. For
   the same reason the HTTP clients' own request lines (`httpx`, `httpx2`,
   `httpcore`), which carry whole addresses, are logged only at `WARNING` and
-  above, whatever the level.
+  above, whatever the level. Since 0.1.33 an error's text is logged and sent
+  in a failed tool call's event cut to its first 2,000 characters, as a tool
+  server's message can run to megabytes.
 - **Streaming.** Chat is server-sent events. A proxy in front must not buffer
   `/api/chat`; the bundled nginx config shows the three settings involved.
 - **Which host serves a model.** OpenRouter serves a model from every host
@@ -422,20 +457,29 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   OpenRouter's defaults unless a request's `project.provider` names hosts.
   Nor are a listed maker's open-weight models (`openai/gpt-oss-*`,
   `google/gemma-*`, Mistral's 7B and Mixtral), which other companies serve
-  and the maker may not. `ENGINE_PROVIDER_ROUTING=any` turns the pinning off.
+  and the maker may not, nor since 0.1.33 a model's variant (an id ending in
+  `:free`, or any other `:variant`), which OpenRouter serves from the hosts it
+  has for that variant. `ENGINE_PROVIDER_ROUTING=any` turns the pinning off.
   A maker's own outage then fails a call rather than moving it to another
-  company. A request's `project.provider` is followed for its chatbot's model;
-  what it asks without naming hosts (`data_collection: "deny"`, say) is added
-  to the maker's pinning, and the calls on another model (the utility model,
-  a judge) keep only that part. What a host may keep of the calls it serves
-  is set on the OpenRouter account (its privacy settings), or per request
-  with `data_collection`.
+  company. A request's `project.provider` is followed for its chatbot's model
+  (the engine's `ENGINE_CHAT_MODEL` when it names none); what it asks without
+  naming hosts (`data_collection: "deny"`, say) is added to the maker's
+  pinning, and the calls on another model (the utility model, a judge,
+  RAGAS) keep only that part. The embeddings (of documents and of the
+  question) and an image read for `POST /extract` carry no request's
+  routing, only the maker's pinning: a request's `data_collection` does not
+  reach them. What a host may keep of the calls it serves is set on the
+  OpenRouter account (its privacy settings), for every call those included,
+  or per request with `data_collection`, for the calls that carry it.
 - **Provider retries and timeouts.** A model stream that fails before its
   first token (rate limit, provider 5xx, dropped connection, an error the
   provider sends inside the stream) is retried up to
   `ENGINE_PROVIDER_MAX_RETRIES` times (default 3), doubling from half a
-  second; a call that has streamed text is not retried, and the failure
-  reaches the caller as an `error` event. That is the only layer that retries
+  second; a call that has streamed text to the caller is not retried, and the
+  failure reaches the caller as an `error` event. A call whose text nobody is
+  shown (a workflow's condition, the reading of a reply, a step that keeps its
+  reply in a variable) is retried after its first token too, since 0.1.33.
+  That is the only layer that retries
   a streamed call; the provider client retries the calls that are not
   streamed (the query rewrite, the rerank, the judge), with the same count.
   `ENGINE_PROVIDER_TIMEOUT_S` (default 60) bounds one provider call. Set the
@@ -445,7 +489,11 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   there answers `502` with an estimated `usage`, since the provider may still
   bill it. The RAGAS judge of `POST /eval/rag` keeps to the same timeout and
   retries (before 0.1.31 it had the SDK's ten minutes and six retries), and
-  each of its cases is answered within `ENGINE_TURN_DEADLINE_S`.
+  each of its cases is answered within `ENGINE_TURN_DEADLINE_S`; since 0.1.33
+  a case that cannot be answered leaves that case unscored, not the run lost,
+  and the judge's calls go through the proxy the environment names
+  (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY`), as every other
+  provider call does.
 - **Turn deadline.** `ENGINE_TURN_DEADLINE_S` (default 120) is the longest one
   chat turn may take, retrieval, model calls, retries and tool calls
   together. Past it the turn stops where it is and ends with the assistant's
@@ -462,8 +510,21 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   the model reads, since a result is sent again with every later model call
   of the turn; the rest is cut, with a line saying how much was left out.
   Since 0.1.29 the turn's tool results count against `ENGINE_PROMPT_CHARS`
-  too: a result is cut to the room the prompt has left, and a call there is
-  no room for is answered as not run without running.
+  too: a result is cut to the room the prompt has left once the history has
+  given way to it (the oldest turns going first, in every agent since
+  0.1.33), and a call there is no room for is answered as not run without
+  running. A turn keeps its tool results until it ends, so since 0.1.33 it
+  keeps no more than `ENGINE_TURN_TOOL_RESULT_CHARS` (default 1,000,000) of
+  them, counting what a model reads of each and what a workflow's variables
+  keep; past it a call is answered as not run, and a workflow's Tool Call
+  step fails (its `on_error` applies). The loop and graph agents keep no
+  more than their prompt holds, so with the defaults this binds on
+  workflows, whose tool steps can loop. `ENGINE_WORKFLOW_VAR_CHARS` (default
+  100,000) is the most one workflow variable holds: a Tool Call step keeps
+  more of a result than a model reads, so a list of options stays whole, and
+  past this it is cut, with a line saying how much was left out. Nothing
+  else of a result is kept: before 0.1.33 every call kept the whole answer
+  (up to the 4 MiB below) for the rest of the turn.
   `ENGINE_MAX_TOOL_CALLS_PER_REPLY` (default 10) is the most calls one model
   reply has run; the rest are answered as not run, and the model may ask
   again in its next round.
@@ -487,7 +548,11 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   `ENGINE_EXTRACT_CONCURRENCY` (default 2) is how many such readings may run
   at once. Past it a reading waits up to 5 seconds for its turn, with at most
   two in line for each place, and is refused with 503 and `Retry-After` after
-  that, so files cannot fill the box. `ENGINE_EXTRACT_PARSE_MB` (default 4) is
+  that, so files cannot fill the box. Since 0.1.33 each caller (the API key,
+  and the form's `project_id` when it sends one) reads one file at a time
+  and may have at most half the line, so one caller's burst cannot refuse
+  everyone else's files: send `project_id` when one key serves many
+  chatbots. `ENGINE_EXTRACT_PARSE_MB` (default 4) is
   how much page content a PDF is parsed for. Past it the rest is not read, and
   a page that can show no text is not parsed at all, so a small file of
   drawing cannot hold a place for its whole deadline.
@@ -503,13 +568,20 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   `ENGINE_INDEX_BATCH_SIZE` (default 128) at a time, so a document's vectors
   are never all in memory at once, and indexing runs on
   `ENGINE_INDEX_CONCURRENCY` (default 2) threads of its own, so uploads never
-  hold up a chat's retrieval.
+  hold up another project's chats: since 0.1.33 a write takes its project's
+  gate only once it has one of those threads. A project's own chats wait while one of
+  its collections is replaced or dropped (the end of a rebuild, a purge),
+  and while it moves once, on the first start of 0.1.30.
 - **Free space.** `ENGINE_MIN_FREE_MB` (default 512) is the room an upload
   leaves on the volumes the engine writes to. Below it the upload is refused
   with 503 before anything is written: a full volume can freeze embedded
   Chroma for every tenant and leave its index unreadable after a restart.
-  Zero turns the check off. Watch the volume all the same; the floor only
-  keeps indexing from filling it. Since 0.1.32 `GET /health` says
+  The move of 0.1.30 and a rebuild keep to the floor too, and since 0.1.33
+  the refusal says which was refused; deletes and purges never do, since
+  they are how room is made. Zero turns the check off, and so brings that
+  freeze back: since 0.1.33, with embedded Chroma, an engine under
+  `ENGINE_ENV=production` refuses to start with it. Watch the volume all the same; the floor only keeps
+  indexing from filling it. Since 0.1.32 `GET /health` says
   `"disk": "low"` once a volume has less than twice the floor free, for a
   monitor to warn on while uploads still work.
 - **Keyword indexes.** `ENGINE_KEYWORD_INDEX_MB` (default 512) is the memory

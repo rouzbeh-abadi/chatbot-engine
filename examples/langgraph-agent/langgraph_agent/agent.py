@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import asyncio
 import operator
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from typing import Annotated, Any, TypedDict
 
 from langchain_core.messages import AIMessageChunk, BaseMessage, ToolMessage
@@ -42,6 +42,7 @@ from langgraph.graph import END, START, StateGraph
 from chatbot_engine.agent.client import (
     TOOL_LIMIT_RESULT,
     FinishReason,
+    ResultsKept,
     add_totals,
     asks_for_tools,
     build_chat_model,
@@ -50,6 +51,8 @@ from chatbot_engine.agent.client import (
     price_usage,
     prompt_messages,
     prompt_size,
+    results_kept,
+    results_room,
     run_tool_calls,
     stream_reply,
     unanswered,
@@ -71,7 +74,6 @@ from chatbot_engine.models.events import (
     TokenEvent,
 )
 from chatbot_engine.ports.agent import ToolProvider
-from chatbot_engine.settings import get_settings
 from chatbot_engine.tracing import run_config
 from langgraph_agent.runner import run_graph
 
@@ -79,8 +81,11 @@ from langgraph_agent.runner import run_graph
 class _State(TypedDict, total=False):
     """What flows between nodes.
 
-    `messages` is appended to by every node; `usage` is summed. Nothing else is
-    carried, because everything else about the turn arrives with the request.
+    `messages` is this turn's replies and tool results, appended to by every
+    node; `usage` is summed. The prompt is made afresh for every model call,
+    with `messages` after the conversation, so the oldest history gives way
+    to the turn's results as the loop agent's does. Nothing else is carried,
+    because everything else about the turn arrives with the request.
     """
 
     messages: Annotated[list[BaseMessage], lambda a, b: [*a, *b]]
@@ -140,6 +145,26 @@ class LangGraphAgent:
                 discovered = await discover_tools(self._tools, request.project)
             return discovered
 
+        async def note() -> str:
+            """Tools that could not be reached, named in the prompt as the
+            loop agent names them, so both agents send the same system prompt."""
+            return unavailable_note(request.project, await tools_of())
+
+        async def prompt(
+            state: _State, closing: Sequence[BaseMessage] = ()
+        ) -> list[BaseMessage]:
+            """What a model call is sent: the system prompt, the conversation,
+            then this turn's replies and results (and `closing` after them).
+            Made afresh for every call, exactly as the loop agent makes it, so
+            the oldest history gives way to the turn's results within
+            `ENGINE_PROMPT_CHARS`."""
+            return prompt_messages(
+                request,
+                state.get("context", ""),
+                extra_system=await note(),
+                prior=[*state.get("messages", []), *closing],
+            )
+
         async def retrieve_node(state: _State) -> _State:
             hits, spent = await retrieve_with_usage(request)
             # Before the answer, so the UI can show what it was based on while
@@ -147,14 +172,8 @@ class LangGraphAgent:
             await events.put(
                 RetrievalEvent(query=request.message, sources=to_source_refs(hits))
             )
-            context = to_context(hits)
-            # Tools that could not be reached are named in the prompt, as the
-            # loop agent does, so both agents send the same system prompt.
-            note = unavailable_note(request.project, await tools_of())
             return {
-                # The system prompt leads, exactly as in the engine's loop agent.
-                "messages": prompt_messages(request, context, extra_system=note),
-                "context": context,
+                "context": to_context(hits),
                 # What retrieval's own model calls cost, so the turn's usage
                 # is the whole turn's, as it is for the loop agent.
                 "usage": spent,
@@ -181,7 +200,7 @@ class LangGraphAgent:
             model = build_chat_model(request.project, max_retries=0)
             bound = model.bind_tools(tools) if tools else model
 
-            reply = await stream_into_events(bound, state["messages"])
+            reply = await stream_into_events(bound, await prompt(state))
             if reply is None:
                 # The model produced nothing at all: an empty answer, as the
                 # loop agent ends one, with nothing to add to the turn.
@@ -210,11 +229,25 @@ class LangGraphAgent:
             invalid = getattr(last, "invalid_tool_calls", []) or []
 
             results: list[BaseMessage] = []
-            # The results take what the prompt has left, so the next model
-            # call stays within `ENGINE_PROMPT_CHARS` (MCP-6).
-            room = get_settings().prompt_chars - prompt_size(state["messages"])
+            # The results take what the next prompt has left once the
+            # history gives way to them, as the loop agent's do, so the next
+            # model call stays within `ENGINE_PROMPT_CHARS` (MCP-6), and no
+            # more than the turn may keep of them.
+            room = results_room(
+                request,
+                state.get("context", ""),
+                extra_system=await note(),
+                prior=state["messages"],
+            )
+            kept = ResultsKept(results_kept(state["messages"]))
             async for item in run_tool_calls(
-                calls, request, self._tools, server_for, invalid=invalid, room=room
+                calls,
+                request,
+                self._tools,
+                server_for,
+                invalid=invalid,
+                room=room,
+                kept=kept,
             ):
                 if isinstance(item, ToolMessage):
                     results.append(item)
@@ -234,7 +267,7 @@ class LangGraphAgent:
             model = build_chat_model(request.project, max_retries=0)
             closed = unanswered(state["messages"][-1], TOOL_LIMIT_RESULT)
             reply = await stream_into_events(
-                without_tools(model, tools), [*state["messages"], *closed]
+                without_tools(model, tools), await prompt(state, closed)
             )
             out: _State = {
                 "messages": [*closed, *([reply] if reply is not None else [])],
@@ -263,10 +296,14 @@ class LangGraphAgent:
 
             A reply cut at `max_output_tokens` runs none of its calls: the
             parser would mend a cut call into arguments the model never
-            finished.
+            finished. A first call that produced nothing leaves no message.
             """
-            last = state["messages"][-1]
-            if not asks_for_tools(last) or state.get("finish_reason") == "length":
+            messages = state.get("messages") or []
+            if (
+                not messages
+                or not asks_for_tools(messages[-1])
+                or state.get("finish_reason") == "length"
+            ):
                 return "finish"
             if state.get("rounds", 0) < request.project.max_tool_iterations:
                 return "tools"

@@ -87,9 +87,10 @@ flowchart LR
    rounds run out (`tool_limit`), when it answers once more with its tools
    off. Its helpers are what every agent shares: `prompt_messages` builds the
    prompt within `ENGINE_PROMPT_CHARS`, `stream_reply` is the one place a
-   streamed call is retried (only before its first token), `run_tool_calls`
-   narrates and times each tool call and cuts its result to
-   `ENGINE_TOOL_RESULT_CHARS`,
+   streamed call is retried (only while none of its text has reached the
+   caller), `run_tool_calls` narrates and times each tool call and cuts its
+   result to `ENGINE_TOOL_RESULT_CHARS` and to what the turn may still keep
+   (`ENGINE_TURN_TOOL_RESULT_CHARS`),
    `finish_reason_of` reads why a reply ended, `price_usage` prices the turn.
    The bundled LangGraph plugin calls the same helpers from its nodes. This is
    the densest file in the engine, reflecting the inherent complexity of the

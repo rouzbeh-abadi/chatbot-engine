@@ -14,10 +14,14 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Path
 
 from chatbot_engine.api.dependencies import DocumentServiceDep, get_agent
+from chatbot_engine.api.forms import only_params
 from chatbot_engine.models.documents import ProjectPurged, SessionForgotten
 from chatbot_engine.ports.agent import Agent
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+# Neither route takes a query parameter: one sent is refused, not left out.
+router = APIRouter(
+    prefix="/projects", tags=["projects"], dependencies=[Depends(only_params())]
+)
 
 AgentDep = Annotated[Agent, Depends(get_agent)]
 _Id = Path(min_length=1, max_length=256)

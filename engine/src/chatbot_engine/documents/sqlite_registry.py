@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -187,3 +187,22 @@ class SqliteDocumentRegistry(DocumentRegistry):
             return cursor.rowcount > 0
 
         return await asyncio.to_thread(write)
+
+    async def named(self, doc_ids: Collection[str]) -> set[str]:
+        """The ids of `doc_ids` that a record names, in any project: for
+        finding the stored originals no record does."""
+        wanted = list(doc_ids)
+        if not wanted:
+            return set()
+
+        def read() -> set[str]:
+            marks = ", ".join("?" * len(wanted))
+            with self._connect() as connection:
+                rows = connection.execute(
+                    f"SELECT DISTINCT doc_id FROM documents WHERE doc_id IN ({marks})",
+                    wanted,
+                ).fetchall()
+
+            return {row["doc_id"] for row in rows}
+
+        return await asyncio.to_thread(read)

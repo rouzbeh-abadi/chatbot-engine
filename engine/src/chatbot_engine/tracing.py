@@ -194,13 +194,26 @@ def _open(config: TracingConfig) -> _Destination | None:
 
 
 def _close(destination: _Destination) -> None:
-    """Send what a destination still holds and stop its threads."""
-    try:
-        if destination.resources is not None:
-            destination.resources.shutdown()
-        destination.provider.shutdown()
-    except Exception as exc:  # pragma: no cover - best effort
-        logger.warning("tracing: closing a destination failed: %s", exc)
+    """Send what a destination still holds and stop its threads: the
+    client's consumers, its span exporter and its prompt cache's refresher.
+
+    Langfuse's own shutdown (4.15) leaves the prompt cache's refresh thread
+    running, one more thread for every destination ever dropped, so it is
+    stopped here too, where this Langfuse has one. Each is stopped on its
+    own: one that fails leaves the others to stop."""
+    resources = destination.resources
+    cache = getattr(getattr(resources, "prompt_cache", None), "_task_manager", None)
+    for stop in (
+        getattr(resources, "shutdown", None),
+        destination.provider.shutdown,
+        getattr(cache, "shutdown", None),
+    ):
+        if not callable(stop):
+            continue
+        try:
+            stop()
+        except Exception as exc:  # pragma: no cover - best effort
+            logger.warning("tracing: closing a destination failed: %s", exc)
 
 
 def traced_user(user_id: str | None) -> str | None:

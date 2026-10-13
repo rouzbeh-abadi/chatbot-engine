@@ -56,4 +56,14 @@ async def run_graph(
         await task
     finally:
         if not task.done():
+            # Stopped early: the turn's deadline passed, or its reader went
+            # away. The graph is cancelled and waited for, so what it was
+            # doing is wound up before the turn reports what it spent: a
+            # model call cut there goes on the turn's meter now, not once
+            # the loop gets round to the task (docs/review-2026-10.md,
+            # TURN-8). Whatever it raised on the way out is not the turn's.
             task.cancel()
+            await asyncio.wait({task})
+            if not task.cancelled():
+                # Read, so asyncio does not report it as never retrieved.
+                task.exception()

@@ -11,10 +11,15 @@ and a `../` in it would escape the blob root; a `doc_id` is 32 hex characters.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from chatbot_engine.documents.storage import LocalBlobStore
 from chatbot_engine.ports.documents import BlobStore
+
+#: What a `doc_id` looks like, and so the only keys `stored` names: a bucket
+#: or a directory may hold other things, which are never the engine's to touch.
+_DOC_ID = re.compile(r"[0-9a-f]{32}")
 
 
 class DocumentBlobs:
@@ -46,3 +51,11 @@ class DocumentBlobs:
     async def delete(self, *, doc_id: str) -> None:
         """Silent when the file is already gone -- delete is idempotent."""
         await self._store.delete(uri=self._uri(doc_id))
+
+    async def stored(self) -> list[str] | None:
+        """The ids of the documents whose originals are kept; None from a
+        store that cannot list what it holds (one of the caller's own)."""
+        keys = getattr(self._store, "keys", None)
+        if keys is None:
+            return None
+        return sorted(key for key in await keys() if _DOC_ID.fullmatch(key))

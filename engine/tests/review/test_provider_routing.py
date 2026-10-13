@@ -386,6 +386,87 @@ async def test_ragas_calls_follow_the_requests_routing() -> None:
     }
 
 
+async def test_ragas_calls_go_through_the_proxy_the_environment_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """httpx reads no proxy from the environment for a client given a
+    transport of its own, so the judge's calls of `/eval/rag`, carried by
+    `RoutedTransport`, went straight out on a host that reaches the
+    internet only through `HTTPS_PROXY` or `HTTP_PROXY`."""
+    import httpx
+
+    from chatbot_engine.agent.routing import RoutedTransport
+
+    recorder = _Recorder()
+    proxy = ThreadingHTTPServer(("127.0.0.1", 0), _handler(recorder))
+    threading.Thread(target=proxy.serve_forever, daemon=True).start()
+    for scheme in ("http", "https", "all", "no"):
+        monkeypatch.delenv(f"{scheme}_proxy", raising=False)
+        monkeypatch.delenv(f"{scheme.upper()}_PROXY", raising=False)
+    monkeypatch.setenv("HTTP_PROXY", f"http://127.0.0.1:{proxy.server_port}")
+
+    routed = RoutedTransport()
+    try:
+        async with httpx.AsyncClient(
+            transport=routed, base_url="http://openrouter.invalid/api/v1"
+        ) as http:
+            answer = await http.post(
+                "/chat/completions",
+                json={"model": "openai/gpt-4.1-mini", "messages": []},
+            )
+    finally:
+        proxy.shutdown()
+
+    assert answer.status_code == 200
+    # Asked of the proxy in absolute form, routing and all.
+    path, body = recorder.calls[0]
+    assert path == "http://openrouter.invalid/api/v1/chat/completions"
+    assert body["provider"] == {"only": ["openai"], "allow_fallbacks": False}
+
+
+def test_a_models_variant_is_not_kept_to_its_maker() -> None:
+    """A `:free` model (or any `:variant`) is served by the hosts OpenRouter
+    has for that variant, often not the maker: kept to the maker, a call to
+    one would find no host at all."""
+    from chatbot_engine.agent.routing import routing_for
+
+    assert routing_for("openai/gpt-oss-20b:free") is None
+    assert routing_for("anthropic/claude-haiku-4.5:free") is None
+    assert routing_for("openai/gpt-5-mini:nitro") is None
+    assert routing_for("anthropic/claude-haiku-4.5") == {
+        "only": ["anthropic"],
+        "allow_fallbacks": False,
+    }
+
+
+def test_a_utility_model_or_judge_on_the_requests_own_model_keeps_its_hosts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A request's routing is sent for its model as it resolves: with no
+    `model`, the engine's chat model. The rewrite, the rerank, a reading or
+    a judge on that same model was taken for another model, and lost the
+    hosts the request named."""
+    from chatbot_engine.agent.retriever import utility_config
+    from chatbot_engine.eval.prompt_evaluation import judge_config
+    from chatbot_engine.models.chat import AssistantConfig, ProviderRouting
+
+    monkeypatch.setenv("ENGINE_CHAT_MODEL", "anthropic/claude-haiku-4.5")
+    monkeypatch.setenv("ENGINE_UTILITY_MODEL", "anthropic/claude-haiku-4.5")
+    get_settings.cache_clear()
+    routing = ProviderRouting(only=["anthropic"], data_collection="deny")
+    project = AssistantConfig(
+        project_id="p", name="n", system_prompt="s", provider=routing
+    )
+    try:
+        assert utility_config(project).provider == routing
+        assert judge_config(project, "anthropic/claude-haiku-4.5").provider == routing
+        assert judge_config(project).provider == routing
+        other = judge_config(project, "openai/gpt-5-mini").provider
+        assert other == ProviderRouting(data_collection="deny")
+    finally:
+        get_settings.cache_clear()
+
+
 # --- added in verification ---------------------------------------------------
 
 

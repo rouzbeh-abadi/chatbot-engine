@@ -47,8 +47,15 @@ _NAMES_HOSTS = ("only", "order")
 
 
 def _maker(model: str) -> dict[str, Any] | None:
-    """`model`'s maker as its only host, or None for OpenRouter's defaults."""
+    """`model`'s maker as its only host, or None for OpenRouter's defaults.
+
+    A variant (`…:free`, `…:nitro`, any id with a `:` suffix) is not pinned:
+    OpenRouter serves it from the hosts it has for that variant, often not
+    the maker (a free one only from others), and a variant that orders
+    hosts by price or speed is routing of its own."""
     if get_settings().provider_routing != "maker" or model.startswith(OPEN_WEIGHTS):
+        return None
+    if ":" in model:
         return None
     hosts = MAKER_HOSTS.get(model.split("/", 1)[0])
     if hosts is None:
@@ -87,7 +94,13 @@ class RoutedTransport(httpx.AsyncBaseTransport):
     """Adds the routing for its model to every chat and embedding call it
     carries: for a client the engine cannot pass a body field through, as
     RAGAS builds its own calls. `requested` is the request's routing, sent
-    for `model`; a call on any other model gets what of it holds there."""
+    for `model`; a call on any other model gets what of it holds there.
+
+    Without an `inner` transport, the calls go out as a plain client's
+    would, through the proxy the environment names (`HTTPS_PROXY`,
+    `HTTP_PROXY`, `ALL_PROXY`, except to the hosts `NO_PROXY` names): httpx
+    reads none of these for a client given a transport of its own, so a
+    client of this one's picks the proxy for each address."""
 
     def __init__(
         self,
@@ -96,7 +109,8 @@ class RoutedTransport(httpx.AsyncBaseTransport):
         requested: ProviderRouting | None = None,
         model: str | None = None,
     ) -> None:
-        self._inner = inner or httpx.AsyncHTTPTransport()
+        self._inner = inner
+        self._client = None if inner is not None else httpx.AsyncClient(trust_env=True)
         self._requested = requested
         self._model = model
 
@@ -124,7 +138,15 @@ class RoutedTransport(httpx.AsyncBaseTransport):
                     content=json.dumps(body).encode(),
                     extensions=request.extensions,
                 )
-        return await self._inner.handle_async_request(request)
+        if self._inner is not None:
+            return await self._inner.handle_async_request(request)
+        assert self._client is not None
+        # Sent as it is, the client adding nothing but the transport it picks
+        # for the address; the caller's client reads the answer.
+        return await self._client.send(request, stream=True)
 
     async def aclose(self) -> None:
-        await self._inner.aclose()
+        if self._inner is not None:
+            await self._inner.aclose()
+        if self._client is not None:
+            await self._client.aclose()

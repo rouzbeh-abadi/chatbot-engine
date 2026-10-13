@@ -16,6 +16,7 @@ import openai
 from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from chatbot_engine import __version__, tracing
 from chatbot_engine.agent.registry import UnknownAgentError
@@ -44,8 +45,17 @@ from chatbot_engine.errors import (
     provider_reason,
 )
 from chatbot_engine.models.common import whole
-from chatbot_engine.observability import RequestIdMiddleware, configure_logging
-from chatbot_engine.rag.vector_store import move_everything
+from chatbot_engine.observability import (
+    REQUEST_ID_HEADER,
+    RequestIdMiddleware,
+    configure_logging,
+    request_id,
+)
+from chatbot_engine.rag.vector_store import (
+    claim_chroma_dir,
+    move_everything,
+    release_chroma_dir,
+)
 from chatbot_engine.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -61,6 +71,28 @@ def _failed(detail: str, exc: BaseException) -> dict[str, object]:
 
 class InsecureConfiguration(RuntimeError):
     """`ENGINE_ENV=production` with a default that is only safe on a laptop."""
+
+
+#: Where a request keeps its id for the catch-all 500 (`unexpected`).
+_REQUEST_ID_STATE = "request_id"
+
+
+class _KeepRequestId:
+    """Puts the request's id in its state, for the catch-all 500.
+
+    That handler runs outside every middleware, the request id's included,
+    once the request has left them, so the id is no longer the request's to
+    ask for; its state, which the handler is given, still holds it. A plain
+    ASGI middleware, inside the request id's.
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            scope.setdefault("state", {})[_REQUEST_ID_STATE] = request_id()
+        await self.app(scope, receive, send)
 
 
 @asynccontextmanager
@@ -84,6 +116,10 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         logger.warning("insecure for deployment: %s", problem)
 
     tracing.configure(settings)
+    # One engine process to an embedded Chroma directory: a second is refused
+    # here, before it serves, rather than found out once it has written over
+    # the first one's indexes.
+    claim_chroma_dir()
     # Every project's chunks into a collection of its own (0.1.30), in the
     # background: a project used before its turn is moved then.
     mover = asyncio.create_task(move_everything())
@@ -93,6 +129,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         await mover
     await close_agents()
     tracing.flush()
+    release_chroma_dir()
 
 
 def create_app() -> FastAPI:
@@ -176,15 +213,23 @@ def create_app() -> FastAPI:
         return JSONResponse(status_code=500, content=_failed(str(exc), exc))
 
     @app.exception_handler(Exception)
-    async def unexpected(_: Request, exc: Exception) -> Response:
+    async def unexpected(request: Request, exc: Exception) -> Response:
         """500, as Starlette answers it; as JSON only for an index that failed
-        after it had embedded, so its caller hears what that cost."""
+        after it had embedded, so its caller hears what that cost. With the
+        request's id, as every other answer has it: the one answer a caller
+        most needs to quote (`_KeepRequestId`)."""
+        response: Response
         if getattr(exc, "embedded_chunks", 0):
-            return JSONResponse(
+            response = JSONResponse(
                 status_code=500,
                 content=_failed("the document could not be indexed", exc),
             )
-        return PlainTextResponse("Internal Server Error", status_code=500)
+        else:
+            response = PlainTextResponse("Internal Server Error", status_code=500)
+        rid = request.scope.get("state", {}).get(_REQUEST_ID_STATE)
+        if rid:
+            response.headers[REQUEST_ID_HEADER] = rid
+        return response
 
     @app.exception_handler(openai.APIError)
     async def provider_error(_: Request, exc: openai.APIError) -> JSONResponse:
@@ -209,6 +254,10 @@ def create_app() -> FastAPI:
             ("POST", "/extract"): lambda: extract.MAX_UPLOAD_BYTES + FORM_ROOM,
         },
     )
+
+    # Inside the request id's middleware, where the id is known, for the
+    # catch-all 500 outside it.
+    app.add_middleware(_KeepRequestId)
 
     # Every request gets an id, kept from the caller when it sent one.
     app.add_middleware(RequestIdMiddleware)

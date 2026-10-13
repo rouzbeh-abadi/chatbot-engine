@@ -245,7 +245,7 @@ def test_one_rag_eval_request_cannot_carry_an_unbounded_run(
     assert response.status_code == 422, f"accepted a run of {seen} cases"
 
 
-# --- API-3: a 422 echoes the secrets it was sent ----------------------------
+# --- API-5: a 422 echoes the secrets it was sent ----------------------------
 
 
 def test_a_validation_error_does_not_echo_a_servers_header_values(
@@ -291,7 +291,7 @@ def test_a_validation_error_does_not_echo_the_provider_key(
     assert "sk-lf-TRACE-SECRET" not in response.text
 
 
-# --- API-4: unknown form fields and query parameters are accepted -------------
+# --- API-6: unknown form fields and query parameters are accepted -------------
 
 
 def test_an_unknown_upload_field_is_refused(client: TestClient) -> None:
@@ -504,7 +504,7 @@ def test_a_forwarded_for_header_does_not_choose_the_rate_limit_bucket(
     assert second.status_code == 429
 
 
-# --- API-2b: an evaluation goes on after its caller has gone -----------------
+# --- API-3: an evaluation goes on after its caller has gone ------------------
 
 
 def test_an_evaluation_stops_when_its_caller_goes_away(
@@ -578,7 +578,7 @@ def test_an_evaluation_stops_when_its_caller_goes_away(
     )
 
 
-# --- API-6: a lone surrogate in the history breaks every later turn ------------
+# --- API-4: a lone surrogate in the history breaks every later turn ------------
 
 
 def _fake_provider(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
@@ -705,3 +705,40 @@ def test_a_lone_surrogate_in_the_history_does_not_break_the_turn(
     events = _events(response)
     errors = [e for e in events if e["type"] == "error"]
     assert not errors, errors
+
+
+@pytest.mark.parametrize("depth", [3_000, 100_000])
+def test_a_body_nested_past_the_recursion_limit_is_refused_not_a_500(
+    project: dict[str, object], depth: int
+) -> None:
+    """Every body is walked for halves of characters (`models.common.whole`).
+    Walked by recursion, a list nested a few thousand deep, well within the
+    body limit, failed with a RecursionError: a 500 with a traceback in the
+    log, where a malformed body is refused."""
+    from chatbot_engine.app import create_app
+
+    nested = "[" * depth + "]" * depth
+    body = f'{{"project": {json.dumps(project)}, "message": "hi", "extra": {nested}}}'
+    with TestClient(create_app(), raise_server_exceptions=False) as client:
+        response = client.post(
+            "/chat", content=body, headers={"content-type": "application/json"}
+        )
+
+    assert response.status_code in (400, 422), (
+        f"{response.status_code}: {response.text[:200]}"
+    )
+
+
+def test_a_deeply_nested_value_is_made_whole_without_recursion() -> None:
+    from chatbot_engine.models.common import whole
+
+    deep: list = ["x\ud83d"]
+    for _ in range(5_000):
+        deep = [deep, {"k\udc00": "v"}]
+
+    out = whole(deep)
+
+    for _ in range(5_000):
+        assert out[1] == {"k�": "v"}
+        out = out[0]
+    assert out == ["x�"]

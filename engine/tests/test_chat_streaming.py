@@ -264,3 +264,38 @@ def test_the_usage_event_names_the_utility_model_when_part_of_the_turn_ran_on_it
         is None
     )
     reset_dependency_cache()
+
+
+def test_nothing_is_sent_after_the_turns_done(caplog) -> None:
+    """A failure in the work an agent does once its turn has ended (a
+    workflow forgetting its saved state on a locked file) reached the
+    caller as an `error` and a second `done`, after the first."""
+    import asyncio
+
+    async def events():
+        yield TokenEvent(text="Hello.")
+        yield DoneEvent(finish_reason="stop")
+        yield TokenEvent(text="after the end")
+        raise RuntimeError("database is locked")
+
+    with caplog.at_level("WARNING"):
+        lines = asyncio.run(_ndjson_of(events()))
+
+    assert [line["type"] for line in lines] == ["token", "done"]
+    assert "failed after its done" in caplog.text
+    assert "database is locked" in caplog.text
+
+
+def test_an_errors_message_is_cut_to_what_a_reader_needs() -> None:
+    import asyncio
+
+    from chatbot_engine.agent.client import ERROR_TEXT_CHARS
+
+    async def events():
+        raise RuntimeError("x" * 1_000_000)
+        yield  # pragma: no cover
+
+    lines = asyncio.run(_ndjson_of(events()))
+
+    assert [line["type"] for line in lines] == ["error", "done"]
+    assert len(lines[0]["message"]) <= ERROR_TEXT_CHARS + 2

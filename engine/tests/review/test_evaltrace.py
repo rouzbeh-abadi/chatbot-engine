@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib
 import logging
 import threading
 import time
@@ -168,14 +169,15 @@ def test_a_projects_traces_go_to_its_own_langfuse_not_to_one_another_tenant_regi
 def test_per_assistant_langfuse_clients_are_bounded_by_the_cache_cap(
     langfuse_clean, monkeypatch
 ):
-    """`_PER_PROJECT_MAX` is meant to bound what per-assistant tracing holds.
-    The engine's dict is bounded, but each new public key also starts a
-    Langfuse client (an OTEL batch processor and consumer threads) that the
-    SDK keeps forever, so the threads grow with every distinct key."""
+    """`_PER_PROJECT_MAX` bounds what per-assistant tracing holds. Each
+    destination's Langfuse client starts threads of its own (a span
+    exporter, its consumers, the prompt cache's refresher), so one dropped
+    past the cap must stop every one of them, or the threads grow with
+    every distinct key until the engine can start no more (Langfuse 4.15's
+    own shutdown leaves the prompt cache's running)."""
     monkeypatch.setattr(tracing, "_PER_PROJECT_MAX", 3)
-    before = threading.active_count()
 
-    for i in range(9):
+    def trace(i: int) -> None:
         tracing.run_config(
             _turn(
                 "owner",
@@ -187,13 +189,23 @@ def test_per_assistant_langfuse_clients_are_bounded_by_the_cache_cap(
             ),
             name="answer",
         )
-    time.sleep(0.2)
 
-    alive = [
-        key for key in langfuse_clean._instances if key.startswith("pk-lf-rotated-")
-    ]
+    before = threading.active_count()
+    trace(0)
+    per_client = threading.active_count() - before
+    for i in range(1, 12):
+        trace(i)
+    # A dropped destination is closed off the request, in a thread of its own.
+    cap = 3 * per_client
+    until = time.monotonic() + 10
+    while threading.active_count() - before > cap and time.monotonic() < until:
+        time.sleep(0.05)
+
     grown = threading.active_count() - before
-    assert len(alive) <= 3, f"{len(alive)} Langfuse clients alive, {grown} threads"
+    assert per_client > 0, "a Langfuse client was made"
+    assert grown <= cap, (
+        f"{grown} threads alive for 3 destinations of {per_client} threads each"
+    )
 
 
 # --- EVALTRACE-3: a credential in an MCP server's address reaches the log ------
@@ -429,6 +441,14 @@ def test_the_rag_judge_client_uses_the_engines_timeout_and_retries(monkeypatch):
     The RAGAS client is built with no timeout (the OpenAI SDK's 600 s) and
     six retries, so one hung metric call can hold `/eval/rag` for over an
     hour, long after the caller gave up."""
+    # The metrics need the `eval` extra (RAGAS, and the LangChain community
+    # package it imports from); an install without it has no /eval/rag. The
+    # engine's shim goes first, as rag_evaluation loads it: without it RAGAS
+    # does not import with today's LangChain, and the test would skip there
+    # for the wrong reason.
+    pytest.importorskip("langchain_community")
+    importlib.import_module("chatbot_engine.eval._ragas_compat")
+    pytest.importorskip("ragas")
     from chatbot_engine.eval import rag_evaluation
     from chatbot_engine.settings import get_settings
 

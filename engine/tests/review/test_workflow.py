@@ -9,6 +9,7 @@ or in memory.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import sqlite3
@@ -43,6 +44,7 @@ from chatbot_engine.models.events import (  # noqa: E402
 
 pytest.importorskip("langgraph_agent.workflow")
 from langgraph_agent.pauses import Pauses  # noqa: E402
+from langgraph_agent.workflow import thread_of  # noqa: E402
 
 #: Characters `chatbot_engine.untrusted.visible` removes: Unicode tag
 #: characters spelling "obey me", a right-to-left override, an invisible
@@ -413,7 +415,9 @@ async def test_an_unanswered_question_is_forgotten_after_the_ttl_while_the_engin
         kept = db.execute(
             "SELECT COUNT(*) FROM checkpoints"
             " WHERE thread_id = ? AND instr(checkpoint, ?) > 0",
-            (thread, email.encode()),
+            # The turn's thread: since 0.1.31 a pause id also names its
+            # checkpoint, which no saved state is kept under.
+            (thread_of(thread), email.encode()),
         ).fetchone()[0]
         db.close()
     finally:
@@ -422,6 +426,61 @@ async def test_an_unanswered_question_is_forgotten_after_the_ttl_while_the_engin
     assert kept == 0, (
         f"{kept} checkpoints holding the visitor's email outlived the pause's TTL"
     )
+
+
+async def test_an_open_store_forgets_what_is_past_its_time_with_no_turn_using_it(
+    tmp_path, monkeypatch
+):
+    """The fix above prunes whenever a turn uses the store, but only a turn
+    that can pause (or a forget) uses it: once the chatbots' workflows stop
+    pausing, an unanswered question kept the visitor's answers past its TTL
+    for as long as the engine ran. An open store now prunes on a timer of
+    its own (hourly; shortened here)."""
+    from langgraph_agent import pauses as pauses_module
+
+    monkeypatch.setattr(pauses_module, "_PRUNE_IDLE_S", 0.05)
+    path = tmp_path / "checkpoints.sqlite3"
+    pauses = Pauses.sqlite(path, ttl_s=60)
+    email = "ann.private@example.com"
+
+    def kept(pause_id: str) -> int:
+        db = sqlite3.connect(path)
+        try:
+            return db.execute(
+                "SELECT COUNT(*) FROM checkpoints"
+                " WHERE thread_id = ? AND instr(checkpoint, ?) > 0",
+                (thread_of(pause_id), email.encode()),
+            ).fetchone()[0]
+        finally:
+            db.close()
+
+    try:
+        tools = Tools()
+        thread = _asked(
+            await _run(_request(ASK_EMAIL_THEN_WAIT), pauses, tools)
+        ).thread_id
+        second = await _run(
+            _request(ASK_EMAIL_THEN_WAIT, email, {"thread_id": thread, "value": email}),
+            pauses,
+            tools,
+        )
+        assert _asked(second).node == "when"
+        assert kept(thread) > 0, "harness: the paused turn holds the email"
+
+        # Two days on, and no turn uses the store.
+        with patch(
+            "langgraph_agent.pauses.time.time", return_value=time.time() + 2 * 86_400
+        ):
+            for _ in range(100):
+                await asyncio.sleep(0.05)
+                if kept(thread) == 0:
+                    break
+        left = kept(thread)
+    finally:
+        await pauses.close()
+
+    assert left == 0, f"{left} checkpoints holding the visitor's email outlived the TTL"
+    assert pauses._pruner is None, "closing the store stops its pruning"
 
 
 # --- WORKFLOW-6: a stale finish reason after a pause --------------------------

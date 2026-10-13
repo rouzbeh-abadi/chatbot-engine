@@ -12,7 +12,7 @@ this registry never sees. The `postgres` extra provides the driver.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from datetime import datetime
 
 from chatbot_engine.models.documents import DocumentRecord, IngestStatus
@@ -195,3 +195,17 @@ class PostgresDocumentRegistry(DocumentRegistry):
             )
             await connection.commit()
             return (cursor.rowcount or 0) > 0
+
+    async def named(self, doc_ids: Collection[str]) -> set[str]:
+        """The ids of `doc_ids` that a record names, in any project: for
+        finding the stored originals no record does."""
+        wanted = list(doc_ids)
+        if not wanted:
+            return set()
+        async with await self._connection() as connection:
+            cursor = await connection.execute(
+                f"SELECT DISTINCT doc_id FROM {TABLE} WHERE doc_id = ANY(%s)",
+                (wanted,),
+            )
+            rows = await cursor.fetchall()
+        return {row[0] for row in rows}

@@ -65,6 +65,13 @@ def spec_hash(spec: WorkflowSpec) -> str:
 #: store is used (seconds).
 _PRUNE_EVERY_S = 60.0
 
+#: How often an open store forgets what is past its time though nothing uses
+#: it (seconds): a task of its own, started as the store opens and stopped as
+#: it closes, so an unanswered question goes within the hour of its TTL even
+#: once no turn that can pause runs any more. Two small queries when nothing
+#: is due.
+_PRUNE_IDLE_S = 3600.0
+
 #: How long saved state that no paused turn names is kept after it was last
 #: written (seconds): far longer than any turn runs, so a turn still running,
 #: in this process or another sharing the file, is never caught.
@@ -111,6 +118,8 @@ class Pauses:
         self._conn: Any = None
         self._lock = asyncio.Lock()
         self._pruned_at = 0.0
+        #: The task that prunes while the store is open (`_prune_while_open`).
+        self._pruner: asyncio.Task[None] | None = None
 
     @classmethod
     def memory(cls, ttl_s: int = 86_400) -> Pauses:
@@ -183,12 +192,33 @@ class Pauses:
         async with self._lock:
             if self._saver is None:
                 self._saver = await self._opened()
+                self._start_pruning()
             saver = self._saver
         # Every use of the store, a turn that never pauses included, forgets
         # what is past its time, so a question nobody answered does not wait
         # for another turn to pause before it goes (WORKFLOW-5).
         await self._prune_if_due()
         return saver
+
+    def _start_pruning(self) -> None:
+        """Prune every `_PRUNE_IDLE_S` while the store is open, whatever else
+        runs: once its turns stop using it, nothing else would."""
+        if self._pruner is None or self._pruner.done():
+            self._pruner = asyncio.get_running_loop().create_task(
+                self._prune_while_open(), name="workflow-pauses-prune"
+            )
+
+    async def _prune_while_open(self) -> None:
+        while self._saver is not None:
+            await asyncio.sleep(_PRUNE_IDLE_S)
+            if self._saver is None:
+                return
+            try:
+                await self._prune_if_due()
+            except Exception as exc:
+                # A busy or full file: the next round, or the next turn,
+                # tries again.
+                logger.warning("paused turns past their time not forgotten: %s", exc)
 
     async def _opened(self) -> BaseCheckpointSaver:
         """The store, opened. A new file another store is setting up at the
@@ -209,8 +239,17 @@ class Pauses:
         raise AssertionError("unreachable")
 
     async def close(self) -> None:
-        """Close the store's file; the next use opens it again. What the
-        engine's shutdown calls, through the agent that holds it."""
+        """Close the store's file, and stop its pruning; the next use opens
+        it again. What the engine's shutdown calls, through the agent that
+        holds it."""
+        pruner, self._pruner = self._pruner, None
+        if pruner is not None and not pruner.done():
+            loop = pruner.get_loop()
+            if loop is asyncio.get_running_loop():
+                pruner.cancel()
+                await asyncio.wait({pruner})
+            elif not loop.is_closed():
+                loop.call_soon_threadsafe(pruner.cancel)
         async with self._lock:
             conn, self._conn, self._saver = self._conn, None, None
         if conn is not None:

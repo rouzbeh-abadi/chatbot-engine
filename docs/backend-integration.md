@@ -53,7 +53,7 @@ docker run -d --init -p 127.0.0.1:8100:8100 -e ENGINE_OPENROUTER_API_KEY=sk-or-.
   -e ENGINE_BLOB_DIR=/var/lib/chatbot-engine/blobs \
   -e ENGINE_CHECKPOINT_DB=/var/lib/chatbot-engine/checkpoints.sqlite3 \
   -v engine-data:/var/lib/chatbot-engine \
-  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.32
+  ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.33
 ```
 
 ```bash
@@ -61,7 +61,7 @@ curl localhost:8100/health
 ```
 
 ```json
-{"status": "ok", "service": "chatbot-engine", "version": "0.1.32", "disk": "ok"}
+{"status": "ok", "service": "chatbot-engine", "version": "0.1.33", "disk": "ok"}
 ```
 
 `GET /health/ready` says whether a turn can be served: it reports a provider
@@ -109,7 +109,7 @@ end-user permissions. The backend decides who may ask.
 | `DELETE` | `/documents/{doc_id}?project_id=…` | Remove a document. An upload of it under way is cancelled: it answers `409` and keeps nothing. Since 0.1.30 the room its chunks took goes back to the volume (see DEPLOYMENT.md, one collection per project) |
 | `DELETE` | `/projects/{project_id}` | Since 0.1.28: remove everything kept for a project, for a caller deleting the chatbot it is. Every document with its chunks and stored original, chunks no record names, uploads under way (each answers `409` and keeps nothing), and the workflow turns that paused on a question, with the answers they held. Uploads to the project are then refused (`409`) for ten minutes, so a crawl still running cannot put pages back. Since 0.1.30 the project's collections are dropped, with their files. Answers `{project_id, knowledge: {documents, orphaned_chunks, uploads_cancelled}, paused_turns}` |
 | `DELETE` | `/projects/{project_id}/sessions/{session_id}` | Since 0.1.28: forget the workflow turns of one session that paused on a question, with the answers they held, for a caller deleting a conversation or everything about the person in it. Answers `{project_id, session_id, paused_turns}` |
-| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (past that a reading waits up to 5 s for its turn, then `503` with `Retry-After`), and a PDF is parsed for at most `ENGINE_EXTRACT_PARSE_MB` (4) of page content. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed (one cut off at 45 s carries an estimated `usage`, below), `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
+| `POST` | `/extract` | Read a file into text and keep nothing: for a file a person sends in a conversation, sent on with `attachments`. A PDF, plain text or Markdown is read without a model, in a process of its own that is killed at `ENGINE_EXTRACT_TIMEOUT_S` (20 s), only as far as an attachment's text goes (60,000 characters), and metered apart from chat (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`, 120), at most `ENGINE_EXTRACT_CONCURRENCY` (2) at once (past that a reading waits up to 5 s for its turn, then `503` with `Retry-After`), and a PDF is parsed for at most `ENGINE_EXTRACT_PARSE_MB` (4) of page content. Since 0.1.33 the form may name the chatbot the file was sent to as `project_id`: each caller (the API key, and that project) reads one document at a time and may have at most half the line, so send it when one key serves many chatbots. A PNG, JPEG, WebP or GIF image is read by a vision model (the form's `model`, or the utility model, or the chat model) into the text in it and what it shows; that call is billed and metered as a chat turn, paid by the form's `provider_api_key` when given, and the answer's `usage` says what it cost, even when the model said nothing (`text` is then ""). Answers `{text, pages, chars, truncated, usage}` (`pages` is how many the document has; `truncated` when only the start of it was read); `400` for an empty file, `413` over 25 MB, `415` for a type it cannot read, `422` for a damaged file, text that is not UTF-8, a PDF with no text, or a file that took too long, `429` over a rate, `501` for an image on an engine with no provider key and none given, `502` when the vision model refused or failed (one cut off at 45 s carries an estimated `usage`, below), `503` when as many documents are being read as the engine allows at once. The detail names no file name, so a caller can match on its words |
 | `POST` | `/judge` | Answer a dataset of cases and grade the answers against a rubric (`judge_prompt`), at temperature 0, by the project's model or `judge_model`. The cases are answered with the chatbot's tools offered but never run; a case whose turn failed or passed `ENGINE_TURN_DEADLINE_S` has `score: null` and a `reason` starting `error:`, and one whose verdict the judge wrote outside the schema (a 7.5, an 11, no reason) is `not judged` while the others keep their scores. Each answer reaches the judge framed as what the assistant wrote, never as instructions or another case. At most 100 cases, each question, expected behaviour and answer up to 32,000 characters. See [agents.md](agents.md#evaluations) |
 | `POST` | `/eval/rag` | Score retrieval with RAGAS on cases with reference answers; `unscored` counts, per metric, the cases that could not be scored, a case not answered within `ENGINE_TURN_DEADLINE_S` among them. At most 100 cases, with up to 50 turns of history each. See [retrieval.md](retrieval.md#evaluating-a-change) |
 
@@ -263,8 +263,12 @@ of the turn gets `resume_expired`, so an answer that arrives twice (a chat
 app delivering an update again) cannot answer the question after it. A
 new message without
 `resume` simply starts a new turn, and the unanswered one is forgotten in
-time: since 0.1.28 within a minute of `ENGINE_PAUSE_TTL_S` passing, whatever
-else runs, and saved state that no paused turn names (a turn the engine was
+time: once the store of paused turns is open, within a minute of
+`ENGINE_PAUSE_TTL_S` passing while turns use it, and since 0.1.33 within the
+hour whatever else runs. The store opens with the first turn of a workflow
+that has an Ask step, or the first forget, after the engine starts, so an
+engine restarted with unanswered questions on its volume forgets them from
+then on. Saved state that no paused turn names (a turn the engine was
 stopped in the middle of) goes once nothing has written to it for an hour,
 so a turn still running in another engine process sharing the file is never
 caught. A caller deleting a conversation forgets its paused turns at once with
@@ -308,7 +312,8 @@ goes, with pypdf's inflation cap lowered, and its own rate
 (`ENGINE_EXTRACT_RATE_LIMIT_PER_MINUTE`); a document flood cannot throttle
 answers, nor the other way round, and `ENGINE_EXTRACT_CONCURRENCY` readings
 at once, past which a reading waits up to 5 seconds and is then refused with
-503. The vision call that reads
+503; since 0.1.33 one caller (the API key, and the form's `project_id` when
+sent) reads one at a time and has at most half the line. The vision call that reads
 an image is not traced, whichever `ENGINE_TRACING` names: the picture would
 go to the tracer with the call, and a person's photo is not for a third party
 to keep; what the call cost is in the answer's `usage`. It is never retried
@@ -345,7 +350,10 @@ browser sends a project *name*, and the definition is loaded from
 Every model uses `extra="forbid"`. A misspelled field is a `422` that names it.
 Since 0.1.31 the forms of `PUT /documents` and `POST /extract` are held to
 the same: a form field they do not take is a `422` of type
-`extra_forbidden`. A `422`'s `detail` lists each problem as
+`extra_forbidden`. Since 0.1.33 so are the query parameters of the
+`/documents` and `/projects` routes: `?chunk_size=200` on a re-index, whose
+settings go in its body, is a `422` whose `loc` is `["query", "chunk_size"]`,
+not a re-index at the defaults. A `422`'s `detail` lists each problem as
 `{type, loc, msg}` and never repeats the value that was sent. Text holding a
 lone UTF-16 surrogate (half of an emoji, cut by a client) is read with that
 half replaced by U+FFFD rather than failing the request.
@@ -545,7 +553,13 @@ anything else is written, so it is listed, and can be deleted, while it is
 read and embedded; if the engine stops part-way, the record is still there to
 delete it by. A delete of a document whose upload is under way cancels the
 upload, which keeps nothing and answers `409`: a delete is never undone by
-an upload that was already past it.
+an upload that was already past it. Since 0.1.33 the upload stops between
+slices, so nothing more is embedded once the delete has come, and its
+`embedded_chunks` counts what was. And a delete that stops part-way (a store
+that does not answer: a `500`) leaves the record `failed`, with `error`
+saying so: it is still listed, a second delete finishes the first, and an
+upload of the same file indexes it again rather than answering
+`unchanged`. Deletes and purges are never refused for want of room.
 
 ### Idempotency
 
@@ -610,7 +624,9 @@ rate limit, a provider 5xx, a dropped connection or an error the provider
 sends inside the stream, up to `ENGINE_PROVIDER_MAX_RETRIES` times (default
 3) with a doubling delay from half a second. Once a token has reached you the
 failure is passed on as an `error` event instead, because a replay would
-duplicate text you have shown. Every agent streams through the same helper,
+duplicate text you have shown; a call whose text you are never sent (a
+workflow's condition, the reading of an answer, a step with `var`) is
+retried whenever it breaks, since 0.1.33. Every agent streams through the same helper,
 the one layer that retries a streamed call, so this holds for the bundled
 LangGraph agents too, and the turn's deadline bounds the whole of it. The
 backend therefore need not retry a chat request itself; retrying one that
@@ -703,8 +719,13 @@ number, which lets the model call `get_flight_status` in the same turn.
 **Keep results short.** A result is sent again with every later model call of
 the turn, so the model reads at most `ENGINE_TOOL_RESULT_CHARS` (20,000
 characters by default) of one; the rest is cut, with a line saying how much
-was left out. A workflow's tool step still keeps the whole result in its
-variable; a step's prompt that names the variable gets it cut the same way.
+was left out. A workflow's tool step keeps more of the result in its
+variable, up to `ENGINE_WORKFLOW_VAR_CHARS` (100,000 characters), so a list
+of options stays whole; a step's prompt that names the variable gets it cut
+the same way. A turn keeps at most `ENGINE_TURN_TOOL_RESULT_CHARS`
+(1,000,000 characters) of tool results in all, since 0.1.33; a call past it
+is not run, so a workflow whose tool steps loop over a large answer stops
+with the assistant's `unavailable_message`.
 
 ### Failures
 
@@ -807,9 +828,10 @@ engine:
 - shows a closing tag inside an extract or a file as `[/extracts]` or
   `[/file]`, so the text cannot end its frame and carry on as the person;
   since 0.1.26 also one written with a fullwidth angle bracket or a slash
-  that only looks like one, and since 0.1.28 one with a space after its `<`
+  that only looks like one, since 0.1.28 one with a space after its `<`
   or written with the small-form or other angle brackets that look like
-  `<` and `>`;
+  `<` and `>`, and since 0.1.33 one split by characters that show as nothing
+  (a soft hyphen, a joiner or direction mark, a control character);
 - since 0.1.26, puts a backslash before a line of an extract that starts the
   way an extract's own header does (`[3] other.md`), so a chunk cannot pass
   its text off as another extract, or name a source nothing retrieved;

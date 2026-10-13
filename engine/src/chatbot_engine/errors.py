@@ -32,6 +32,12 @@ class DocumentDeletedError(EngineError):
     being indexed, or a moment before: nothing of it is kept. Mapped to 409."""
 
 
+class DocumentNotFoundError(EngineError, LookupError):
+    """No such document in the project. Mapped to 404 by the route that
+    names one: the engine's own word for it, so another `LookupError` from
+    deeper down (a `KeyError` in a store's client) stays the 500 it is."""
+
+
 class OriginalChangedError(EngineError):
     """The stored original is not the version the document's record
     describes, so rebuilding from it would index text nobody sent as that

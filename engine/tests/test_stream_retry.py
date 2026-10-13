@@ -98,6 +98,25 @@ async def test_a_stream_that_breaks_after_a_token_is_not_retried():
     assert chain.calls == 1
 
 
+async def test_a_call_that_does_not_speak_is_retried_after_its_first_chunk():
+    """A workflow's condition, the reading of a reply and a step that keeps
+    its reply in a variable show their text to nobody, yet a break after
+    their first chunk was passed on, unretried, as for an answer already on
+    the visitor's screen. Such a call yields no text as it arrives, and the
+    reply it hands back is the retry's alone."""
+    chain = FlakyChain(failures=1, exc=_rate_limited(), fail_after=2)
+    items = [
+        item
+        async for item in stream_reply(
+            lambda: chain.astream([]), retries=3, backoff_s=0.0, speaks=False
+        )
+    ]
+
+    assert chain.calls == 2
+    assert len(items) == 1 and isinstance(items[0], AIMessageChunk)
+    assert items[0].text == "hello world"
+
+
 async def test_retries_are_bounded():
     chain = FlakyChain(failures=5, exc=_rate_limited())
     with pytest.raises(openai.RateLimitError):

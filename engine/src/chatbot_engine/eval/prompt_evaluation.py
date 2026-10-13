@@ -38,6 +38,7 @@ from chatbot_engine.models.evals import (
 )
 from chatbot_engine.models.events import ErrorEvent, TokenEvent
 from chatbot_engine.ports.agent import Agent, ToolProvider
+from chatbot_engine.settings import get_settings
 from chatbot_engine.untrusted import framed
 
 logger = logging.getLogger(__name__)
@@ -229,15 +230,18 @@ def judge_config(
     cap, which is sized for answers, not for grading a whole run; on the
     same key. Every case is still graded in the one call. On another model,
     the hosts the request named for its own model are not kept
-    (`routing.elsewhere`).
+    (`routing.elsewhere`); the request's own model is the one it resolves
+    to, `ENGINE_CHAT_MODEL` when it names none, so a judge on that same
+    model keeps them.
     """
+    chat_model = get_settings().chat_model
     model = judge_model or project.model
     update: dict[str, Any] = {
         "model": model,
         "temperature": 0.0,
         "max_output_tokens": None,
     }
-    if model != project.model:
+    if (model or chat_model) != (project.model or chat_model):
         update["provider"] = elsewhere(project.provider)
     return project.model_copy(update=update)
 

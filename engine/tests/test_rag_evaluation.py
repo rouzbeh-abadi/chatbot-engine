@@ -155,6 +155,43 @@ async def test_a_metric_that_cannot_be_scored_is_logged_and_counted(
     assert "rag eval: no answer_relevancy for case b: the score was nan" in messages
 
 
+async def test_a_case_that_cannot_be_answered_leaves_only_that_case_unscored(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Only a case past its deadline was caught: any other failure while a
+    case was answered (a provider's refusal, a search that failed)
+    discarded the whole run, with the cases already answered and paid for.
+    The judge leaves such a case ungraded; this leaves it unscored."""
+
+    async def answered_but_b(project, case):
+        if case.id == "b":
+            raise RuntimeError("provider refused the call")
+        return await _answered(project, case)
+
+    metrics = (_Metric(0.9),) * 4
+    with (
+        patch.object(rag_evaluation, "_build_metrics", return_value=metrics),
+        patch.object(rag_evaluation, "_answer_and_contexts", new=answered_but_b),
+        caplog.at_level(logging.WARNING, logger=rag_evaluation.__name__),
+    ):
+        report, unscored = await rag_evaluation._evaluate(
+            RagEvalRequest(
+                project=_project(), cases=[_case("a"), _case("b"), _case("c")]
+            )
+        )
+
+    assert [r.id for r in report.results] == ["a", "b", "c"]
+    assert report.results[1].answer == ""
+    assert report.results[1].faithfulness is None
+    assert [report.results[i].faithfulness for i in (0, 2)] == [0.9, 0.9]
+    assert unscored == dict.fromkeys(rag_evaluation._METRICS, 1)
+    messages = [record.getMessage() for record in caplog.records]
+    assert (
+        "rag eval: case b could not be answered: RuntimeError: provider refused "
+        "the call" in messages
+    )
+
+
 async def test_the_report_carries_how_many_cases_each_metric_could_not_score() -> None:
     """On the wire, so a caller can say an average stands on fewer cases."""
     metrics = (_Metric(fails=True), _Metric(0.7), _Metric(0.8), _Metric(0.9))

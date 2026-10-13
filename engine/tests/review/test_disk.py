@@ -1,16 +1,17 @@
 """Review: one tenant fills or churns the shared volume (DISK-1 to DISK-4).
 
 ChatFrom runs one engine for every owner, with Chroma (one collection shared by
-every chatbot), the SQLite registry, the uploaded originals and the workflow
-checkpoints on ONE volume (deploy/docker-compose.yml: engine_data). These tests
-ask what one owner can make the engine write there, whether deleting gives it
-back, and what a full volume does to everyone else.
+every chatbot until 0.1.30, one per chatbot since), the SQLite registry, the
+uploaded originals and the workflow checkpoints on ONE volume
+(deploy/docker-compose.yml: engine_data). These tests ask what one owner can
+make the engine write there, whether deleting gives it back, and what a full
+volume does to everyone else.
 
 Every test asserts the behaviour the engine should have and fails on 0.1.26.
 Offline: Chroma 1.5.9 for real, embeddings are DeterministicFakeEmbedding at
 1536 dimensions (the size of ChatFrom's model, openai/text-embedding-3-small),
 no provider is called. The full-volume tests mount a small tmpfs, so they need
-root; elsewhere they skip.
+root; elsewhere they skip. CI runs them as root, in a job of their own.
 """
 
 from __future__ import annotations
@@ -371,6 +372,9 @@ class _Engine:
             # A floor to the scale of the test's small volume; the default
             # (512 MB) would refuse every upload on it from the start.
             ENGINE_MIN_FREE_MB="8",
+            # The tests send more uploads and re-indexes a minute than the
+            # default limit lets one caller; what they test is the volume.
+            ENGINE_INGEST_RATE_LIMIT_PER_MINUTE="0",
         )
         self.log = tmp_path / "engine.log"
         self._log = self.log.open("wb")
@@ -448,7 +452,9 @@ def _fill(volume: Path, leave: int) -> Path:
     return filler
 
 
-TRICK = {"chunking_strategy": "size", "chunk_size": "100", "chunk_overlap": "99"}
+# Small chunks with an overlap, to write many vectors from little text. Since
+# INGEST-1's fix an overlap may be at most half the size (99 was refused).
+TRICK = {"chunking_strategy": "size", "chunk_size": "100", "chunk_overlap": "50"}
 B = "6f1c0a52-0000-4000-8000-00000000000b"  # the tenant who fills the volume
 A = "6f1c0a52-0000-4000-8000-00000000000a"  # everyone else
 C = "6f1c0a52-0000-4000-8000-00000000000c"
@@ -462,7 +468,7 @@ def _reindex(engine: _Engine, project: str, doc_id: str) -> str:
         r = httpx.post(
             f"{engine.url}/documents/{doc_id}/reindex",
             params={"project_id": project},
-            json=TRICK | {"chunk_size": 100, "chunk_overlap": 99},
+            json=TRICK | {"chunk_size": 100, "chunk_overlap": 50},
             timeout=30,
         )
     except httpx.HTTPError as exc:
@@ -470,9 +476,6 @@ def _reindex(engine: _Engine, project: str, doc_id: str) -> str:
     return f"{r.status_code} {r.text[:120]}"
 
 
-@pytest.mark.xfail(
-    strict=True, reason="DISK-3 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_a_full_volume_does_not_freeze_the_engine_for_every_tenant(
     tmp_path: Path, small_volume: Path
 ) -> None:
@@ -579,9 +582,6 @@ async def _search(monkeypatch: pytest.MonkeyPatch, volume: Path, project: str):
         reset_dependency_cache()
 
 
-@pytest.mark.xfail(
-    strict=True, reason="DISK-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_write_that_meets_a_full_volume_leaves_every_tenants_knowledge_readable(
     tmp_path: Path, small_volume: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -612,9 +612,6 @@ async def test_a_write_that_meets_a_full_volume_leaves_every_tenants_knowledge_r
 # ------ DISK-5: a failed upload's chunks stay, under no record
 
 
-@pytest.mark.xfail(
-    strict=True, reason="INGEST-4 in docs/review-2026-10.md: fails until it is fixed"
-)
 def test_an_upload_refused_for_lack_of_room_leaves_no_chunks_behind(
     tmp_path: Path, small_volume: Path
 ) -> None:
@@ -634,14 +631,18 @@ def test_an_upload_refused_for_lack_of_room_leaves_no_chunks_behind(
 
     import chromadb
 
+    # Every collection: one per project since 0.1.30, and a rebuild's copy.
     client = chromadb.PersistentClient(path=str(small_volume / "chroma"))
-    (collection,) = client.list_collections()
-    held = collection.get(where={"project_id": A}, include=["metadatas"])
-    names = sorted({m["source"] for m in held["metadatas"]})
+    held: list[str] = []
+    sources: set[str] = set()
+    for collection in client.list_collections():
+        got = collection.get(where={"project_id": A}, include=["metadatas"])
+        held.extend(got["ids"])
+        sources.update(str(m["source"]) for m in got["metadatas"] or [])
 
-    assert not held["ids"] or listed, (
-        f"{steps}; GET /documents lists {listed} for tenant A, yet the shared "
-        f"collection holds {len(held['ids'])} of its chunks (of {names}), "
+    assert not held or listed, (
+        f"{steps}; GET /documents lists {listed} for tenant A, yet the engine's "
+        f"collections hold {len(held)} of its chunks (of {sorted(sources)}), "
         "which no DELETE can reach: the engine deletes only what its registry names"
     )
 
@@ -649,9 +650,6 @@ def test_an_upload_refused_for_lack_of_room_leaves_no_chunks_behind(
 # ---- DISK-6: a turn that meets the full volume keeps its answers forever
 
 
-@pytest.mark.xfail(
-    strict=True, reason="WORKFLOW-5 in docs/review-2026-10.md: fails until it is fixed"
-)
 async def test_a_turn_that_meets_a_full_volume_keeps_no_answers_after_the_ttl(
     tmp_path: Path,
 ) -> None:
@@ -727,13 +725,20 @@ async def test_a_turn_that_meets_a_full_volume_keeps_no_answers_after_the_ttl(
         pytest.skip(f"cannot mount a tmpfs here: {mounted.stderr.strip()}")
     try:
         filler = volume / "other-tenant-bytes"
-        filler.write_bytes(b"\0" * 10_000_000)
+        # About 2 MB of the 24 left: room for the first turn's pause.
+        filler.write_bytes(b"\0" * 23_000_000)
         path = volume / "checkpoints.sqlite3"
         pauses = Pauses.sqlite(path, ttl_s=86_400)
         try:
             thread = _asked(
                 await _run(_request(spec, "hi", session_id="v1"), pauses, BigResult())
             ).thread_id
+            # Then the rest fills while the question waits, so the turn that
+            # takes the answer meets the full volume whatever it writes. With
+            # 10 MB filled and no more, it did not, and the test asserted
+            # nothing; nor, with 23 MB, once a workflow variable keeps less
+            # of the megabyte the tool answers with.
+            _fill(volume, leave=64 * 1024)
             try:
                 await _run(
                     _request(
@@ -748,6 +753,7 @@ async def test_a_turn_that_meets_a_full_volume_keeps_no_answers_after_the_ttl(
                 failed = "no"
             except Exception as exc:  # the turn fails: no room
                 failed = f"{type(exc).__name__}: {exc}"
+            assert failed != "no", "precondition: the turn met the full volume"
             filler.unlink()
             # The engine goes on: another chatbot's workflow turn pauses, two
             # days later, which is when expired pauses are pruned.

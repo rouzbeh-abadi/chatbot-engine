@@ -18,8 +18,9 @@ things are done here, before any of it reaches a model:
 - A closing tag for the frame the text travels in is shown as `[/tag]`, so
   the text cannot end its frame early and speak from outside it, however it
   is spelt: in either case, spaced, with the fullwidth less-than or
-  greater-than sign (U+FF1C, U+FF1E), or with a slash that only looks like
-  one.
+  greater-than sign (U+FF1C, U+FF1E), with a slash that only looks like
+  one, or with characters that show as nothing between its parts (a soft
+  hyphen, a joiner or direction mark, a control character such as NUL).
 - A line that starts the way a numbered extract does (`[3] other.md`) gets a
   backslash in front (`unnumbered`), so it cannot pass for another extract.
 
@@ -61,6 +62,17 @@ _OPENERS = "<\uff1c\ufe64\u2039\u3008\u27e8\u2329"
 _SLASHES = "/\uff0f\u2044\u2215\u29f8"
 #: What a tag can end with besides `>`: the twins of the openers above.
 _CLOSERS = ">\uff1e\ufe65\u203a\u3009\u27e9\u232a"
+#: What shows as nothing, so a closer split by it still reads as one to a
+#: model: the control characters (NUL among them) and every default-ignorable
+#: code point, the ones `visible` keeps included (the soft hyphen, the
+#: joiners and direction marks the scripts need, the combining grapheme
+#: joiner, the Hangul fillers). Whitespace is matched apart, as `\s`.
+_IGNORABLE = (
+    "\x00-\x08\x0e-\x1f\x7f-\x9f\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5"
+    "\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f"
+    "\ufeff\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
+    "\U000e0000-\U000e0fff"
+)
 
 #: A line that starts the way a numbered extract does: `[3]`.
 _NUMBERED_LINE = re.compile(r"^([ \t]*)\[(\d+)\]", re.MULTILINE)
@@ -83,7 +95,8 @@ CLOSER_ROOM = _CLOSER_TAIL + 32
 
 def closing_tag(tag: str) -> re.Pattern[str]:
     """A closing tag for `tag`, however it is spelt or spaced, or written with
-    a fullwidth angle bracket or a slash that only looks like one; not the
+    a fullwidth angle bracket or a slash that only looks like one, or split
+    anywhere by characters that show as nothing (`_IGNORABLE`); not the
     closer of another element whose name only starts with `tag`
     (`</file-list>`).
 
@@ -91,9 +104,13 @@ def closing_tag(tag: str) -> re.Pattern[str]:
     end of the text, as it was, every `</file ` without a `>` after it cost a
     scan of the rest, so a file of them held the event loop for seconds on
     every turn (docs/review-2026-10.md, TURN-2)."""
+    gap = rf"[\s{_IGNORABLE}]*"
+    hidden = f"[{_IGNORABLE}]*"
+    name = hidden.join(re.escape(letter) for letter in tag)
     return re.compile(
-        rf"[{_OPENERS}]\s*[{_SLASHES}]\s*{re.escape(tag)}"
-        rf"(?=[\s{_SLASHES}{_CLOSERS}]|$)(?:[^{_CLOSERS}]{{0,{_CLOSER_TAIL}}}[{_CLOSERS}])?",
+        rf"[{_OPENERS}]{gap}[{_SLASHES}]{gap}{name}"
+        rf"(?={hidden}(?:[\s{_SLASHES}{_CLOSERS}]|$))"
+        rf"(?:[^{_CLOSERS}]{{0,{_CLOSER_TAIL}}}[{_CLOSERS}])?",
         re.IGNORECASE,
     )
 

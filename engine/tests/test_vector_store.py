@@ -685,7 +685,7 @@ async def test_a_move_the_volume_has_no_room_for_leaves_the_project_searchable_w
 
     _shared_with({"alpha": 3})
 
-    def full() -> None:
+    def full(*_: object) -> None:
         raise StorageFullError("below the free-space floor")
 
     monkeypatch.setattr(vector_store_module, "ensure_room", full)
@@ -710,7 +710,7 @@ async def test_a_rebuild_that_cannot_finish_leaves_the_collection_and_no_part_co
     await store.write(doc_id="kept", project_id="p", chunks=_docs("p", "kept", 2))
     await store.write(doc_id="churn", project_id="p", chunks=_docs("p", "churn", 3))
 
-    def full() -> None:
+    def full(*_: object) -> None:
         raise StorageFullError("below the free-space floor")
 
     monkeypatch.setattr(vector_store_module, "ensure_room", full)
@@ -763,3 +763,379 @@ async def test_a_shared_collection_dropped_by_another_move_meanwhile_is_passed_o
     await vector_store_module.ensure_moved("alpha")
 
     assert count_chunks(find_vector_store(None, "alpha")) == 2
+
+
+# --- a project's chats and its tidying --------------------------------------------
+
+
+async def test_a_projects_search_does_not_wait_for_another_projects_indexing(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Project p's write waits for indexing's one thread, which another
+    tenant's document holds (a PDF read can take a minute); p's update or
+    delete then tidies. p's chats must not wait for the other tenant: the
+    write holds no gate while it waits for a thread, and a tidy with
+    nothing to do never has the gate alone, which would stop every search
+    that arrives after it."""
+    import asyncio
+    import threading
+    import time
+    from concurrent.futures import ThreadPoolExecutor
+
+    from chatbot_engine.rag import vector_store as vs
+    from chatbot_engine.rag import workers
+
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="index")
+    monkeypatch.setattr(workers, "_pool", pool)
+    store = ChromaChunkStore()
+    await store.write(doc_id="a", project_id="p", chunks=_docs("p", "a", 1))
+
+    release = threading.Event()
+    real_embed = vs._embed
+
+    def embed(model, texts):
+        vectors = real_embed(model, texts)
+        # The other tenant's document reaches the pool as p's is embedded.
+        pool.submit(release.wait, 10)
+        return vectors
+
+    monkeypatch.setattr(vs, "_embed", embed)
+    writing = asyncio.create_task(
+        store.write(doc_id="b", project_id="p", chunks=_docs("p", "b", 1))
+    )
+    await asyncio.sleep(0.3)
+    tidying = asyncio.create_task(vs.tidy("p"))
+    await asyncio.sleep(0.1)
+
+    start = time.monotonic()
+    try:
+        async with asyncio.timeout(2):
+            async with vs.gate("p").shared():  # agent/retriever.py's search
+                waited = time.monotonic() - start
+            await tidying
+    finally:
+        release.set()
+        await writing
+        pool.shutdown(wait=True)
+
+    assert waited < 0.5, f"p's search waited {waited:.1f}s for another tenant"
+    assert sorted(stored_chunks(where={"project_id": "p"})["documents"]) == [
+        "a part 0",
+        "b part 0",
+    ]
+
+
+async def test_an_update_or_delete_with_nothing_to_tidy_never_has_the_gate_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from chatbot_engine.rag import workers
+
+    store = ChromaChunkStore()
+    await store.write(doc_id="a", project_id="p", chunks=_docs("p", "a", 3))
+    await store.write(doc_id="b", project_id="p", chunks=_docs("p", "b", 3))
+    alone = 0
+    real = workers.Gate.alone
+
+    def counting(self):
+        nonlocal alone
+        alone += 1
+        return real(self)
+
+    monkeypatch.setattr(workers.Gate, "alone", counting)
+    await store.write(doc_id="a", project_id="p", chunks=_docs("p", "a", 2))
+    await store.delete(doc_id="b", project_id="p")
+
+    assert alone == 0
+    assert count_chunks(find_vector_store(None, "p")) == 2
+
+
+async def test_a_rebuild_copies_while_the_project_is_searched_written_and_deleted(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The copy is made sharing the gate, so the project's searches go on
+    while it runs; only the swap at the end has the gate alone. What was
+    written and deleted meanwhile is caught up before the copy takes the
+    collection's place: nothing written is lost, and nothing deleted is
+    brought back."""
+    import asyncio
+    import threading
+
+    from chatbot_engine.rag import vector_store as vs
+
+    monkeypatch.setattr(vs, "REBUILD_AFTER", 1)
+    monkeypatch.setattr(vs, "_COPY_BATCH", 2)
+    store = ChromaChunkStore()
+    await store.write(doc_id="kept", project_id="p", chunks=_docs("p", "kept", 4))
+    await store.write(doc_id="x", project_id="p", chunks=_docs("p", "x", 2))
+    await store.write(doc_id="churn", project_id="p", chunks=_docs("p", "churn", 7))
+    before = find_vector_store(None, "p")
+    assert before is not None
+    old_id = before._collection.id
+
+    loop = asyncio.get_running_loop()
+    copying, go = asyncio.Event(), threading.Event()
+    real_copy = vs._copy_slice
+    slices = 0
+
+    def copy_slice(name: str, offset: int) -> int:
+        nonlocal slices
+        slices += 1
+        if slices == 2:  # one slice copied: the project goes on meanwhile
+            loop.call_soon_threadsafe(copying.set)
+            go.wait(10)
+        return real_copy(name, offset)
+
+    monkeypatch.setattr(vs, "_copy_slice", copy_slice)
+    rebuilding = asyncio.create_task(store.delete(doc_id="churn", project_id="p"))
+    try:
+        async with asyncio.timeout(5):
+            await copying.wait()
+            async with vs.gate("p").shared():  # a search, while it copies
+                pass
+            assert await store.delete(doc_id="x", project_id="p") == 2
+            await store.write(doc_id="new", project_id="p", chunks=_docs("p", "new", 2))
+    finally:
+        go.set()
+    await rebuilding
+
+    after = find_vector_store(None, "p")
+    assert after is not None and after._collection.id != old_id, "rebuilt"
+    assert sorted(stored_chunks(where={"project_id": "p"})["documents"]) == [
+        *(f"kept part {i}" for i in range(4)),
+        "new part 0",
+        "new part 1",
+    ]
+    names = {c.name for c in vs._chroma_client().list_collections()}
+    assert f"{collection_name(None, 'p')}--new" not in names
+
+
+async def test_a_rebuild_racing_a_delete_from_outside_its_gate_keeps_every_live_chunk(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Pages read by offset shift under a delete made meanwhile, here one
+    no gate of this process saw: the copy skips live chunks and keeps
+    deleted ones, until the catch-up puts both right."""
+    from chatbot_engine.rag import vector_store as vs
+
+    monkeypatch.setattr(vs, "REBUILD_AFTER", 1)
+    monkeypatch.setattr(vs, "_COPY_BATCH", 2)
+    store = ChromaChunkStore()
+    await store.write(doc_id="x", project_id="p", chunks=_docs("p", "x", 2))
+    await store.write(doc_id="kept", project_id="p", chunks=_docs("p", "kept", 4))
+    await store.write(doc_id="churn", project_id="p", chunks=_docs("p", "churn", 7))
+    name = collection_name(None, "p")
+    calls = 0
+    real_room = vs.ensure_room
+
+    def room(*args: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:  # one slice copied: x goes, behind the rebuild's back
+            collection = vs._chroma_client().get_collection(name)
+            gone = collection.get(where={"doc_id": "x"}, include=[])["ids"]
+            collection.delete(ids=gone)
+        real_room(*args)
+
+    monkeypatch.setattr(vs, "ensure_room", room)
+    await store.delete(doc_id="churn", project_id="p")
+
+    assert sorted(stored_chunks(where={"project_id": "p"})["documents"]) == [
+        f"kept part {i}" for i in range(4)
+    ]
+
+
+async def test_against_a_chroma_server_nothing_is_rebuilt_or_dropped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The gate is one process's: another replica's writes and deletes would
+    race a rebuild or a drop, so neither runs against a server. Nor is a
+    delete counted, which only a rebuild would read."""
+    import chromadb
+
+    from chatbot_engine.rag import vector_store as vs
+
+    _set(monkeypatch, ENGINE_CHROMA_URL="http://chroma.internal:8000")
+    vs.reset_vector_store()
+    monkeypatch.setattr(vs, "_client", chromadb.PersistentClient(path=str(tmp_path)))
+    monkeypatch.setattr(vs, "REBUILD_AFTER", 1)
+    store = ChromaChunkStore()
+    await store.write(doc_id="kept", project_id="p", chunks=_docs("p", "kept", 2))
+    await store.write(doc_id="churn", project_id="p", chunks=_docs("p", "churn", 5))
+    before = find_vector_store(None, "p")
+    assert before is not None
+
+    await store.delete(doc_id="churn", project_id="p")
+    after = find_vector_store(None, "p")
+    assert after is not None and after._collection.id == before._collection.id
+    assert not (after._collection.metadata or {}).get("deleted_chunks")
+
+    await store.delete(doc_id="kept", project_id="p")
+    emptied = find_vector_store(None, "p")
+    assert emptied is not None and count_chunks(emptied) == 0, "not dropped"
+    vs.reset_vector_store()
+
+
+# --- a project the 0.1.30 move has not reached yet --------------------------------
+
+
+async def test_a_project_not_moved_yet_is_deleted_and_purged_where_it_is_on_a_full_volume(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A move needs room for a copy of the project's chunks, and a delete
+    is how room is made: a delete or a purge of a project still in the
+    shared collection removes its chunks there, below the floor too."""
+    from chatbot_engine.errors import StorageFullError
+    from chatbot_engine.rag import vector_store as vs
+
+    _shared_with({"alpha": 3, "beta": 2})
+
+    def full(*_: object) -> None:
+        raise StorageFullError("below the free-space floor")
+
+    monkeypatch.setattr(vs, "ensure_room", full)
+
+    assert await ChromaChunkStore().delete(doc_id="d", project_id="alpha") == 3
+    assert await ChromaChunkStore().delete_project(project_id="beta") == 2
+
+    names = {c.name for c in vs._chroma_client().list_collections()}
+    assert collection_name() not in names, "the emptied shared collection is dropped"
+    assert not any("--p-" in n for n in names), "nothing was moved, nor needed room"
+    assert stored_chunks()["ids"] == []
+
+
+def test_the_free_space_refusal_says_what_it_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Not always "the upload was not indexed": a move or a rebuild is
+    refused too, and its message should send its reader to the right thing."""
+    from chatbot_engine.disk import ensure_room
+    from chatbot_engine.errors import StorageFullError
+
+    _set(monkeypatch, ENGINE_MIN_FREE_MB=str(10**12))
+
+    with pytest.raises(StorageFullError, match="so the document was not indexed"):
+        ensure_room()
+    with pytest.raises(
+        StorageFullError, match="so the project's chunks were not moved"
+    ):
+        ensure_room(
+            "the project's chunks were not moved into a collection of their own"
+        )
+
+
+async def test_a_move_refused_for_room_says_it_was_the_move(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from chatbot_engine.errors import StorageFullError
+    from chatbot_engine.rag.vector_store import ensure_moved
+
+    _shared_with({"alpha": 3})
+    _set(monkeypatch, ENGINE_MIN_FREE_MB=str(10**12))
+
+    with pytest.raises(StorageFullError, match="chunks were not moved"):
+        await ensure_moved("alpha")
+
+
+# --- a rebuild cut short ----------------------------------------------------------
+
+
+async def test_a_delete_and_a_purge_reach_a_rebuild_copy_whose_collection_is_gone(
+    client: TestClient,
+) -> None:
+    """The engine stopped between dropping a collection and giving its
+    rebuilt copy the name. A delete or a purge must reach the copy, or the
+    next search takes it back with what they removed."""
+    from chatbot_engine.rag.vector_store import _chroma_client, reset_vector_store
+
+    def cut_short() -> None:
+        name = collection_name(None, "p")
+        _chroma_client().get_collection(name).modify(name=f"{name}--new")
+        reset_vector_store()
+
+    store = ChromaChunkStore()
+    await store.write(doc_id="d", project_id="p", chunks=_docs("p", "d", 2))
+    await store.write(doc_id="e", project_id="p", chunks=_docs("p", "e", 2))
+    cut_short()
+
+    assert await ChromaChunkStore().delete(doc_id="d", project_id="p") == 2
+    cut_short()
+    assert await ChromaChunkStore().delete_project(project_id="p") == 2
+
+    assert find_vector_store(None, "p") is None, "the next search finds nothing"
+    assert stored_chunks()["ids"] == []
+
+
+# --- a write that fails part-way ----------------------------------------------------
+
+
+async def test_a_failed_write_counts_what_it_took_back_and_leaves_no_empty_collection(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What landed of a failed write is removed like a delete removes it: its
+    room is counted towards a rebuild, and a project's first document that
+    failed leaves no empty collection behind."""
+    from langchain_core.embeddings import DeterministicFakeEmbedding
+
+    from chatbot_engine.rag.vector_store import _chroma_client
+
+    _set(monkeypatch, ENGINE_INDEX_BATCH_SIZE="1")
+    store = ChromaChunkStore()
+    await store.write(doc_id="kept", project_id="p", chunks=_docs("p", "kept", 2))
+    original = DeterministicFakeEmbedding.embed_documents
+    calls = 0
+
+    def third_call_fails(self, texts):
+        nonlocal calls
+        calls += 1
+        if calls % 3 == 0:
+            raise RuntimeError("provider down")
+        return original(self, texts)
+
+    monkeypatch.setattr(DeterministicFakeEmbedding, "embed_documents", third_call_fails)
+    with pytest.raises(RuntimeError):
+        await store.write(doc_id="new", project_id="p", chunks=_docs("p", "new", 4))
+    kept = find_vector_store(None, "p")
+    assert kept is not None and count_chunks(kept) == 2
+    collection = _chroma_client().get_collection(collection_name(None, "p"))
+    assert (collection.metadata or {}).get("deleted_chunks") == 2
+
+    calls = 0
+    with pytest.raises(RuntimeError):
+        await store.write(doc_id="first", project_id="q", chunks=_docs("q", "first", 4))
+    assert find_vector_store(None, "q") is None, "no empty collection is left"
+
+
+async def test_a_cancelled_write_embeds_no_more_slices(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A delete during an upload stops it between slices: nothing more is
+    embedded, or paid for, and what landed goes again."""
+    from langchain_core.embeddings import DeterministicFakeEmbedding
+
+    from chatbot_engine.errors import DocumentDeletedError
+    from chatbot_engine.rag.vector_store import EmbeddedChunks
+
+    _set(monkeypatch, ENGINE_INDEX_BATCH_SIZE="1")
+    original = DeterministicFakeEmbedding.embed_documents
+    embedded: list[str] = []
+    deleted = False
+
+    def embed(self, texts):
+        nonlocal deleted
+        embedded.extend(texts)
+        deleted = True  # the delete arrives while the first slice embeds
+        return original(self, texts)
+
+    monkeypatch.setattr(DeterministicFakeEmbedding, "embed_documents", embed)
+    counted = EmbeddedChunks()
+    with pytest.raises(DocumentDeletedError):
+        await ChromaChunkStore().write(
+            doc_id="d",
+            project_id="p",
+            chunks=_docs("p", "d", 5),
+            embedded=counted,
+            cancelled=lambda: deleted,
+        )
+
+    assert embedded == ["d part 0"] and counted.chunks == 1
+    assert find_vector_store(None, "p") is None, "what landed went again"
