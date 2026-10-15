@@ -33,6 +33,7 @@ cue to read, not a verdict.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
 #: Tag characters, the zero-width space, bidirectional controls, the word
 #: joiner and invisible operators, variation selectors, a stray BOM.
@@ -142,16 +143,19 @@ def unnumbered(text: str) -> str:
 
 
 #: What reads like orders to an AI, by kind. Each pattern is narrow on
-#: purpose: a warning nobody believes is worse than none.
+#: purpose: a warning nobody believes is worse than none. Every gap in it is
+#: bounded (at most 64 spaces between two words, 40 or 30 other characters),
+#: so a match is never longer than `_LONGEST_MATCH`.
 _INSTRUCTIONS = re.compile(
     r"\b(?:ignore|disregard|forget|override|bypass)\b[^.\n]{0,40}?"
     r"\b(?:previous|prior|above|earlier|all|any|your|these|those|system)\b[^.\n]{0,30}?"
     r"\b(?:instructions?|rules|prompts?|guidelines|directions)\b"
-    r"|\b(?:new|updated|real|actual)\s+(?:system\s+)?instructions?\s*:"
-    r"|\byou\s+are\s+now\s+(?:a|an|the|in|no\s+longer)\b"
+    r"|\b(?:new|updated|real|actual)\s{1,64}(?:system\s{1,64})?instructions?\s{0,64}:"
+    r"|\byou\s{1,64}are\s{1,64}now\s{1,64}(?:a|an|the|in|no\s{1,64}longer)\b"
     r"|\b(?:reveal|print|repeat|show|output|disclose)\b[^.\n]{0,30}?"
-    r"\b(?:system\s+prompt|your\s+(?:instructions|prompt|rules))\b"
-    r"|\bdo\s+not\s+(?:tell|inform|mention\s+(?:this\s+)?to|reveal\s+(?:this\s+)?to)\s+(?:the\s+)?(?:user|visitor|customer|human)\b",
+    r"\b(?:system\s{1,64}prompt|your\s{1,64}(?:instructions|prompt|rules))\b"
+    r"|\bdo\s{1,64}not\s{1,64}(?:tell|inform|mention\s{1,64}(?:this\s{1,64})?to|reveal\s{1,64}(?:this\s{1,64})?to)"
+    r"\s{1,64}(?:the\s{1,64})?(?:user|visitor|customer|human)\b",
     re.IGNORECASE,
 )
 
@@ -175,12 +179,72 @@ def _places(count: int) -> str:
     return "" if count == 1 else f" ({count} places)"
 
 
+#: How much of a text one call of a pattern reads in `instruction_warnings`.
+#: A regex holds the interpreter for the whole of its call, and the scan runs
+#: on an indexing thread beside the event loop: a 2 MB document matched in one
+#: call kept every other request waiting for as long. A window at a time, the
+#: loop gets its turn between them.
+_WINDOW = 32_768
+
+#: The longest a match of the patterns read a window at a time can be
+#: (`_INSTRUCTIONS`, about 410 characters; `_ROLE_MARKUP`; `_HIDING`'s first
+#: two characters, which are all a search needs), with room to spare.
+_LONGEST_MATCH = 640
+
+
+def _matches(pattern: re.Pattern[str], text: str) -> Iterator[re.Match[str]]:
+    """`pattern.finditer(text)`, a window of `_WINDOW` characters at a time.
+
+    Each window is read on to `_LONGEST_MATCH` characters past its end, and
+    one more for the word boundary after a match, so a match that starts in it is seen
+    whole, and the character before it is the text's own (`pos` is not a
+    slice). The next window starts where the last match ended, as one pass
+    over the whole text goes on, so this finds exactly what that pass would,
+    for a pattern no match of which is longer. A pattern of one repeated
+    character class may have a match cut where the reading stops: `_runs`
+    joins it up again."""
+    pos, size = 0, len(text)
+    while pos < size:
+        end = min(size, pos + _WINDOW)
+        reach = min(size, end + _LONGEST_MATCH + 1)
+        after = end
+        for match in pattern.finditer(text, pos, reach):
+            if match.start() >= end:
+                break
+            yield match
+            after = max(after, match.end())
+        pos = after
+
+
+def _runs(pattern: re.Pattern[str], text: str) -> list[str]:
+    """`pattern.findall(text)` for a run of one character class
+    (`_TAG_ASCII`), a window at a time, a run cut by a window joined up."""
+    runs: list[str] = []
+    last = -1
+    for match in _matches(pattern, text):
+        if match.start() == last:
+            runs[-1] += match.group(0)
+        else:
+            runs.append(match.group(0))
+        last = match.end()
+    return runs
+
+
+def _visible_in_windows(text: str) -> str:
+    """`visible(text)`, a window at a time: it removes single characters, so
+    any cut will do."""
+    return "".join(
+        visible(text[at : at + _WINDOW]) for at in range(0, len(text), _WINDOW)
+    )
+
+
 def instruction_warnings(text: str) -> list[str]:
     """What in `text` reads like orders to an AI, one sentence per kind, for
-    the document's owner. Empty for an ordinary document."""
+    the document's owner. Empty for an ordinary document. Read a window at a
+    time (`_matches`), so a long document does not hold up the event loop."""
     warnings: list[str] = []
 
-    hidden = _TAG_ASCII.findall(text)
+    hidden = _runs(_TAG_ASCII, text)
     if hidden:
         # Each tag character is its ASCII twin moved up by 0xE0000.
         spelt = " ".join(
@@ -192,13 +256,13 @@ def instruction_warnings(text: str) -> list[str]:
         warnings.append(
             f"Hidden characters that a reader cannot see spell out: “{shown}”{_places(len(hidden))}"
         )
-    elif _HIDING.search(text):
+    elif next(_matches(_HIDING, text), None) is not None:
         warnings.append(
             "Hidden control characters that can change or hide how text reads"
         )
 
-    clean = visible(text)
-    found = list(_INSTRUCTIONS.finditer(clean))
+    clean = _visible_in_windows(text)
+    found = list(_matches(_INSTRUCTIONS, clean))
     if found:
         first = found[0]
         warnings.append(
@@ -208,10 +272,10 @@ def instruction_warnings(text: str) -> list[str]:
     # On the text the model reads: a zero-width space inside `<|im_start|>`
     # hides it from a match on the raw text, and is removed before the model
     # sees it whole (INGEST-7).
-    markup = list(_ROLE_MARKUP.finditer(clean))
+    markup = [match.group(0) for match in _matches(_ROLE_MARKUP, clean)]
     if markup:
         warnings.append(
-            f"Chat markup that imitates an AI's roles: “{markup[0].group(0)}”{_places(len(markup))}"
+            f"Chat markup that imitates an AI's roles: “{markup[0]}”{_places(len(markup))}"
         )
 
     return warnings

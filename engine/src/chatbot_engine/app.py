@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -132,10 +133,21 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     release_chroma_dir()
 
 
+#: How long a thread busy in Python keeps the interpreter before another
+#: that is waiting gets it. Indexing reads, cuts and scans documents on
+#: threads beside the event loop, and the loop gives the interpreter up on
+#: every turn: at Python's 5 ms, a request that takes the loop a few dozen
+#: turns waited 0.2 s while a 2 MB document was cut, and so did every answer
+#: being streamed. At 1 ms it waits a fifth as long, and the threads lose
+#: next to nothing.
+_SWITCH_INTERVAL_S = 0.001
+
+
 def create_app() -> FastAPI:
     """Build the FastAPI app: exception handlers, then the routers."""
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_format)
+    sys.setswitchinterval(_SWITCH_INTERVAL_S)
     production = settings.env == "production"
 
     app = FastAPI(

@@ -11,10 +11,10 @@ Every version tag publishes multi-architecture images (amd64 and arm64) to this
 repository's container registry:
 
 ```
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.33
-ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.33
-ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.33
-ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.33
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.34
+ghcr.io/rouzbeh-abadi/chatbot-engine/engine-langgraph:0.1.34
+ghcr.io/rouzbeh-abadi/chatbot-engine/backend:0.1.34
+ghcr.io/rouzbeh-abadi/chatbot-engine/frontend:0.1.34
 ```
 
 `engine` carries the loop agent only. `engine-langgraph` is the same engine
@@ -48,7 +48,7 @@ corresponding `image:`.
 ## Cutting a release
 
 ```bash
-git tag v0.1.33 && git push origin v0.1.33
+git tag v0.1.34 && git push origin v0.1.34
 ```
 
 The Release workflow runs the full test suite, publishes the four images, and
@@ -569,7 +569,12 @@ Do not run `make seed-db` against a real database; it loads the demo bookings.
   are never all in memory at once, and indexing runs on
   `ENGINE_INDEX_CONCURRENCY` (default 2) threads of its own, so uploads never
   hold up another project's chats: since 0.1.33 a write takes its project's
-  gate only once it has one of those threads. A project's own chats wait while one of
+  gate only once it has one of those threads, and since 0.1.34 a large
+  document's reading, cutting and scan for instructions to an AI no longer
+  slow every other answer while they run: the threads hand the interpreter
+  back every millisecond, and the scan reads 32 KB at a time. A write to
+  embedded Chroma still holds every request for as long as it takes, so a
+  smaller batch shortens that wait. A project's own chats wait while one of
   its collections is replaced or dropped (the end of a rebuild, a purge),
   and while it moves once, on the first start of 0.1.30.
 - **Free space.** `ENGINE_MIN_FREE_MB` (default 512) is the room an upload

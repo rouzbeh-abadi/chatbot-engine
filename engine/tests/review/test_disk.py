@@ -297,10 +297,24 @@ async def test_an_upload_does_not_stop_the_engine_answering_while_its_vectors_ar
         collection_module.Collection.upsert = original  # type: ignore[method-assign]
 
     assert put.status_code == 201, put.text
-    assert worst < 0.5, (
+    written = [(n, round(s, 2)) for n, s in upserts]
+    # Embedded Chroma holds the interpreter for the whole of a write, so the
+    # engine waits out one write whatever else is done, and a write takes as
+    # long as the machine makes it: one of 128 chunks has taken 0.64 s on a
+    # shared CI runner. What writing in slices buys is that the engine waits
+    # for one slice, never for the document: every write is at most a slice,
+    # and nothing else (the cutting and the scan for instructions, with the
+    # interpreter handed back every millisecond, `_SWITCH_INTERVAL_S` in
+    # app.py) holds it up for longer than the longest write and a little more.
+    size = get_settings().index_batch_size
+    assert all(n <= size for n, _ in upserts), (
+        f"a write of more than one slice ({size} chunks): {written}"
+    )
+    longest = max(s for _, s in upserts)
+    assert worst < longest + 0.25, (
         f"while {put.json()['chunk_count']} chunks were written (Chroma upserts "
-        f"{[(n, round(s, 2)) for n, s in upserts]} as (chunks, seconds)), the "
-        f"engine did not answer /health for {worst:.2f} s"
+        f"{written} as (chunks, seconds)), the engine did not answer /health for "
+        f"{worst:.2f} s, more than the longest write ({longest:.2f} s) and 0.25 s"
     )
 
 

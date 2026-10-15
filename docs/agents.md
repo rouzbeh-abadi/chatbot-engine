@@ -83,7 +83,7 @@ my-agent = "my_package.agent:build"
 an image on top of the engine image:
 
 ```dockerfile
-FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.33
+FROM ghcr.io/rouzbeh-abadi/chatbot-engine/engine:0.1.34
 # The engine's environment is root's and has no pip; uv, which built it, is
 # in the image. The engine itself runs as `engine`, so switch back after.
 USER root
