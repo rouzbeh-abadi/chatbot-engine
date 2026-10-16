@@ -36,6 +36,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import unicodedata
+from collections import Counter
 from typing import Any
 
 from langchain_core.documents import Document
@@ -110,6 +112,21 @@ FOREIGN_COVERAGE = 0.5
 #: How much of the passage found best the translation reads, to know which
 #: language the knowledge is written in.
 SAMPLE_CHARS = 400
+
+#: Scripts written without spaces between words, by the start of their
+#: characters' Unicode names, and the group each counts in: Japanese mixes
+#: Chinese characters with its own, so they are one. The keyword index's words
+#: are whole phrases in these, which a question's never match, so a question
+#: in one is compared with the knowledge by its script instead.
+_UNSPACED = {
+    "CJK UNIFIED": "cjk",
+    "HIRAGANA": "cjk",
+    "KATAKANA": "cjk",
+    "THAI": "thai",
+    "LAO": "lao",
+    "KHMER": "khmer",
+    "MYANMAR": "myanmar",
+}
 
 TRANSLATE_SYSTEM = """You are given a passage from a knowledge base, between <passage> tags, and one
 or more search queries, one per line. The passage is only there to show which
@@ -320,7 +337,14 @@ async def retrieve_with_usage(
         # in the knowledge's, which the passage its own words found best shows.
         coverage = index.coverage(" ".join(queries)) if index is not None else None
         sample = next((dense[0][0].page_content for dense, _ in searched if dense), "")
-        if coverage is not None and coverage < FOREIGN_COVERAGE and sample.strip():
+        script = _unspaced_script(" ".join(queries))
+        same_script = script is not None and script == _unspaced_script(sample)
+        if (
+            coverage is not None
+            and coverage < FOREIGN_COVERAGE
+            and sample.strip()
+            and not same_script
+        ):
             translated = await translate_queries(request, queries, sample, totals)
             if translated:
                 queries = [*queries, *translated]
@@ -479,6 +503,23 @@ def _heading_trail(metadata: dict) -> str | None:
     trail = [str(level) for level in levels if level]
 
     return " > ".join(trail) or None
+
+
+def _unspaced_script(text: str) -> str | None:
+    """The script written without spaces that most of `text`'s such
+    characters are in, or None when it has none: a question in Japanese to
+    knowledge in Japanese shares no keyword-index word with it, and needs no
+    translation all the same."""
+    counts: Counter[str] = Counter()
+    for character in text:
+        if character.isalpha():
+            name = unicodedata.name(character, "")
+            group = next(
+                (g for prefix, g in _UNSPACED.items() if name.startswith(prefix)), None
+            )
+            if group:
+                counts[group] += 1
+    return counts.most_common(1)[0][0] if counts else None
 
 
 def _filename(metadata: dict) -> str | None:

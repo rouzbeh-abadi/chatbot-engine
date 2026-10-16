@@ -1018,6 +1018,43 @@ async def test_a_translation_that_fails_or_repeats_the_question_leaves_its_own_s
     assert len(hits) == 2
 
 
+async def test_a_question_in_a_script_without_spaces_is_translated_only_into_another(
+    client: TestClient,
+) -> None:
+    """Japanese is one long keyword-index word per phrase, so its coverage is
+    always nothing: a Japanese question to Japanese knowledge is not taken for
+    another language, and one to English knowledge is."""
+    response = client.put(
+        "/documents",
+        data={
+            "project_id": "jp",
+            "external_id": "fares-ja.md",
+            "chunking_strategy": "size",
+        },
+        files={
+            "file": (
+                "fares-ja.md",
+                "ベーシック運賃は払い戻しできません。".encode(),
+                "text/markdown",
+            )
+        },
+    )
+    assert response.status_code == 201, response.text
+    _seed(client)
+    model = _Translating("is the Basic fare refundable")
+
+    with patch.object(retriever, "build_chat_model", return_value=model):
+        await retrieve_with_usage(
+            _request(retrieval="hybrid", project_id="jp").model_copy(
+                update={"message": "ベーシック運賃は返金できますか"}
+            )
+        )
+        assert model.asked == []
+        await retrieve_with_usage(_asked_in("ベーシック運賃は返金できますか"))
+
+    assert len(model.asked) == 1
+
+
 async def test_vector_only_retrieval_makes_no_translation(client: TestClient) -> None:
     """Without the keyword index there is no vocabulary to tell a language by."""
     _seed(client)

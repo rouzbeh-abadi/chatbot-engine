@@ -116,7 +116,14 @@ A question in the knowledge's own language shares most of its words with it,
 its small ones above all, and costs nothing extra. One in another language
 costs one small model call and a second search. A translation that fails, or
 gives back the same words, leaves the first search as it was. In `vector`
-mode there is no vocabulary to tell a language by, and no translation.
+mode, and for a project too large for a keyword index (`MAX_INDEX_CHUNKS`),
+there is no vocabulary to tell a language by, and no translation.
+
+Scripts written without spaces between words (Chinese and Japanese, which
+count as one, Thai, Lao, Khmer, Myanmar) are whole phrases to the keyword
+index, so a question in one never shares a word with it. Such a question is
+translated only when the passage found best is not in the same script: a
+Japanese question to Japanese knowledge costs nothing extra (0.1.37).
 
 ## A minimum score
 
