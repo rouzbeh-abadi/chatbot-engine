@@ -23,10 +23,7 @@ import re
 from itertools import pairwise
 
 from langchain_core.documents import Document
-from langchain_text_splitters import (
-    MarkdownHeaderTextSplitter,
-    RecursiveCharacterTextSplitter,
-)
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from chatbot_engine.documents.models import ExtractedDocument
 
@@ -52,13 +49,14 @@ class ChunkingError(ValueError):
     long as the chunk. The caller's mistake: the routes answer 422."""
 
 
-#: The heading levels `headings` splits on. Deeper levels stay inside the
-#: section: splitting on every `####` would produce chunks of a sentence or two.
-_HEADERS = [("#", "h1"), ("##", "h2"), ("###", "h3")]
+#: A heading `headings` splits at, read from a line without the spaces around
+#: it: `#`, `##` or `###`, then a space and its title, or nothing. Deeper levels
+#: stay inside the section: splitting on every `####` would produce chunks of a
+#: sentence or two.
+_SECTION_HEADING = re.compile(r"(#{1,3})(?: (.*))?")
 
 #: A Markdown heading line at any level: up to three spaces, one to six `#`,
-#: then its title or nothing. The trailing spaces the header splitter leaves at
-#: the end of a line are allowed.
+#: then its title or nothing.
 _HEADING_LINE = re.compile(r" {0,3}#{1,6}(?:[ \t].*)?")
 
 
@@ -113,6 +111,49 @@ def _between(before: Document, after: Document, text: str) -> str:
         if end <= then and not gap.strip():
             return gap
     return "\n\n"
+
+
+def _sections(text: str) -> list[Document]:
+    """`text` cut at its `#`, `##` and `###` headings, each section with its
+    heading trail as metadata (`h1` to `h3`) and its lines as written.
+
+    Only the spaces at the end of a line go. LangChain's header splitter, used
+    before, took the spaces off both ends of every line and dropped tabs, code
+    included: a Python or YAML example lost its indentation, and with it its
+    meaning. A line inside a fenced code block is never a heading, so a shell
+    example's `# comment` stays in its section.
+    """
+    sections: list[Document] = []
+    trail: dict[int, str] = {}
+    lines: list[str] = []
+    fence = ""
+
+    def close() -> None:
+        body = "\n".join(lines).strip("\n")
+        if body.strip():
+            metadata = {f"h{level}": title for level, title in trail.items()}
+            sections.append(Document(page_content=body, metadata=metadata))
+        lines.clear()
+
+    for raw in text.split("\n"):
+        line = raw.rstrip()
+        bare = line.lstrip()
+        if fence:
+            if bare.startswith(fence):
+                fence = ""
+        elif bare.startswith("```") and bare.count("```") == 1:
+            fence = "```"
+        elif bare.startswith("~~~"):
+            fence = "~~~"
+        elif heading := _SECTION_HEADING.fullmatch(bare):
+            close()
+            level = len(heading.group(1))
+            trail = {k: v for k, v in trail.items() if k < level}
+            trail[level] = (heading.group(2) or "").strip()
+        lines.append(line)
+    close()
+
+    return sections
 
 
 class DocumentChunker:
@@ -224,9 +265,7 @@ class DocumentChunker:
         self, extracted: ExtractedDocument, metadata: dict[str, object]
     ) -> list[Document]:
         """Split at Markdown headings, keeping the heading trail on each chunk."""
-        sections = MarkdownHeaderTextSplitter(
-            headers_to_split_on=_HEADERS, strip_headers=False
-        ).split_text(extracted.text)
+        sections = _sections(extracted.text)
 
         # A document with no headings yields a single section -- the whole text.
         # That is not a heading split, so treat it as the size strategy instead.
@@ -236,8 +275,8 @@ class DocumentChunker:
         # A section that is only headings (one whose heading is followed
         # straight away by the next at its level, say) has no text of its own:
         # it goes to the start of the section after it, or, at the very end,
-        # to the one before it. The header splitter ends each line it joins
-        # with two spaces; a folded heading is joined the same way.
+        # to the one before it, a blank line apart, as Markdown sets a
+        # heading off.
         texts: list[tuple[str, dict[str, object]]] = []
         waiting: list[str] = []
         for section in sections:
@@ -247,7 +286,7 @@ class DocumentChunker:
             # The splitter puts the heading trail in metadata; keep it, so a
             # chunk knows which section it came from.
             merged = {**metadata, **section.metadata}
-            texts.append(("  \n".join([*waiting, section.page_content]), merged))
+            texts.append(("\n\n".join([*waiting, section.page_content]), merged))
             waiting = []
 
         if not texts:
@@ -255,7 +294,7 @@ class DocumentChunker:
             return self._by_size(extracted.text, metadata)
         if waiting:
             text, merged = texts[-1]
-            texts[-1] = ("  \n".join([text, *waiting]), merged)
+            texts[-1] = ("\n\n".join([text, *waiting]), merged)
 
         chunks: list[Document] = []
         for text, merged in texts:

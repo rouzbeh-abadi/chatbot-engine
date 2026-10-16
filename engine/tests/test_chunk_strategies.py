@@ -69,6 +69,27 @@ def test_headings_falls_back_when_there_are_no_headings() -> None:
     assert len(_chunk(plain, "headings", size=100)) > 1
 
 
+def test_headings_keeps_code_as_written() -> None:
+    """A Python or YAML example means what its indentation says, and a tab
+    is part of a Makefile. A `# comment` inside the code is not a heading."""
+    code = 'def refund(fare):\n    if fare.flexible:\n\treturn "full"\n    # basic fares\n    return None'
+    text = f"# Refunds\nWorked out like this:\n\n```python\n{code}\n```\n\n## Basic\nNone.\n"
+
+    chunks = _chunk(ExtractedDocument(text=text), "headings", size=1000)
+
+    assert [c.metadata.get("h2") for c in chunks] == [None, "Basic"]
+    assert f"```python\n{code}\n```" in chunks[0].page_content
+    assert chunks[0].page_content.startswith("# Refunds\nWorked out like this:\n\n")
+
+
+def test_headings_keeps_nested_lists_nested() -> None:
+    text = "# Plans\n- Pro\n  - 7,000 credits\n- Business\n\n# Fares\nNone.\n"
+
+    chunks = _chunk(ExtractedDocument(text=text), "headings")
+
+    assert chunks[0].page_content == "# Plans\n- Pro\n  - 7,000 credits\n- Business"
+
+
 # --- page ---------------------------------------------------------------------
 
 
