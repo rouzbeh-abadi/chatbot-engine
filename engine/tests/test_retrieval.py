@@ -25,12 +25,14 @@ from chatbot_engine.agent.retriever import (
     KEYWORD_FUSED,
     MAX_QUERIES,
     REWRITE_MAX_TOKENS,
+    TRANSLATE_SYSTEM,
     _fuse,
     _fuse_hybrid,
     retrieve,
     retrieve_with_usage,
     rewrite_queries,
     to_source_refs,
+    translate_queries,
 )
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest, Message
 from chatbot_engine.rag import rerank as rerank_module
@@ -1147,3 +1149,44 @@ def test_a_citation_carries_the_name_its_document_was_uploaded_under() -> None:
         [(Document(page_content="x", metadata={"source": "a.md"}), 0.1)]
     )
     assert bare.filename is None
+
+
+async def test_a_translation_names_the_knowledges_language_first_and_only_the_queries_are_searched(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The utility model writes the passages' language on a line of its own,
+    which is how gpt-4.1-mini stopped handing questions back unchanged; that
+    line is no query. A reply of nothing new is logged, without the words."""
+    passage = "How long does the referral cookie last? 60 days from the first click."
+    with patch.object(
+        retriever,
+        "build_chat_model",
+        return_value=_Translating(
+            "Language: English\nHow long does the referral cookie last?"
+        ),
+    ):
+        out = await translate_queries(_request(), ["¿Cuánto dura la cookie?"], passage)
+    assert out == ["How long does the referral cookie last?"]
+
+    with (
+        patch.object(
+            retriever,
+            "build_chat_model",
+            return_value=_Translating("Language: English\n¿Cuánto dura la cookie?"),
+        ),
+        caplog.at_level("INFO", logger="chatbot_engine.agent.retriever"),
+    ):
+        assert (
+            await translate_queries(_request(), ["¿Cuánto dura la cookie?"], passage)
+            == []
+        )
+    assert "query translation gave the same queries back" in caplog.text
+    assert "cookie" not in caplog.text
+
+    # The language to translate into is the passages', never the question's: a small model took a Japanese
+    # question's for it.
+    assert "the passages' language, never the queries'" in TRANSLATE_SYSTEM
+    assert (
+        "Language: English" in TRANSLATE_SYSTEM
+        and "Language: German" in TRANSLATE_SYSTEM
+    )

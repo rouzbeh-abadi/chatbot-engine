@@ -120,6 +120,15 @@ answered from nothing. Each search logs, at INFO, its word coverage, its
 best similarity before and after any translation, why it translated and how
 many chunks it kept: numbers, never the question.
 
+The translation names the passage's language on a line of its own before
+it translates, and is shown one example into English and one out of it.
+Without that, gpt-4.1-mini, the utility model the compose files set, handed
+most questions back unchanged and took a Japanese question's language for
+the one to translate into; with it, Spanish, French, German, Portuguese and
+Japanese questions to English knowledge, and an English one to German, are
+translated, on GPT-6 Luna and Claude Haiku 5.5 as well (0.1.39). A
+translation that gives nothing new is logged as such, without the question.
+
 A question in the knowledge's own language shares most of its words with it,
 its small ones above all, and costs nothing extra. One in another language
 costs one small model call and a second search. A translation that fails, or
