@@ -112,12 +112,21 @@ language: the utility model translates its queries into the language of the
 passage the first search found best, and those are searched as well and
 merged with the rest, then reranked like them. Since 0.1.36.
 
+A question whose own words find nothing that clears `min_score` is translated
+the same way, whatever its word count said, in `vector` mode too: a turn that
+would keep nothing tries the knowledge's language before it gives up
+(0.1.38). It costs a model call only on a turn that would otherwise have
+answered from nothing. Each search logs, at INFO, its word coverage, its
+best similarity before and after any translation, why it translated and how
+many chunks it kept: numbers, never the question.
+
 A question in the knowledge's own language shares most of its words with it,
 its small ones above all, and costs nothing extra. One in another language
 costs one small model call and a second search. A translation that fails, or
 gives back the same words, leaves the first search as it was. In `vector`
 mode, and for a project too large for a keyword index (`MAX_INDEX_CHUNKS`),
-there is no vocabulary to tell a language by, and no translation.
+there is no vocabulary to tell a language by, and only a search that finds
+nothing close enough is translated.
 
 Scripts written without spaces between words (Chinese and Japanese, which
 count as one, Thai, Lao, Khmer, Myanmar) are whole phrases to the keyword

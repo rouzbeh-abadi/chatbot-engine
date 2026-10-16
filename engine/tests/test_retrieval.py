@@ -1055,6 +1055,51 @@ async def test_a_question_in_a_script_without_spaces_is_translated_only_into_ano
     assert len(model.asked) == 1
 
 
+async def test_a_question_that_finds_nothing_close_enough_tries_the_knowledges_language(
+    client: TestClient, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Whatever the word count says: a turn that would keep nothing over
+    `min_score` is searched once more in the language of the passage found
+    best before it gives up. The log says why, in numbers, never the words."""
+    _seed(client)
+    model = _Translating("is the Basic fare refundable")
+
+    with (
+        patch.object(retriever, "build_chat_model", return_value=model),
+        caplog.at_level("INFO", logger="chatbot_engine.agent.retriever"),
+    ):
+        await retrieve_with_usage(
+            _asked_in("Is the Basic fare refundable?", min_score=0.99)
+        )
+
+    assert len(model.asked) == 1
+    (line,) = [
+        r.getMessage()
+        for r in caplog.records
+        if r.getMessage().startswith("retrieval:")
+    ]
+    assert (
+        "word coverage 1.00" in line
+        and "nothing close" in line
+        and "1 translated" in line
+    )
+    assert "Basic fare" not in line
+
+
+async def test_a_question_that_finds_something_close_enough_is_not_translated(
+    client: TestClient,
+) -> None:
+    _seed(client)
+    model = _Translating("should not be asked")
+
+    with patch.object(retriever, "build_chat_model", return_value=model):
+        await retrieve_with_usage(
+            _asked_in("Is the Basic fare refundable?", min_score=0.0)
+        )
+
+    assert model.asked == []
+
+
 async def test_vector_only_retrieval_makes_no_translation(client: TestClient) -> None:
     """Without the keyword index there is no vocabulary to tell a language by."""
     _seed(client)

@@ -9,8 +9,9 @@ Retrieval is a pipeline with two configurable stages:
          few best matches only
       -> merge across queries, best score per chunk
       -> when the queries share few words with the knowledge (another
-         language), each once more in the language of the passage found
-         best, searched and merged the same way
+         language), or found nothing that clears `min_score`, each once more
+         in the language of the passage found best, searched and merged the
+         same way
       -> drop chunks below `min_score`, and everything when nothing clears it
       -> rerank with the model against every query, when enabled
       -> keep the top `top_k`
@@ -335,16 +336,18 @@ async def retrieve_with_usage(
 
         # A question in another language than the knowledge: searched once more
         # in the knowledge's, which the passage its own words found best shows.
+        # Also a question whose own words found nothing close enough to keep,
+        # whatever the word count said: a turn that would end with nothing
+        # tries the knowledge's language before it does.
         coverage = index.coverage(" ".join(queries)) if index is not None else None
         sample = next((dense[0][0].page_content for dense, _ in searched if dense), "")
+        first = max((score for dense, _ in searched for _, score in dense), default=0.0)
         script = _unspaced_script(" ".join(queries))
         same_script = script is not None and script == _unspaced_script(sample)
-        if (
-            coverage is not None
-            and coverage < FOREIGN_COVERAGE
-            and sample.strip()
-            and not same_script
-        ):
+        foreign = coverage is not None and coverage < FOREIGN_COVERAGE
+        nothing = project.min_score is not None and first < project.min_score
+        translated: list[str] = []
+        if (foreign or nothing) and sample.strip() and not same_script:
             translated = await translate_queries(request, queries, sample, totals)
             if translated:
                 queries = [*queries, *translated]
@@ -381,6 +384,19 @@ async def retrieve_with_usage(
 
     if project.min_score is not None:
         best = _above(best, similarity, matched, project.min_score)
+
+    # Numbers only, never the question: why a turn found what it found.
+    logger.info(
+        "retrieval: %d queries, word coverage %s, best similarity %.2f before "
+        "translation and %.2f after, %d translated (%s), %d kept",
+        len(queries) - len(translated),
+        "n/a" if coverage is None else f"{coverage:.2f}",
+        first,
+        max(similarity.values(), default=0.0),
+        len(translated),
+        "other language" if foreign else "nothing close" if nothing else "not needed",
+        len(best),
+    )
 
     ranked = sorted(best.values(), key=lambda hit: hit[1], reverse=True)
     documents = [document for document, _ in ranked[: max(candidates, project.top_k)]]
