@@ -100,6 +100,24 @@ A rerank can degrade but cannot lose a turn or a candidate: a reply that is
 not a ranking, or a failed call, keeps the fused order, with a warning in the
 log.
 
+## A question in another language
+
+Embeddings match across languages, but less closely than within one: a
+question in German about an English knowledge base finds the right document,
+and often not the passage that answers it. So, in `hybrid` mode, the engine
+counts how many of the question's words occur anywhere in the knowledge (the
+keyword index's vocabulary; words of one or two letters and numbers are not
+counted). Below half (`FOREIGN_COVERAGE`), the question is taken for another
+language: the utility model translates its queries into the language of the
+passage the first search found best, and those are searched as well and
+merged with the rest, then reranked like them. Since 0.1.36.
+
+A question in the knowledge's own language shares most of its words with it,
+its small ones above all, and costs nothing extra. One in another language
+costs one small model call and a second search. A translation that fails, or
+gives back the same words, leaves the first search as it was. In `vector`
+mode there is no vocabulary to tell a language by, and no translation.
+
 ## A minimum score
 
 Every turn searches, and without a bar the top `top_k` chunks reach the model
@@ -249,7 +267,8 @@ How to read it:
 
 ## The small calls, and what they cost
 
-The query rewrite and the rerank are model calls. Both run on
+The query rewrite, the translation of a question in another language and
+the rerank are model calls. All run on
 `ENGINE_UTILITY_MODEL` when it is set, and on the assistant's own model
 otherwise; a cheap, fast model there cuts latency and cost without touching
 the answer, which neither call writes.

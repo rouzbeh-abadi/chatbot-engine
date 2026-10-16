@@ -135,6 +135,29 @@ class SparseIndex:
     def _document(self, i: int) -> Document:
         return Document(page_content=self.texts[i], metadata=dict(self.metadatas[i]))
 
+    def coverage(self, text: str) -> float | None:
+        """The share of `text`'s words that occur anywhere in the project's
+        chunks, or None when it has no word to count or nothing is indexed.
+
+        A question in the language the knowledge is written in shares most of
+        its words with it, its small ones above all; one in another language
+        shares few, often no more than a name. Words of one or two letters and
+        numbers are not counted: they say little about a language.
+        """
+        if not self.searchable or not self.texts:
+            return None
+        words = [
+            word
+            for word in dict.fromkeys(tokenize(text))
+            if len(word) > 2 and not word.isdigit()
+        ]
+        if not words:
+            return None
+        keys = np.array([hash(word) for word in words], dtype=self.terms.dtype)
+        at = np.searchsorted(self.terms, keys).clip(max=len(self.terms) - 1)
+        known = int(np.count_nonzero(self.terms[at] == keys)) if len(self.terms) else 0
+        return known / len(words)
+
     def search(self, query: str, k: int) -> list[tuple[Document, float]]:
         """The `k` best-matching chunks with their BM25 scores, best first.
 

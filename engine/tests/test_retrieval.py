@@ -30,6 +30,7 @@ from chatbot_engine.agent.retriever import (
     retrieve,
     retrieve_with_usage,
     rewrite_queries,
+    to_source_refs,
 )
 from chatbot_engine.models.chat import AssistantConfig, ChatRequest, Message
 from chatbot_engine.rag import rerank as rerank_module
@@ -918,3 +919,149 @@ async def test_a_message_of_nothing_visible_is_searched_as_it_was_sent() -> None
     assert await rewrite_queries(
         _request().model_copy(update={"message": "basic​ fare"})
     ) == ["basic fare"]
+
+
+# --- a question in another language than the knowledge ---------------------
+
+
+class _Translating:
+    """The utility model: answers `reply`, and keeps what it was asked."""
+
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+        self.asked: list[str] = []
+
+    async def ainvoke(self, messages, config=None):
+        self.asked.append(messages[-1].content)
+        return AIMessage(
+            content=self.reply,
+            usage_metadata={"input_tokens": 60, "output_tokens": 8, "total_tokens": 68},
+        )
+
+
+def _asked_in(message: str, **config: object) -> ChatRequest:
+    return _request(retrieval="hybrid", **config).model_copy(
+        update={"message": message}
+    )
+
+
+async def test_a_question_in_another_language_is_searched_again_in_the_knowledges(
+    client: TestClient,
+) -> None:
+    """Its own words match nothing the keyword half can find; translated into
+    the language of the passage it found, they name the Basic fare."""
+    _seed(client)
+    model = _Translating("is the Basic fare refundable")
+    searched: list[str] = []
+    keyword = sparse.SparseIndex.search
+
+    def recording(self, query, k):
+        searched.append(query)
+        return keyword(self, query, k)
+
+    with (
+        patch.object(retriever, "build_chat_model", return_value=model),
+        patch.object(sparse.SparseIndex, "search", recording),
+    ):
+        hits, spent = await retrieve_with_usage(
+            _asked_in("Ist der Basistarif erstattungsfähig?")
+        )
+
+    # Searched in its own words, then in the knowledge's, where the keyword half finds the fare by its name.
+    assert searched == [
+        "Ist der Basistarif erstattungsfähig?",
+        "is the Basic fare refundable",
+    ]
+    assert "fares.md" in _sources(hits)
+    # One call, given the question and a passage of the knowledge to read its language from.
+    assert len(model.asked) == 1
+    assert "Ist der Basistarif erstattungsfähig?" in model.asked[0]
+    assert "<passage>" in model.asked[0]
+    assert (spent["utility_input_tokens"], spent["calls"]) == (60, 1)
+
+
+async def test_a_question_in_the_knowledges_own_language_costs_no_translation(
+    client: TestClient,
+) -> None:
+    _seed(client)
+    model = _Translating("should not be asked")
+
+    with patch.object(retriever, "build_chat_model", return_value=model):
+        hits, spent = await retrieve_with_usage(
+            _asked_in("Is the Basic fare refundable?")
+        )
+
+    assert model.asked == []
+    assert spent.get("calls", 0) == 0
+    assert "fares.md" in _sources(hits)
+
+
+async def test_a_translation_that_fails_or_repeats_the_question_leaves_its_own_search(
+    client: TestClient,
+) -> None:
+    _seed(client)
+
+    class Down:
+        async def ainvoke(self, messages, config=None):
+            raise RuntimeError("provider 503")
+
+    with patch.object(retriever, "build_chat_model", return_value=Down()):
+        hits, spent = await retrieve_with_usage(_asked_in("Ist der Basistarif gut?"))
+    assert len(hits) == 2
+    assert spent.get("calls", 0) == 0
+
+    # The same words back, in any case: nothing more to search.
+    same = _Translating("ist der basistarif gut?")
+    with patch.object(retriever, "build_chat_model", return_value=same):
+        hits, _ = await retrieve_with_usage(_asked_in("Ist der Basistarif gut?"))
+    assert len(same.asked) == 1
+    assert len(hits) == 2
+
+
+async def test_vector_only_retrieval_makes_no_translation(client: TestClient) -> None:
+    """Without the keyword index there is no vocabulary to tell a language by."""
+    _seed(client)
+    model = _Translating("is the Basic fare refundable")
+
+    with patch.object(retriever, "build_chat_model", return_value=model):
+        await retrieve_with_usage(
+            _request(retrieval="vector").model_copy(
+                update={"message": "Ist der Basistarif erstattungsfähig?"}
+            )
+        )
+
+    assert model.asked == []
+
+
+def test_coverage_is_the_share_of_a_texts_words_the_knowledge_holds(
+    client: TestClient,
+) -> None:
+    _seed(client)
+    sparse.invalidate()
+    index = sparse.sparse_index(open_vector_store(None, "support"), "support")
+    assert index is not None
+    # "is" is too short to count; "the", "basic", "fare" and "refundable" are all in the fares.
+    assert index.coverage("Is the Basic fare refundable?") == 1.0
+    # Neither "for" nor "pets" is anywhere in the knowledge: three words of five.
+    assert index.coverage("the Basic fare for pets") == 0.6
+    assert index.coverage("Ist der Basistarif erstattungsfähig?") == 0.0
+    # Short words and numbers say nothing about a language.
+    assert index.coverage("is 42") is None
+    assert index.coverage("") is None
+
+
+def test_a_citation_carries_the_name_its_document_was_uploaded_under() -> None:
+    chunk = Document(
+        page_content="Commission is 30%.",
+        metadata={
+            "doc_id": "d1",
+            "source": "gdoc:1AbC",
+            "filename": "Affiliate program.md",
+        },
+    )
+    (ref,) = to_source_refs([(chunk, 0.8)])
+    assert (ref.source, ref.filename) == ("gdoc:1AbC", "Affiliate program.md")
+    (bare,) = to_source_refs(
+        [(Document(page_content="x", metadata={"source": "a.md"}), 0.1)]
+    )
+    assert bare.filename is None

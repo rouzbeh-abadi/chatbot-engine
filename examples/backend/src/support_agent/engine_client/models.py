@@ -194,6 +194,7 @@ class SourceRef(BaseModel):
     heading: str | None = None
     page: int | None = None
     excerpt: str | None = None
+    filename: str | None = None
 
 
 class RetrievalEvent(BaseModel):

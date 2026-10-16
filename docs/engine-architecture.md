@@ -74,7 +74,8 @@ flowchart LR
    LangGraph one, is an installed plugin. See [agents.md](agents.md).
 5. **`agent/retriever.py`** performs retrieval: rewrite the query, search the
    vector store and, under `hybrid`, the keyword index in `rag/sparse.py`,
-   fuse the rankings, rerank with the model when enabled, and return the hits
+   search again in the knowledge's language when the question shares few
+   words with it, fuse the rankings, rerank with the model when enabled, and return the hits
    and the numbered context, each extract cleaned of what a reader cannot see
    and unable to close its frame (`untrusted.py`). The extracts travel in the
    person's turn, never the system role. See [retrieval.md](retrieval.md) for

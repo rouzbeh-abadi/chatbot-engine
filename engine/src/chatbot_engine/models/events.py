@@ -25,6 +25,8 @@ class SourceRef(BaseModel):
     `heading` and `page` are present when the chunking strategy recorded them:
     the heading trail under `headings`, the page number under `page`. Either is
     what lets a citation name a section or a page rather than only a file.
+    `filename` is the name the document was uploaded under, which a citation
+    can show where `source` (the caller's id for it) means nothing to a reader.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -35,6 +37,7 @@ class SourceRef(BaseModel):
     heading: str | None = None
     page: int | None = None
     excerpt: str | None = None
+    filename: str | None = None
 
 
 class RetrievalEvent(_Event):
