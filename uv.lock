@@ -560,7 +560,7 @@ requires-dist = [
     { name = "langchain-core" },
     { name = "langchain-openai" },
     { name = "langchain-text-splitters" },
-    { name = "langfuse", marker = "extra == 'tracing'", specifier = ">=3" },
+    { name = "langfuse", marker = "extra == 'tracing'", specifier = ">=4.7.0,<5" },
     { name = "mcp", specifier = ">=2.0" },
     { name = "numpy", specifier = ">=2" },
     { name = "prometheus-client", specifier = ">=0.20" },

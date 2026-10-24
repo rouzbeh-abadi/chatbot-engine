@@ -47,8 +47,11 @@ redis = [
     "redis>=5",
 ]
 # Traces to Langfuse (`ENGINE_TRACING=langfuse`). LangSmith needs no extra.
+# 4.7.0 is the first to send Langfuse v4's ingestion, which Langfuse Cloud
+# requires from 16 November 2026; v5 drops methods tracing.py does not use but
+# changes the client registry it reads, so it is a separate upgrade.
 tracing = [
-    "langfuse>=3",
+    "langfuse>=4.7.0,<5",
 ]
 postgres = [
     "psycopg[binary]>=3.2",
