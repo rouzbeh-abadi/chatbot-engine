@@ -112,6 +112,15 @@ language: the utility model translates its queries into the language of the
 passage the first search found best, and those are searched as well and
 merged with the rest, then reranked like them. Since 0.1.36.
 
+Merging compares the queries' fused scores, so since 0.1.40 every query's are
+on one scale: 1.0 is first in both of its rankings, the vector search and the
+keyword search. Before, each query's own best was 1.0. The question's own
+words find nothing by keyword in another language, so their first vector hit,
+mostly noise, scored 1.0, while the passage the translation found by meaning
+alone scored half that and could drop out of the top: a Greek "how many days
+do I have to return a lamp?" lost the returns page to the FAQ. Now the two
+tie at most, and equal scores go to the passage closer to the question.
+
 A question whose own words find nothing that clears `min_score` is translated
 the same way, whatever its word count said, in `vector` mode too: a turn that
 would keep nothing tries the knowledge's language before it gives up
@@ -151,8 +160,8 @@ thousand characters of unrelated context in the answer's prompt, a rerank
 call when reranking is on, and sources shown for small talk.
 
 `min_score` sets that bar on vector similarity, the score a chunk is cited
-with (see [Scores](#scores)). The fused score cannot serve: it is relative to
-the result set, so its best chunk is always 1.0.
+with (see [Scores](#scores)). The fused score cannot serve: it says how a
+chunk ranked, not how close it is.
 
 - When no chunk reaches `min_score`, nothing is retrieved: no context, no
   rerank call, no sources. The model answers from the conversation alone.

@@ -387,9 +387,9 @@ async def retrieve_with_usage(
     # chunk can come back from both searches and from several queries.
     best: dict[str, Hit] = {}
     # The best vector similarity each chunk reached, for `min_score` and for
-    # the score it is cited with. Fused scores are relative to the result set
-    # (the top one is always 1.0), so only the similarity says whether
-    # anything is actually close.
+    # the score it is cited with. Fused scores say how a chunk ranked, not how
+    # close it is, so only the similarity says whether anything is actually
+    # close.
     similarity: dict[str, float] = {}
     # Each query's best keyword match, which `min_score` keeps regardless.
     matched: set[str] = set()
@@ -425,7 +425,13 @@ async def retrieve_with_usage(
         len(best),
     )
 
-    ranked = sorted(best.values(), key=lambda hit: hit[1], reverse=True)
+    # Equal ranks, which chunks first in a search of their own often have, go
+    # to the chunk closer to the question.
+    ranked = sorted(
+        best.values(),
+        key=lambda hit: (hit[1], similarity.get(hit[0].page_content, 0.0)),
+        reverse=True,
+    )
     documents = [document for document, _ in ranked[: max(candidates, project.top_k)]]
 
     if do_rerank and documents:
@@ -488,12 +494,19 @@ def _fuse_hybrid(
 
 
 def _fuse(*rankings: list[tuple[Document, float]]) -> list[Hit]:
-    """Reciprocal rank fusion, normalised so the best chunk scores 1.0.
+    """Reciprocal rank fusion, as a share of the most a chunk can score.
 
     Each ranking contributes 1 / (RRF_K + rank) per chunk. Ranks rather than
     scores, because a vector similarity and a BM25 score are not on a common
     scale and any attempt to put them on one is a guess. The fused score
     orders the chunks; it is not what they are cited with.
+
+    The share is of first place in every ranking, 1.0, the same for every
+    query, so the scores of a message's several queries compare when they are
+    merged. Each query's own best was 1.0 until 0.1.40: a question in another
+    language, whose keyword half finds nothing, then scored its first vector
+    hit, mostly noise, 1.0, above the passage its translation found by meaning
+    alone, which scored half that, and the passage was dropped.
     """
     fused: dict[str, float] = {}
     documents: dict[str, Document] = {}
@@ -506,7 +519,7 @@ def _fuse(*rankings: list[tuple[Document, float]]) -> list[Hit]:
 
     if not fused:
         return []
-    top = max(fused.values())
+    top = len(rankings) / (RRF_K + 1)
     return sorted(
         ((documents[key], score / top) for key, score in fused.items()),
         key=lambda hit: hit[1],

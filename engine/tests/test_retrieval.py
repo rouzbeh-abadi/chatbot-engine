@@ -148,7 +148,21 @@ def test_fusion_ranks_a_chunk_both_searches_found_above_one_only_one_found() -> 
 
     order = [d.page_content for d, _ in fused]
     assert order[-1] == "a", "first in one search loses to any chunk in both"
-    assert fused[0][1] == 1.0
+    assert 0.0 < fused[0][1] < 1.0, "only first in both rankings is 1.0"
+
+
+def test_fusion_scores_every_query_on_one_scale() -> None:
+    """First in every ranking is 1.0 for any query, so the queries of one
+    message compare when they are merged: a query whose keyword half found
+    nothing scores its first vector hit half that, as much as a chunk another
+    query found first by meaning alone, not 1.0."""
+    a, b = Document(page_content="a"), Document(page_content="b")
+
+    assert _fuse_hybrid([(a, 0.9)], [(a, 5.0)])[0][1] == pytest.approx(1.0)
+    assert _fuse_hybrid([(a, 0.9)], [])[0][1] == pytest.approx(0.5)
+    assert dict(
+        (d.page_content, s) for d, s in _fuse_hybrid([(a, 0.9)], [(b, 5.0)])
+    ) == pytest.approx({"a": 0.5, "b": 0.5})
 
 
 def test_fusion_of_nothing_is_nothing() -> None:
@@ -980,6 +994,47 @@ async def test_a_question_in_another_language_is_searched_again_in_the_knowledge
     assert "Ist der Basistarif erstattungsfähig?" in model.asked[0]
     assert "<passage>" in model.asked[0]
     assert (spent["utility_input_tokens"], spent["calls"]) == (60, 1)
+
+
+async def test_a_question_in_another_language_keeps_the_passage_its_translation_found(
+    client: TestClient,
+) -> None:
+    """Its own words find nothing by keyword, so their vector hits, mostly
+    noise across languages, are fused alone. Scored against each query's own
+    best, they came first, and the passage the translation found by meaning
+    alone, at half that, was dropped: a Greek "how many days do I have to
+    return a lamp?" lost the returns page to the FAQ. On one scale for every
+    query, the noise ties with that passage at best, and the tie goes to the
+    passage closer to the question."""
+    _seed(client)
+
+    def doc(name: str) -> Document:
+        return Document(page_content=CHUNKS[name], metadata={"source": name})
+
+    translation = "how much is a refund on the cheapest ticket"
+
+    async def dense(store, project_id, query, k):
+        if query == translation:
+            # The answer, by meaning alone; check-in is found by both searches.
+            return [(doc("fares.md"), 0.62), (doc("checkin.md"), 0.35)]
+        # The question's own words, across languages.
+        return [(doc("baggage.md"), 0.31), (doc("seats.md"), 0.30)]
+
+    def keyword(self, query, k):
+        return [(doc("checkin.md"), 3.0)] if query == translation else []
+
+    with (
+        patch.object(retriever, "_dense", dense),
+        patch.object(sparse.SparseIndex, "search", keyword),
+        patch.object(
+            retriever, "build_chat_model", return_value=_Translating(translation)
+        ),
+    ):
+        hits = await retrieve(
+            _asked_in("Ist der Basistarif erstattungsfähig?", top_k=2)
+        )
+
+    assert _sources(hits) == ["checkin.md", "fares.md"]
 
 
 async def test_a_question_in_the_knowledges_own_language_costs_no_translation(
