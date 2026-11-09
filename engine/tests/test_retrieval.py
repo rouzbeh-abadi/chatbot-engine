@@ -860,6 +860,58 @@ async def test_with_hybrid_a_keyword_hit_joins_a_question_that_is_on_topic(
     assert set(_sources(hits)) == {"baggage.md", "fares.md"}
 
 
+async def test_a_keyword_match_below_the_bar_takes_no_place_from_a_chunk_that_clears_it(
+    client: TestClient,
+) -> None:
+    """A question that needs two chunks, and a third that shares only its
+    small words with it: the keyword search's best match, far below the bar.
+    In both rankings, fusion put it first, and with two places it left out a
+    chunk the question needed, as "How do I contact you?" left out the Orbit
+    for the lamp shop's "I want an Orbit and a Pebble sent to Hamburg". It is
+    still kept, in a place that is left."""
+    _seed(client)
+
+    def doc(name: str) -> Document:
+        return Document(page_content=CHUNKS[name], metadata={"source": name})
+
+    async def dense(store, project_id, query, k):
+        # The two the question needs clear the bar; the other two are far off.
+        return [
+            (doc("fares.md"), 0.55),
+            (doc("baggage.md"), 0.45),
+            (doc("seats.md"), 0.25),
+            (doc("checkin.md"), 0.2),
+        ]
+
+    def keyword(self, query, k):
+        # Matched on the question's small words alone.
+        return [(doc("seats.md"), 6.0), (doc("checkin.md"), 3.0)]
+
+    def asked(**config: object) -> ChatRequest:
+        return _request(retrieval="hybrid", **config).model_copy(
+            update={
+                "message": "Is the Basic fare refundable, and how heavy can my "
+                "cabin bag be?"
+            }
+        )
+
+    with (
+        patch.object(retriever, "_dense", dense),
+        patch.object(sparse.SparseIndex, "search", keyword),
+        patch.object(
+            retriever, "build_chat_model", side_effect=AssertionError("model call")
+        ),
+    ):
+        two = await retrieve(asked(min_score=0.4, top_k=2))
+        three = await retrieve(asked(min_score=0.4, top_k=3))
+        unbarred = await retrieve(asked(top_k=2))
+
+    assert _sources(two) == ["fares.md", "baggage.md"]
+    assert _sources(three) == ["fares.md", "baggage.md", "seats.md"]
+    # Without a bar every chunk counts as close, and fusion's order stands.
+    assert _sources(unbarred) == ["seats.md", "checkin.md"]
+
+
 async def test_without_a_minimum_every_chunk_is_kept_as_before(
     client: TestClient,
 ) -> None:

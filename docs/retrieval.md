@@ -10,7 +10,7 @@ question
   -> per query, all at once: vector search, and keyword search under `hybrid`
   -> rankings fused (reciprocal rank fusion)
   -> merged across queries, best score per chunk
-  -> dropped below `min_score`, when set
+  -> dropped below `min_score`, when set; a keyword match kept below it goes last
   -> reranked by the model against every query, when `rerank` is on
   -> the top `top_k` reach the model
 ```
@@ -169,6 +169,19 @@ chunk ranked, not how close it is.
   query's best keyword match, since an exact term the embedding blurs is what
   hybrid retrieval is for. Only the best match: nearly every chunk shares a
   common word with a question.
+- A keyword match kept below `min_score` comes after every chunk that
+  reaches it, so it fills a place that is left and never takes one.
+
+Without that last rule a keyword match outranked the passages a question
+needed. Being in both rankings beats being first in one, and on a small help
+centre the keyword half's best match is mostly the question's own small
+words: an FAQ entry headed "How do I contact you?" shares "I", "do" and "to"
+with nearly any question a customer writes. "I want an Orbit and a Pebble
+sent to Hamburg. What do I pay in total?" put that entry, at a similarity of
+0.28, second of its five chunks, and the Orbit's passage, at 0.353, was the
+one left out. On that help centre (nine pages, 27 chunks), over 82 questions
+and bits of small talk, all 18 chunks a keyword match kept below the bar
+were ones the answer did not need.
 
 The rewrite still runs on a turn with history, since the rewritten query is
 what is compared.

@@ -12,7 +12,8 @@ Retrieval is a pipeline with two configurable stages:
          language), or found nothing that clears `min_score`, each once more
          in the language of the passage found best, searched and merged the
          same way
-      -> drop chunks below `min_score`, and everything when nothing clears it
+      -> drop chunks below `min_score`, and everything when nothing clears it;
+         a keyword match kept below it ranks after the chunks that reach it
       -> rerank with the model against every query, when enabled
       -> keep the top `top_k`
 
@@ -425,11 +426,17 @@ async def retrieve_with_usage(
         len(best),
     )
 
-    # Equal ranks, which chunks first in a search of their own often have, go
-    # to the chunk closer to the question.
+    # A chunk kept below `min_score` for its keyword match alone comes after
+    # every chunk that reaches it (`_close_first`). Equal ranks, which chunks
+    # first in a search of their own often have, go to the chunk closer to the
+    # question.
     ranked = sorted(
         best.values(),
-        key=lambda hit: (hit[1], similarity.get(hit[0].page_content, 0.0)),
+        key=lambda hit: (
+            _close_first(similarity.get(hit[0].page_content, 0.0), project.min_score),
+            hit[1],
+            similarity.get(hit[0].page_content, 0.0),
+        ),
         reverse=True,
     )
     documents = [document for document, _ in ranked[: max(candidates, project.top_k)]]
@@ -464,7 +471,8 @@ def _above(
     reaches it, plus each query's best keyword match, since exact terms the
     embedding blurs are what hybrid retrieval is for. Only the best: nearly
     every chunk shares some word with a question ("is", "the"), so keeping all
-    keyword matches would keep nearly everything.
+    keyword matches would keep nearly everything. A match kept below the bar
+    ranks after the chunks that reach it (`_close_first`).
     """
     if not any(score >= min_score for score in similarity.values()):
         return {}
@@ -473,6 +481,22 @@ def _above(
         for key, hit in best.items()
         if key in matched or similarity.get(key, 0.0) >= min_score
     }
+
+
+def _close_first(similarity: float, min_score: float | None) -> bool:
+    """Whether a kept chunk ranks with the chunks that reach `min_score`.
+
+    A chunk `_above` keeps below it, for its keyword match alone, ranks after
+    every one that reaches it, so it fills a place that is left rather than
+    taking one. A keyword match puts a chunk in both rankings, which fusion
+    ranks above any chunk found by meaning alone, and on a small help centre
+    the match is mostly a question's own small words: "How do I contact
+    you?", at a similarity of 0.28, matched "I", "do" and "to" in "I want an
+    Orbit and a Pebble sent to Hamburg. What do I pay in total?", came second,
+    and with five places the Orbit's passage, at 0.353, was the one left out.
+    Without a `min_score` every chunk counts as close.
+    """
+    return min_score is None or similarity >= min_score
 
 
 async def _dense(
