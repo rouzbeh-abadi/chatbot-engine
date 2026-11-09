@@ -540,7 +540,7 @@ def _is_code(word: str) -> bool:
         return False
     if word.isdigit():
         return len(word) >= 3
-    return not word[0].isdigit()
+    return word[0].isalpha()
 
 
 async def _dense(

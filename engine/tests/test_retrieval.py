@@ -981,6 +981,8 @@ async def test_a_keyword_match_on_a_code_keeps_its_place_below_the_bar(
         ("Is there an 8W version?", "Comes with an E27 LED bulb (8W).", False),
         # A word that starts with a letter and holds a digit is a code.
         ("Is SKU12 back in stock?", "SKU12 is the walnut Halo.", True),
+        # Accepted: a superscript unit folds into a word that starts with a letter.
+        ("Do you deliver a pallet over 2 m³?", "Parcels up to 1 m³ ship free.", True),
         # Three digits or more count, a year among them.
         ("Order 4012 has not arrived.", "Page 4012 lists the returns address.", True),
         ("Is it open on 3 November 2026?", "© 2026 Lumen Lamps GmbH", True),

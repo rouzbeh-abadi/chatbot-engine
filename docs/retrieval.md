@@ -211,6 +211,11 @@ What the rule costs:
   ("iPhone 15") and a code written with a hyphen ("E-27", "GU-10", which the
   keyword index splits into "e" and "27") are demoted like a word's match,
   and so is a code that starts with a digit ("4K", "3M").
+- Some quantities read as codes. A unit with a superscript folds into a word
+  with a digit ("m²" becomes "m2", "m³" becomes "m3"), and so does a price
+  with its currency code first ("EUR79"). A question about "2 m³" therefore
+  keeps a match on any chunk that names m³ in its place below the bar, as a
+  code would.
 - The bar is a line, with no margin: under a bar of 0.35 a match at 0.349
   is demoted and one at 0.35 is not. An embedding can differ by a thousandth
   from one call to the next, so a match that close to the bar can rank
