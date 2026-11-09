@@ -509,17 +509,30 @@ def _ranking(
 
 
 def _shares_a_code(query: str, text: str) -> bool:
-    """Whether `text` holds a word of `query` with a digit in it.
+    """Whether `text` holds a word of `query` that is a code.
 
     A part number, an error code, a model or an order number ("E27",
     "LX318", "502") is the exact term an embedding blurs and the keyword
     search is for, so a keyword match on one keeps its place below
     `min_score`. Words of letters alone do not count, capitals included: an
     acronym ("EU", "DHL") is mostly a word the embedding knows, and a message
-    typed in capitals would make every word one.
+    typed in capitals would make every word one. Nor do short numbers: a
+    quantity, an hour or a day ("9 lamps", "24/7", "after 8 months") meets
+    the same number in an unrelated passage by chance (`_is_code`).
     """
-    codes = {word for word in sparse.tokenize(query) if any(c.isdigit() for c in word)}
+    codes = {word for word in sparse.tokenize(query) if _is_code(word)}
     return bool(codes) and not codes.isdisjoint(sparse.tokenize(text))
+
+
+def _is_code(word: str) -> bool:
+    """Whether a keyword-index word reads as a code: letters with digits
+    ("E27", "LX318", "B7"), or a number of three digits or more ("502",
+    "4012"). A number of one or two digits is mostly a quantity, an hour or a
+    day. A year has four digits and counts, so a question that names one
+    keeps a match on a passage that names the same year.
+    """
+    digits = sum(c.isdigit() for c in word)
+    return digits > 0 and (digits < len(word) or digits >= 3)
 
 
 async def _dense(

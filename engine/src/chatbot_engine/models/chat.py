@@ -170,8 +170,8 @@ class AssistantConfig(BaseModel):
     #: so the answer's prompt carries no context and no rerank call is made.
     #: With `hybrid`, the best keyword match is kept alongside, but only when
     #: at least one chunk clears the bar, and below the bar it comes after the
-    #: chunks that clear it unless it matched a word with a digit in it (a
-    #: part number, an error code). What a good value is
+    #: chunks that clear it unless it matched a code (letters with digits, or
+    #: three digits or more: a part number, an error code). What a good value is
     #: depends on the embedding model; around 0.4 suits
     #: text-embedding-3-small. None keeps every chunk, as before.
     min_score: float | None = Field(default=None, ge=0.0, le=1.0)
