@@ -28,6 +28,7 @@ from chatbot_engine.agent.retriever import (
     TRANSLATE_SYSTEM,
     _fuse,
     _fuse_hybrid,
+    _shares_a_code,
     retrieve,
     retrieve_with_usage,
     rewrite_queries,
@@ -185,7 +186,9 @@ def test_common_words_do_not_push_out_the_chunk_closest_in_meaning() -> None:
 
     assert answer.page_content in top5
     assert answer.page_content not in everything, "fusing every keyword hit loses it"
-    # The keyword search's best still ranks first: exact terms keep their weight.
+    # The keyword search's best still ranks first in fusion: exact terms keep
+    # their weight. Below `min_score` only a code keeps that place (see the
+    # tests of the minimum score).
     assert top5[0] == others[0].page_content
     assert KEYWORD_FUSED == 3
 
@@ -864,12 +867,12 @@ async def test_a_keyword_match_below_the_bar_takes_no_place_from_a_chunk_that_cl
     client: TestClient,
 ) -> None:
     """A question that needs two chunks, and a third that shares only its
-    small words with it: the keyword search's best match, far below the bar.
+    small words with it, far below the bar: the keyword search's best match.
     In both rankings, fusion put it first, and with two places it left out a
-    chunk the question needed, as "How do I contact you?" left out the Orbit
-    for the lamp shop's "I want an Orbit and a Pebble sent to Hamburg". It is
-    still kept, in a place that is left."""
+    chunk the question needed (the Orbit in docs/retrieval.md, "A minimum
+    score"). It is still kept, in a place that is left."""
     _seed(client)
+    model = _Translating("should not be asked")
 
     def doc(name: str) -> Document:
         return Document(page_content=CHUNKS[name], metadata={"source": name})
@@ -898,18 +901,82 @@ async def test_a_keyword_match_below_the_bar_takes_no_place_from_a_chunk_that_cl
     with (
         patch.object(retriever, "_dense", dense),
         patch.object(sparse.SparseIndex, "search", keyword),
-        patch.object(
-            retriever, "build_chat_model", side_effect=AssertionError("model call")
-        ),
+        patch.object(retriever, "build_chat_model", return_value=model),
     ):
         two = await retrieve(asked(min_score=0.4, top_k=2))
         three = await retrieve(asked(min_score=0.4, top_k=3))
         unbarred = await retrieve(asked(top_k=2))
 
+    assert model.asked == []
     assert _sources(two) == ["fares.md", "baggage.md"]
     assert _sources(three) == ["fares.md", "baggage.md", "seats.md"]
     # Without a bar every chunk counts as close, and fusion's order stands.
     assert _sources(unbarred) == ["seats.md", "checkin.md"]
+
+
+async def test_a_keyword_match_on_a_code_keeps_its_place_below_the_bar(
+    client: TestClient,
+) -> None:
+    """A flight number, a part number or an error code is the exact term an
+    embedding blurs and the keyword search is for. Matched on one, a chunk
+    far below the bar keeps the place fusion gave it; the same chunk matched
+    on an ordinary word of the question comes after the chunks that clear
+    the bar."""
+    _seed(client)
+    model = _Translating("should not be asked")
+    flight = Document(
+        page_content="Flight LX318 boards at gate B7.",
+        metadata={"source": "flights.md"},
+    )
+
+    def doc(name: str) -> Document:
+        return Document(page_content=CHUNKS[name], metadata={"source": name})
+
+    async def dense(store, project_id, query, k):
+        return [(doc("baggage.md"), 0.55), (doc("checkin.md"), 0.45), (flight, 0.25)]
+
+    def keyword(self, query, k):
+        return [(flight, 6.0)]
+
+    def asked(message: str) -> ChatRequest:
+        return _request(retrieval="hybrid", min_score=0.4, top_k=2).model_copy(
+            update={"message": message}
+        )
+
+    with (
+        patch.object(retriever, "_dense", dense),
+        patch.object(sparse.SparseIndex, "search", keyword),
+        patch.object(retriever, "build_chat_model", return_value=model),
+    ):
+        code = await retrieve(
+            asked("Can my cabin bag on flight LX318 be eight kilograms?")
+        )
+        word = await retrieve(
+            asked("Can my cabin bag on the flight be eight kilograms?")
+        )
+
+    assert model.asked == []
+    assert _sources(code) == ["flights.md", "baggage.md"]
+    assert _sources(word) == ["baggage.md", "checkin.md"]
+
+
+@pytest.mark.parametrize(
+    ("query", "text", "shares"),
+    [
+        ("Is flight LX318 on time?", "Flight LX318 boards at gate B7.", True),
+        ("What does error 502 mean?", "Error 502: the server did not answer.", True),
+        ("Does it take an E27 bulb?", "Comes with an E27 LED bulb (8 W).", True),
+        # Small words, and words of letters alone, capitals included, are no code.
+        ("How do I contact you?", "How do I contact you? Write to us.", False),
+        ("Do you ship to the EU?", "Other EU countries: 4 to 7 business days.", False),
+        # A code the chunk does not hold.
+        ("Does it take an E14 bulb?", "Comes with an E27 LED bulb (8 W).", False),
+    ],
+)
+def test_a_code_is_a_word_of_the_question_with_a_digit_that_the_chunk_holds(
+    query: str, text: str, shares: bool
+) -> None:
+    assert _shares_a_code(query, text) is shares
 
 
 async def test_without_a_minimum_every_chunk_is_kept_as_before(
