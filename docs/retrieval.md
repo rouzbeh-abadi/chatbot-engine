@@ -175,7 +175,7 @@ chunk ranked, not how close it is.
   query's best keyword match, since an exact term the embedding blurs is what
   hybrid retrieval is for. Only the best match: nearly every chunk shares a
   common word with a question.
-- A keyword match kept below `min_score` comes after every chunk that
+- Since 0.1.41, a keyword match kept below `min_score` comes after every chunk that
   reaches it, unless the words it matched include a code: a word that
   starts with a letter and holds a digit ("E27", "LX318", "B7", "SKU12") or a
   number of three digits or more ("502", "4012"), such as a part number, an
