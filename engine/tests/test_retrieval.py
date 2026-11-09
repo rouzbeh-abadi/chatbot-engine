@@ -975,12 +975,18 @@ async def test_a_keyword_match_on_a_code_keeps_its_place_below_the_bar(
         ("It broke after 8 months.", "Comes with an E27 LED bulb (8 W).", False),
         ("Can I order 9 lamps?", "We answer Mon-Fri, 9-17.", False),
         ("Are you open 24/7?", "Support: 24 hours a day, 7 days a week.", False),
+        # Nor is a number with its unit attached: an hour, a day, a quantity.
+        ("Will it ship if I order before 5pm?", "We answer Mon-Fri, 9am-5pm.", False),
+        ("Can it arrive on the 3rd?", "We never share data with 3rd parties.", False),
+        ("Is there an 8W version?", "Comes with an E27 LED bulb (8W).", False),
+        # A word that starts with a letter and holds a digit is a code.
+        ("Is SKU12 back in stock?", "SKU12 is the walnut Halo.", True),
         # Three digits or more count, a year among them.
         ("Order 4012 has not arrived.", "Page 4012 lists the returns address.", True),
         ("Is it open on 3 November 2026?", "© 2026 Lumen Lamps GmbH", True),
     ],
 )
-def test_a_code_is_a_word_of_the_question_with_letters_and_digits_or_three_digits_that_the_chunk_holds(
+def test_a_code_starts_with_a_letter_and_holds_a_digit_or_has_three_digits_and_the_chunk_holds_it(
     query: str, text: str, shares: bool
 ) -> None:
     assert _shares_a_code(query, text) is shares

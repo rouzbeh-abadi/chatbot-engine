@@ -516,23 +516,31 @@ def _shares_a_code(query: str, text: str) -> bool:
     search is for, so a keyword match on one keeps its place below
     `min_score`. Words of letters alone do not count, capitals included: an
     acronym ("EU", "DHL") is mostly a word the embedding knows, and a message
-    typed in capitals would make every word one. Nor do short numbers: a
-    quantity, an hour or a day ("9 lamps", "24/7", "after 8 months") meets
-    the same number in an unrelated passage by chance (`_is_code`).
+    typed in capitals would make every word one. Nor do short numbers, or a
+    number with its unit: a quantity, an hour or a day ("9 lamps", "24/7",
+    "before 5pm", "the 3rd", "8W") meets the same number in an unrelated
+    passage by chance (`_is_code`).
     """
     codes = {word for word in sparse.tokenize(query) if _is_code(word)}
     return bool(codes) and not codes.isdisjoint(sparse.tokenize(text))
 
 
 def _is_code(word: str) -> bool:
-    """Whether a keyword-index word reads as a code: letters with digits
-    ("E27", "LX318", "B7"), or a number of three digits or more ("502",
-    "4012"). A number of one or two digits is mostly a quantity, an hour or a
-    day. A year has four digits and counts, so a question that names one
-    keeps a match on a passage that names the same year.
+    """Whether a keyword-index word reads as a code: a word that starts with
+    a letter and holds a digit ("E27", "LX318", "B7", "SKU12"), or a number
+    of three digits or more ("502", "4012").
+
+    A word that starts with a digit is a number with its unit ("5pm", "3rd",
+    "8w", "5kg"), mostly a quantity, an hour or a day, and so is a number of
+    one or two digits. A longer number counts whatever it names: a year, a
+    postcode or a price ("2026", "20095", "€129") keeps a match on a passage
+    that holds the same number.
     """
-    digits = sum(c.isdigit() for c in word)
-    return digits > 0 and (digits < len(word) or digits >= 3)
+    if not any(c.isdigit() for c in word):
+        return False
+    if word.isdigit():
+        return len(word) >= 3
+    return not word[0].isdigit()
 
 
 async def _dense(

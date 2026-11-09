@@ -176,11 +176,13 @@ chunk ranked, not how close it is.
   hybrid retrieval is for. Only the best match: nearly every chunk shares a
   common word with a question.
 - A keyword match kept below `min_score` comes after every chunk that
-  reaches it, unless the words it matched include a code: letters with
-  digits ("E27", "LX318", "B7") or a number of three digits or more ("502",
-  "4012"), such as a part number, an error code or an order number. A match
-  on a code keeps the place fusion gave it. A number of one or two digits is
-  no code: it is mostly a quantity, an hour or a day ("9 lamps", "24/7").
+  reaches it, unless the words it matched include a code: a word that
+  starts with a letter and holds a digit ("E27", "LX318", "B7", "SKU12") or a
+  number of three digits or more ("502", "4012"), such as a part number, an
+  error code or an order number. A match on a code keeps the place fusion
+  gave it. A number of one or two digits is no code, and nor is a number with
+  its unit attached: it is mostly a quantity, an hour or a day ("9 lamps",
+  "24/7", "before 5pm", "the 3rd", "8W").
 
 Before that rule a keyword match outranked the passages a question needed.
 Being in both rankings beats being first in one, and on a small help centre
@@ -202,9 +204,13 @@ What the rule costs:
   on a name whose chunk scores that low, a larger `top_k` or a lower
   `min_score` gives it room again.
 - A longer number the chunk holds by chance still counts as a code: a
-  question that names a year ("3 November 2026") would keep a match on a
-  footer's "© 2026" in its place below the bar. A short product number
-  ("iPhone 15") is no code, so a match on it is demoted like a word's.
+  question that names a year ("3 November 2026"), a postcode, a phone number
+  or a price of three digits ("€129") keeps a match on a chunk that holds the
+  same number in its place below the bar, such as a footer's "© 2026".
+- Some real codes are not codes to the rule. A short product number
+  ("iPhone 15") and a code written with a hyphen ("E-27", "GU-10", which the
+  keyword index splits into "e" and "27") are demoted like a word's match,
+  and so is a code that starts with a digit ("4K", "3M").
 - The bar is a line, with no margin: under a bar of 0.35 a match at 0.349
   is demoted and one at 0.35 is not. An embedding can differ by a thousandth
   from one call to the next, so a match that close to the bar can rank
