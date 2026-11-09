@@ -10,7 +10,8 @@ question
   -> per query, all at once: vector search, and keyword search under `hybrid`
   -> rankings fused (reciprocal rank fusion)
   -> merged across queries, best score per chunk
-  -> dropped below `min_score`, when set
+  -> dropped below `min_score`, when set; a keyword match kept below it goes
+     last, unless it matched a code
   -> reranked by the model against every query, when `rerank` is on
   -> the top `top_k` reach the model
 ```
@@ -18,10 +19,11 @@ question
 Every retrieved chunk is cited with its vector similarity to the question, a
 number in [0, 1] that is the cosine of the two embeddings for a model like
 OpenAI's (see [Scores](#scores)). The order is the one fusion or the rerank
-gave; the score says how close the chunk is, in every mode. A chunk that only
-the keyword search found has no vector score and is cited with 0. Before
-0.1.26 a hybrid search cited the fused score instead, which is relative to the
-result set, so its first chunk always showed 1.0.
+gave (with `min_score` set, see [A minimum score](#a-minimum-score) for a
+keyword match below it); the score says how close the chunk is, in every
+mode. A chunk that only the keyword search found has no vector score and is
+cited with 0. Before 0.1.26 a hybrid search cited the fused score instead,
+which is relative to the result set, so its first chunk always showed 1.0.
 
 ## Modes
 
@@ -38,7 +40,8 @@ precisely those. Fusing the two catches both.
 Fusion uses reciprocal rank fusion: each search contributes `1 / (60 + rank)`
 per chunk. Ranks rather than scores, because a vector similarity and a BM25
 score are not on a common scale. A chunk found by both searches outranks one
-found first by only one of them.
+found first by only one of them; with `min_score` set, a keyword match below
+it is the exception (see [A minimum score](#a-minimum-score)).
 
 Only the keyword search's three best matches take part (`KEYWORD_FUSED`).
 Below those, a keyword "match" is mostly a common word the chunk shares with
@@ -86,6 +89,9 @@ order of relevance. A message that asks two things is two queries, so a
 passage that answers the second counts as much as one that answers the first.
 The top `top_k` are then taken from that order. The score on each chunk stays
 its vector similarity, so a citation's score is not an artefact of position.
+It is shown the first `retrieval_candidates` of the chunks kept (or `top_k`,
+when that is larger), in the order [A minimum score](#a-minimum-score)
+describes when one is set.
 
 Reranking costs one model call per turn, with a prompt containing every
 candidate, within `ENGINE_PROMPT_CHARS`: since 0.1.31 each passage is cut to
@@ -169,6 +175,61 @@ chunk ranked, not how close it is.
   query's best keyword match, since an exact term the embedding blurs is what
   hybrid retrieval is for. Only the best match: nearly every chunk shares a
   common word with a question.
+- A keyword match kept below `min_score` comes after every chunk that
+  reaches it, unless the words it matched include a code: a word that
+  starts with a letter and holds a digit ("E27", "LX318", "B7", "SKU12") or a
+  number of three digits or more ("502", "4012"), such as a part number, an
+  error code or an order number. A match on a code keeps the place fusion
+  gave it. A number of one or two digits is no code, and nor is a number with
+  its unit attached: it is mostly a quantity, an hour or a day ("9 lamps",
+  "24/7", "before 5pm", "the 3rd", "8W").
+
+Before that rule a keyword match outranked the passages a question needed.
+Being in both rankings beats being first in one, and on a small help centre
+the keyword half's best match is mostly the question's own small words: an
+FAQ entry headed "How do I contact you?" shares "I", "do" and "to" with
+nearly any question a customer writes. "I want an Orbit and a Pebble sent to
+Hamburg. What do I pay in total?" put that entry, at a similarity of 0.28,
+second of its five chunks, and the Orbit's passage, at 0.353, was the one
+left out. On that help centre (nine pages, 27 chunks), over 82 messages, all
+18 chunks a keyword match kept below the bar were ones the answer did not
+need. Now the entry goes after every chunk that clears the bar, and the
+Orbit is fifth.
+
+What the rule costs:
+
+- A match on ordinary words, a product's or a fare's name among them, is
+  demoted when its chunk scores under the bar, and then reaches the model
+  only when fewer than `top_k` chunks clear the bar. Where a question turns
+  on a name whose chunk scores that low, a larger `top_k` or a lower
+  `min_score` gives it room again.
+- A longer number the chunk holds by chance still counts as a code: a
+  question that names a year ("3 November 2026"), a postcode, a phone number
+  or a price of three digits ("€129") keeps a match on a chunk that holds the
+  same number in its place below the bar, such as a footer's "© 2026".
+- Some real codes are not codes to the rule. A short product number
+  ("iPhone 15") and a code written with a hyphen ("E-27", "GU-10", which the
+  keyword index splits into "e" and "27") are demoted like a word's match,
+  and so is a code that starts with a digit ("4K", "3M").
+- Some quantities read as codes. A unit with a superscript folds into a word
+  with a digit ("m²" becomes "m2", "m³" becomes "m3"), and so does a price
+  with its currency code first ("EUR79"). A question about "2 m³" therefore
+  keeps a match on any chunk that names m³ in its place below the bar, as a
+  code would.
+- The bar is a line, with no margin: under a bar of 0.35 a match at 0.349
+  is demoted and one at 0.35 is not. An embedding can differ by a thousandth
+  from one call to the next, so a match that close to the bar can rank
+  either way on the same question.
+- With `rerank: true` the model orders the candidates after this rule, and
+  can put a demoted match back in the top `top_k`. The rerank is shown only
+  the first `retrieval_candidates` chunks (or `top_k`, when larger), so when
+  that many clear the bar, a demoted match is not shown to it at all.
+
+The evidence for the rule is one small corpus, with many FAQ entries. On it
+the names embedded well (0.47 and 0.58 when a question asks about one lamp),
+and the rule for codes changed nothing: no match below the bar shared a
+number with its question. A margin under the bar changed nothing at 0.02,
+and at 0.05 kept two more matches the answer did not need, so there is none.
 
 The rewrite still runs on a turn with history, since the rewritten query is
 what is compared.

@@ -12,7 +12,9 @@ Retrieval is a pipeline with two configurable stages:
          language), or found nothing that clears `min_score`, each once more
          in the language of the passage found best, searched and merged the
          same way
-      -> drop chunks below `min_score`, and everything when nothing clears it
+      -> drop chunks below `min_score`, and everything when nothing clears it;
+         a keyword match kept below it ranks after the chunks that reach it,
+         unless it matched a code
       -> rerank with the model against every query, when enabled
       -> keep the top `top_k`
 
@@ -391,15 +393,21 @@ async def retrieve_with_usage(
     # close it is, so only the similarity says whether anything is actually
     # close.
     similarity: dict[str, float] = {}
-    # Each query's best keyword match, which `min_score` keeps regardless.
+    # Each query's best keyword match, which `min_score` keeps regardless,
+    # and those of them that share a code with their query
+    # (`_shares_a_code`), which keep their place in the order below it too.
     matched: set[str] = set()
-    for dense, keyword in searched:
+    coded: set[str] = set()
+    for query, (dense, keyword) in zip(queries, searched, strict=True):
         for document, score in dense:
             key = document.page_content
             similarity[key] = max(score, similarity.get(key, 0.0))
         if index is not None:
             if keyword:
-                matched.add(keyword[0][0].page_content)
+                top = keyword[0][0].page_content
+                matched.add(top)
+                if _shares_a_code(query, top):
+                    coded.add(top)
             fused = _fuse_hybrid(dense, keyword)
         else:
             fused = _normalise(dense)
@@ -425,11 +433,11 @@ async def retrieve_with_usage(
         len(best),
     )
 
-    # Equal ranks, which chunks first in a search of their own often have, go
-    # to the chunk closer to the question.
+    # A keyword match kept below `min_score` comes after every chunk that
+    # reaches it, unless it matched a code (`_ranking`).
     ranked = sorted(
         best.values(),
-        key=lambda hit: (hit[1], similarity.get(hit[0].page_content, 0.0)),
+        key=lambda hit: _ranking(hit, similarity, coded, project.min_score),
         reverse=True,
     )
     documents = [document for document, _ in ranked[: max(candidates, project.top_k)]]
@@ -464,7 +472,9 @@ def _above(
     reaches it, plus each query's best keyword match, since exact terms the
     embedding blurs are what hybrid retrieval is for. Only the best: nearly
     every chunk shares some word with a question ("is", "the"), so keeping all
-    keyword matches would keep nearly everything.
+    keyword matches would keep nearly everything. A match kept below the bar
+    ranks after the chunks that reach it, unless it matched a code
+    (`_ranking`).
     """
     if not any(score >= min_score for score in similarity.values()):
         return {}
@@ -473,6 +483,64 @@ def _above(
         for key, hit in best.items()
         if key in matched or similarity.get(key, 0.0) >= min_score
     }
+
+
+def _ranking(
+    hit: Hit, similarity: dict[str, float], coded: set[str], min_score: float | None
+) -> tuple[bool, float, float]:
+    """A kept chunk's place in the order, for a sort that puts the largest
+    first.
+
+    First, whether it ranks with the chunks that reach `min_score`: every
+    chunk does without a bar, and below it so does a keyword match on a code
+    (`coded`, see `_shares_a_code`). Any other chunk `_above` keeps below the
+    bar, for its keyword match alone, comes after them, so it only fills a
+    place they leave, unless a rerank moves it back. On a small help centre
+    such a match mostly rests on the question's own small words, and took
+    the place of a passage the question needed ("A minimum score" in
+    docs/retrieval.md). Then the fused score; equal ranks, which chunks first
+    in a search of their own often have, go to the chunk closer to the
+    question.
+    """
+    key = hit[0].page_content
+    close = similarity.get(key, 0.0)
+    placed = min_score is None or close >= min_score or key in coded
+    return placed, hit[1], close
+
+
+def _shares_a_code(query: str, text: str) -> bool:
+    """Whether `text` holds a word of `query` that is a code.
+
+    A part number, an error code, a model or an order number ("E27",
+    "LX318", "502") is the exact term an embedding blurs and the keyword
+    search is for, so a keyword match on one keeps its place below
+    `min_score`. Words of letters alone do not count, capitals included: an
+    acronym ("EU", "DHL") is mostly a word the embedding knows, and a message
+    typed in capitals would make every word one. Nor do short numbers, or a
+    number with its unit: a quantity, an hour or a day ("9 lamps", "24/7",
+    "before 5pm", "the 3rd", "8W") meets the same number in an unrelated
+    passage by chance (`_is_code`).
+    """
+    codes = {word for word in sparse.tokenize(query) if _is_code(word)}
+    return bool(codes) and not codes.isdisjoint(sparse.tokenize(text))
+
+
+def _is_code(word: str) -> bool:
+    """Whether a keyword-index word reads as a code: a word that starts with
+    a letter and holds a digit ("E27", "LX318", "B7", "SKU12"), or a number
+    of three digits or more ("502", "4012").
+
+    A word that starts with a digit is a number with its unit ("5pm", "3rd",
+    "8w", "5kg"), mostly a quantity, an hour or a day, and so is a number of
+    one or two digits. A longer number counts whatever it names: a year, a
+    postcode or a price ("2026", "20095", "€129") keeps a match on a passage
+    that holds the same number.
+    """
+    if not any(c.isdigit() for c in word):
+        return False
+    if word.isdigit():
+        return len(word) >= 3
+    return word[0].isalpha()
 
 
 async def _dense(
